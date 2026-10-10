@@ -83,15 +83,19 @@ export function Switch({ checked, onChange, disabled, label }: { checked: boolea
   );
 }
 
-export function Modal({ title, onClose, children, footer, wide }: { title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, footer, wide, full }: { title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; full?: boolean }) {
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopImmediatePropagation(); // close only the top-most layer
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
   return createPortal(
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true">
+      <div className={`modal ${wide ? 'wide' : ''} ${full ? 'full' : ''}`} role="dialog" aria-modal="true">
         <div className="modal-head">
           <h2>{title}</h2>
           <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="close">
@@ -106,28 +110,88 @@ export function Modal({ title, onClose, children, footer, wide }: { title: React
   );
 }
 
-export function Drawer({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
+export function Drawer({ title, onClose, children, extra }: { title: ReactNode; onClose: () => void; children: ReactNode; extra?: ReactNode }) {
+  const [width, setWidth] = useState(() => Number(localStorage.getItem('panel.drawerWidth')) || 760);
+  const [dragging, setDragging] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (e: MouseEvent) => setWidth(Math.max(420, Math.min(window.innerWidth - 40, window.innerWidth - e.clientX)));
+    const up = () => setDragging(false);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+  }, [dragging]);
+  useEffect(() => {
+    if (!dragging) localStorage.setItem('panel.drawerWidth', String(width));
+  }, [dragging, width]);
   return createPortal(
     <>
       <div className="drawer-backdrop" onClick={onClose} />
-      <aside className="drawer" role="dialog">
+      <aside className="drawer" role="dialog" style={{ ['--drawer-w' as string]: `${width}px`, userSelect: dragging ? 'none' : undefined }} data-testid="drawer">
+        <div className={`drawer-resize ${dragging ? 'active' : ''}`} onMouseDown={() => setDragging(true)} title="drag to resize" />
         <div className="modal-head">
-          <h2>{title}</h2>
-          <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="close">
-            <IconX />
-          </button>
+          <h2 className="ellipsis">{title}</h2>
+          <div className="row">
+            {extra}
+            <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="close">
+              <IconX />
+            </button>
+          </div>
         </div>
-        <div className="modal-body" style={{ flex: 1 }}>
+        <div className="modal-body" data-testid="drawer-body">
           {children}
         </div>
       </aside>
     </>,
     document.body,
+  );
+}
+
+/** Pretty-prints JSON when possible. */
+export function prettyText(text: string): string {
+  const t = text.trim();
+  if (t.startsWith('{') || t.startsWith('[')) {
+    try {
+      return JSON.stringify(JSON.parse(t), null, 2);
+    } catch {
+      /* not (complete) JSON */
+    }
+  }
+  return text;
+}
+
+/** Scrollable code/JSON block with copy and full-screen view. */
+export function CodeBlock({ text, title, maxHeight = 420, testId }: { text: string; title?: string; maxHeight?: number; testId?: string }) {
+  const { tr } = useI18n();
+  const [full, setFull] = useState(false);
+  const pretty = prettyText(text);
+  return (
+    <div className="code-wrap">
+      <div className="code-tools">
+        <CopyButton text={pretty} small />
+        <button className="btn btn-sm" onClick={() => setFull(true)} data-testid={testId ? `${testId}-expand` : undefined}>
+          ⤢ {tr('全屏查看', 'Full view')}
+        </button>
+      </div>
+      <pre className="code-block" style={{ maxHeight }} data-testid={testId}>
+        {pretty}
+      </pre>
+      {full && (
+        <Modal title={title ?? tr('完整内容', 'Full content')} onClose={() => setFull(false)} full footer={<CopyButton text={pretty} />}>
+          <pre className="code-block" data-testid={testId ? `${testId}-full` : undefined}>
+            {pretty}
+          </pre>
+        </Modal>
+      )}
+    </div>
   );
 }
 

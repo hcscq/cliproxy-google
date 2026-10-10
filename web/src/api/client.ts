@@ -283,6 +283,13 @@ export class ApiClient {
   requestEventFilterOptions(query?: Query) {
     return this.get<Record<string, string[]>>('/request-events/filter-options', query);
   }
+  /** Raw request log (headers + bodies) when detailed request logging is enabled. */
+  requestLog(requestId: string, homeIp?: string, homePort?: number) {
+    return this.request<string>('GET', `/observability/logs/requests/${encodeURIComponent(requestId)}`, {
+      query: { home_ip: homeIp, home_port: homePort },
+      responseType: 'text',
+    });
+  }
   credentialHealth(query?: Query) {
     return this.get<{ items: Record<string, unknown>[] }>('/usage/health/credentials', query);
   }
@@ -449,10 +456,12 @@ export interface RequestEvent {
   event_type?: string;
   credential?: { label?: string; credential_id?: string; provider?: string };
   client?: { client_key_label?: string; client_key_masked?: string; client_ip?: string };
-  error?: { message?: string | null; reason?: string | null; status_code?: number | null; body_preview?: string | null };
+  error?: { message?: string | null; reason?: string | null; status_code?: number | null; upstream_status_code?: number | null; body_preview?: string | null };
   tokens?: TokenCounts;
   performance?: { latency_ms?: number | null; ttft_ms?: number | null; tps?: number | null };
   runtime?: { home_id?: string; cpa_node_id?: string; cpa_ip?: string };
+  upstream_status_code?: number | null;
+  related?: { request_log?: { available?: boolean; request_id?: string; home_ip?: string; home_port?: number } };
 }
 
 export interface UsageBucket extends TokenCounts {
@@ -560,4 +569,26 @@ export function normalizeTopology(t: Topology | undefined): { homes: HomeNode[];
   const proxies = Array.from(byId.values()).sort((a, b) => (a.node_name ?? a.node_id).localeCompare(b.node_name ?? b.node_id));
   const leader = live.find((h) => h.is_master) ?? (t.master && (t.master.healthy || t.master.health === 'healthy') ? t.master : undefined);
   return { homes: live, staleHomes: stale, proxies, leader };
+}
+
+/** Human summary of an upstream error body (Google style {error:{code,message,status,details}}). */
+export function summarizeError(err?: RequestEvent['error']): { title: string; message: string; reasons: string[] } {
+  const out = { title: err?.reason || '', message: err?.message || '', reasons: [] as string[] };
+  const body = err?.body_preview?.trim();
+  if (body) {
+    try {
+      const j = JSON.parse(body);
+      const e = (j && typeof j === 'object' && 'error' in j ? j.error : j) as Record<string, unknown>;
+      if (e && typeof e === 'object') {
+        if (typeof e.message === 'string') out.message = e.message;
+        const parts = [e.code, e.status].filter((x) => x !== undefined && x !== null && x !== '');
+        if (parts.length) out.title = parts.join(' ');
+        if (Array.isArray(e.details))
+          for (const d of e.details) if (d && typeof d === 'object' && typeof (d as Record<string, unknown>).reason === 'string') out.reasons.push(String((d as Record<string, unknown>).reason));
+      }
+    } catch {
+      /* truncated/non-JSON body: keep server message */
+    }
+  }
+  return out;
 }

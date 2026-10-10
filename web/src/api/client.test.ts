@@ -175,3 +175,19 @@ describe('normalizeTopology', () => {
     expect(normalizeTopology(undefined)).toEqual({ homes: [], staleHomes: [], proxies: [] });
   });
 });
+
+import { summarizeError } from './client';
+
+describe('summarizeError', () => {
+  it('extracts message, code/status and reasons from a Google error body', () => {
+    const body = JSON.stringify({ error: { code: 503, message: 'No capacity available for model x on the server', status: 'UNAVAILABLE', details: [{ '@type': 't', reason: 'MODEL_CAPACITY_EXHAUSTED' }] } });
+    expect(summarizeError({ message: '{ "error": { "code": 503, "mess', body_preview: body })).toEqual({
+      title: '503 UNAVAILABLE',
+      message: 'No capacity available for model x on the server',
+      reasons: ['MODEL_CAPACITY_EXHAUSTED'],
+    });
+  });
+  it('falls back to the server message for truncated bodies', () => {
+    expect(summarizeError({ message: 'boom', reason: 'r', body_preview: '{"error": {"cod' })).toEqual({ title: 'r', message: 'boom', reasons: [] });
+  });
+});

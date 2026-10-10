@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useAction, useApi, useAsync } from '../app-context';
-import type { RequestEvent } from '../api/client';
+import { ApiError, summarizeError, type RequestEvent } from '../api/client';
 import { downloadBlob, fmtCompact, fmtMs, fmtNum, fmtPct, fmtTime } from '../format';
 import { useI18n } from '../i18n';
-import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Pager, Spinner, Stat } from '../components/ui';
+import { Badge, Card, CodeBlock, Drawer, Empty, ErrorBox, Loading, Pager, Spinner, Stat } from '../components/ui';
 import { RankList, TrendChart } from '../components/charts';
 import { IconDownload, IconRefresh } from '../components/icons';
 
@@ -157,7 +157,7 @@ function RequestEvents({ from }: { from: string }) {
             </thead>
             <tbody>
               {events.data.items.map((e) => (
-                <tr key={e.id} className="clickable" onClick={() => setSelected(e)}>
+                <tr key={e.id} className="clickable" onClick={() => setSelected(e)} data-testid="event-row">
                   <td className="nowrap small">{fmtTime(e.timestamp)}</td>
                   <td>
                     <span className="mono">{e.model}</span>
@@ -233,21 +233,87 @@ function EventDrawer({ ev, onClose }: { ev: RequestEvent; onClose: () => void })
             {tr('总耗时', 'latency')} {fmtMs(e.performance?.latency_ms)} · TTFT {fmtMs(e.performance?.ttft_ms)} · {fmtNum(e.performance?.tps, 1)} tok/s
           </dd>
         </dl>
-        {e.failed && (
-          <div className="alert err small">
-            <b>{e.error?.reason || tr('错误', 'Error')}</b>
-            <div className="break">{e.error?.message}</div>
-            {e.error?.body_preview && <pre className="code-block" style={{ marginTop: 8 }}>{e.error.body_preview}</pre>}
-          </div>
-        )}
+        {e.failed && <ErrorSection ev={e} />}
+        <RequestLogSection ev={e} />
         {detail.loading && <Loading />}
         {detail.data?.log_excerpt && detail.data.log_excerpt.length > 0 && (
           <div>
             <h3 style={{ marginBottom: 6 }}>{tr('日志片段', 'Log excerpt')}</h3>
-            <pre className="code-block">{detail.data.log_excerpt.join('\n')}</pre>
+            <CodeBlock text={detail.data.log_excerpt.join('\n')} title={tr('日志片段', 'Log excerpt')} />
           </div>
         )}
       </div>
     </Drawer>
+  );
+}
+
+function ErrorSection({ ev }: { ev: RequestEvent }) {
+  const { tr } = useI18n();
+  const sum = summarizeError(ev.error);
+  return (
+    <div className="stack" style={{ gap: 8 }} data-testid="error-section">
+      <div className="alert err">
+        <div className="row" style={{ gap: 6 }}>
+          <b>{tr('错误', 'Error')}</b>
+          {sum.title && <Badge kind="err">{sum.title}</Badge>}
+          {ev.error?.upstream_status_code != null && <span className="small">{tr('上游状态', 'upstream')} {ev.error.upstream_status_code}</span>}
+          {sum.reasons.map((r) => (
+            <span key={r} className="tag">
+              {r}
+            </span>
+          ))}
+        </div>
+        {sum.message && (
+          <div className="wrap-text small" style={{ marginTop: 6 }} data-testid="error-message">
+            {sum.message}
+          </div>
+        )}
+      </div>
+      {ev.error?.body_preview && (
+        <div>
+          <h3 style={{ marginBottom: 6 }}>{tr('上游响应体', 'Upstream response body')}</h3>
+          <CodeBlock text={ev.error.body_preview} title={tr('上游响应体', 'Upstream response body')} testId="error-body" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Full request log (request/response headers and bodies) when detailed request logging is on. */
+function RequestLogSection({ ev }: { ev: RequestEvent }) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const rl = ev.related?.request_log;
+  const [state, setState] = useState<{ loading?: boolean; text?: string; error?: string }>({});
+  if (!rl?.request_id) return null;
+  const load = async () => {
+    setState({ loading: true });
+    try {
+      setState({ text: await api.requestLog(rl.request_id!, rl.home_ip, rl.home_port) });
+    } catch (e) {
+      setState({
+        error:
+          e instanceof ApiError && e.status === 404
+            ? tr('没有找到该请求的详细日志：需要在“设置”里开启“详细请求日志”，之后的新请求才会记录请求/响应头和内容。', 'No detailed log for this request. Enable "Detailed request logs" in Settings; new requests will then include headers and bodies.')
+            : e instanceof Error
+              ? e.message
+              : String(e),
+      });
+    }
+  };
+  return (
+    <div>
+      <div className="row" style={{ marginBottom: 6 }}>
+        <h3 className="spacer">{tr('请求 / 响应详情（头与内容）', 'Request / response (headers & bodies)')}</h3>
+        {!state.text && (
+          <button className="btn btn-sm" onClick={load} disabled={state.loading}>
+            {state.loading && <Spinner />}
+            {tr('加载完整请求日志', 'Load full request log')}
+          </button>
+        )}
+      </div>
+      {state.error && <div className="alert small wrap-text">{state.error}</div>}
+      {state.text && <CodeBlock text={state.text} title={tr('请求日志', 'Request log')} maxHeight={520} />}
+    </div>
   );
 }
