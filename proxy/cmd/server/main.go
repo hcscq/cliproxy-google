@@ -379,7 +379,16 @@ func main() {
 		}()
 
 		var raw []byte
+		fetchAttempt := 0
 		errGetConfig := retryWithBackoff("fetch config from home", func() error {
+			fetchAttempt++
+			if fetchAttempt > 1 {
+				// The client may have switched to a discovered Home replica that is
+				// gone (e.g. a pod IP during a rollout). Start over from the
+				// configured (Service) address on every retry.
+				homeClient.Close()
+				homeClient = home.New(homeCfg)
+			}
 			ctxHomeConfig, cancelHomeConfig := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancelHomeConfig()
 			var errGet error
