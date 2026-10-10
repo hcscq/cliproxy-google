@@ -71,6 +71,29 @@ docker build -f deploy/docker/home.Dockerfile  -t ghcr.io/hcscq/cliproxy-google-
 
 Home 的 Web 管理面板是可选的。如果需要，先按 `home/Makefile` 的 `panel-assets-local` 生成静态文件再构建；不生成也不影响 Management API 使用。
 
+## 镜像（GitHub Actions / GHCR）
+
+工作流在 `.github/workflows/ci.yml`。push 到 main、推送 `v*` 标签、提交 PR，或者手动触发（workflow_dispatch）时，都会对 proxy 和 home 跑 `go vet` 和 `go test`。已知有两个上游测试不稳定，失败时会对失败的包自动重跑一次。测试通过后，会用 buildx + QEMU 构建 `linux/amd64` 和 `linux/arm64` 两种架构的镜像。PR 只构建，不推送。
+
+| 镜像 | 标签 |
+| --- | --- |
+| `ghcr.io/hcscq/cliproxy-google-proxy` | `sha-<完整提交SHA>`；main 分支额外打 `latest`；`vX.Y.Z` 标签对应 `X.Y.Z` 和 `X.Y` |
+| `ghcr.io/hcscq/cliproxy-google-home` | 同上 |
+
+生产环境建议固定使用 `sha-...` 或版本号标签，不要用 `latest`。
+
+GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法：
+
+1. **改成公开**：在 GitHub 打开 Your profile → Packages → `cliproxy-google-proxy` / `cliproxy-google-home` → Package settings → Change visibility → Public。仓库改回私有后，package 仍然可以单独保持公开。
+2. **使用 imagePullSecret**（package 保持私有）：先创建一个只有 `read:packages` 权限的 PAT（classic），然后执行：
+   ```bash
+   kubectl -n cliproxy create secret docker-registry ghcr-pull \
+     --docker-server=ghcr.io --docker-username=hcscq --docker-password=<PAT>
+   kubectl -n cliproxy patch serviceaccount default \
+     -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
+   ```
+   给 default ServiceAccount 打补丁后，命名空间内所有 Pod（包括 Job 和注册用的临时 Pod）都会自动使用这个凭据。也可以在各个 Pod spec 里单独添加 `imagePullSecrets`。
+
 ## k3s 部署
 
 清单在 `deploy/k3s/` 下，镜像名需要改成你自己的仓库。
