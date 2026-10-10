@@ -204,6 +204,7 @@ func ApplyThinkingWithModelInfoAndSummary(body, sourceBody []byte, model string,
 }
 
 func applyThinking(body, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, resolvedModelInfo *registry.ModelInfo, modelInfoResolved bool, summaryConfig SummaryConfig, normalizedUpdatesChanged ...bool) ([]byte, error) {
+	summaryConfig = claudeDefaultSummaryForGoogleTarget(summaryConfig, sourceBody, fromFormat, toFormat)
 	providerFormat := strings.ToLower(strings.TrimSpace(toFormat))
 	if providerFormat == "openai-response" {
 		providerFormat = "codex"
@@ -971,4 +972,26 @@ func extractCodexUsageConfig(body []byte) ThinkingConfig {
 		return config
 	}
 	return extractCodexConfig(body)
+}
+
+// claudeDefaultSummaryForGoogleTarget: a Claude request with thinking enabled
+// (or adaptive) and no thinking.display expects thinking blocks with text, as
+// Anthropic's API returns summarized thinking by default for these models.
+// Gemini only returns thought text with includeThoughts, so when such a request
+// is translated to a Gemini/Antigravity target, treat the summary as enabled.
+// Claude-to-Claude requests are untouched (model defaults stay with Anthropic).
+func claudeDefaultSummaryForGoogleTarget(config SummaryConfig, sourceBody []byte, fromFormat, toFormat string) SummaryConfig {
+	if config.Mode != SummaryUnspecified || !strings.EqualFold(strings.TrimSpace(fromFormat), "claude") || len(sourceBody) == 0 {
+		return config
+	}
+	switch strings.ToLower(strings.TrimSpace(toFormat)) {
+	case "gemini", "antigravity":
+	default:
+		return config
+	}
+	switch strings.ToLower(gjson.GetBytes(sourceBody, "thinking.type").String()) {
+	case "enabled", "adaptive":
+		return SummaryConfig{Mode: SummaryEnabled, Detail: "auto"}
+	}
+	return config
 }

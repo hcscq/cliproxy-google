@@ -959,6 +959,18 @@ func convertClaudeRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 		out, _ = sjson.SetBytes(out, "request.generationConfig.maxOutputTokens", v.Num)
 	}
 
+	if v := gjson.GetBytes(rawJSON, "stop_sequences"); v.Exists() && v.IsArray() {
+		var seqs []string
+		for _, item := range v.Array() {
+			if item.Type == gjson.String && item.String() != "" {
+				seqs = append(seqs, item.String())
+			}
+		}
+		if len(seqs) > 0 {
+			out, _ = sjson.SetBytes(out, "request.generationConfig.stopSequences", seqs)
+		}
+	}
+
 	out = common.AttachDefaultSafetySettings(out, "request.safetySettings")
 	if sigcompat.SignatureProviderFromModelName(modelName) == sigcompat.SignatureProviderGemini {
 		out = sigcompat.SanitizeGeminiRequestThoughtSignatures(out, "request.contents")

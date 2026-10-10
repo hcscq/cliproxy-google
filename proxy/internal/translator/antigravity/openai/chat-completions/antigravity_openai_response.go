@@ -111,6 +111,9 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 		}
 		template, _ = sjson.SetBytes(template, "created", params.UnixTimestamp)
 	} else {
+		if params.UnixTimestamp == 0 {
+			params.UnixTimestamp = time.Now().Unix()
+		}
 		template, _ = sjson.SetBytes(template, "created", params.UnixTimestamp)
 	}
 

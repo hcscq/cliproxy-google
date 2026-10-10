@@ -87,6 +87,23 @@ func convertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 		}
 	}
 
+	// OpenAI stop (string or array) -> generationConfig.stopSequences
+	if st := gjson.GetBytes(rawJSON, "stop"); st.Exists() {
+		var seqs []string
+		if st.IsArray() {
+			for _, v := range st.Array() {
+				if v.Type == gjson.String && v.String() != "" {
+					seqs = append(seqs, v.String())
+				}
+			}
+		} else if st.Type == gjson.String && st.String() != "" {
+			seqs = append(seqs, st.String())
+		}
+		if len(seqs) > 0 {
+			out, _ = sjson.SetBytes(out, "generationConfig.stopSequences", seqs)
+		}
+	}
+
 	// Map OpenAI response_format to Gemini structured output settings.
 	out = applyOpenAIResponseFormatToGemini(out, rawJSON)
 

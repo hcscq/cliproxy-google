@@ -229,7 +229,7 @@ func ConvertAntigravityResponseToClaude(ctx context.Context, _ string, originalR
 			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.model", modelVersionResult.String())
 		}
 		if responseIDResult := gjson.GetBytes(rawJSON, "response.responseId"); responseIDResult.Exists() {
-			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.id", responseIDResult.String())
+			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.id", claudeMessageID(responseIDResult.String()))
 		}
 		appendEvent("message_start", string(messageStartTemplate))
 
@@ -542,7 +542,7 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 	}
 
 	responseJSON := []byte(`{"id":"","type":"message","role":"assistant","model":"","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}`)
-	responseJSON, _ = sjson.SetBytes(responseJSON, "id", root.Get("response.responseId").String())
+	responseJSON, _ = sjson.SetBytes(responseJSON, "id", claudeMessageID(root.Get("response.responseId").String()))
 	responseJSON, _ = sjson.SetBytes(responseJSON, "model", root.Get("response.modelVersion").String())
 	responseJSON, _ = sjson.SetBytes(responseJSON, "usage.input_tokens", promptTokens)
 	responseJSON, _ = sjson.SetBytes(responseJSON, "usage.output_tokens", outputTokens)
@@ -758,4 +758,13 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 
 func ClaudeTokenCount(ctx context.Context, count int64) []byte {
 	return translatorcommon.ClaudeInputTokensJSON(count)
+}
+
+// claudeMessageID gives upstream response ids the Anthropic "msg_" prefix that
+// Claude clients expect on message ids.
+func claudeMessageID(id string) string {
+	if id == "" || strings.HasPrefix(id, "msg_") {
+		return id
+	}
+	return "msg_" + id
 }

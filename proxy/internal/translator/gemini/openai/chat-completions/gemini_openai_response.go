@@ -99,6 +99,9 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 		}
 		baseTemplate, _ = sjson.SetBytes(baseTemplate, "created", p.UnixTimestamp)
 	} else {
+		if p.UnixTimestamp == 0 {
+			p.UnixTimestamp = time.Now().Unix()
+		}
 		baseTemplate, _ = sjson.SetBytes(baseTemplate, "created", p.UnixTimestamp)
 	}
 
@@ -310,6 +313,9 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 		}
 		template, _ = sjson.SetBytes(template, "created", unixTimestamp)
 	} else {
+		if unixTimestamp == 0 {
+			unixTimestamp = time.Now().Unix()
+		}
 		template, _ = sjson.SetBytes(template, "created", unixTimestamp)
 	}
 

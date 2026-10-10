@@ -148,6 +148,7 @@ func ConvertGeminiRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 		rawJSON = removeEmptyGeminiFunctionTools(rawJSON)
 	}
 	rawJSON = rewriteGeminiFunctionNames(rawJSON, functionNameMap)
+	rawJSON = fillGeminiFunctionResponseIDs(rawJSON, strings.Contains(strings.ToLower(modelName), "claude"))
 
 	if strings.Contains(strings.ToLower(modelName), "claude") {
 		rawJSON = SanitizeAntigravityClaudeGeminiRequestSignatures(modelName, rawJSON)

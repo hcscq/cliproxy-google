@@ -84,6 +84,23 @@ func convertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 		out, _ = sjson.SetBytes(out, "request.generationConfig.maxOutputTokens", mct.Num)
 	}
 
+	// OpenAI stop (string or array, up to 4) -> generationConfig.stopSequences
+	if st := gjson.GetBytes(rawJSON, "stop"); st.Exists() {
+		var seqs []string
+		if st.IsArray() {
+			for _, v := range st.Array() {
+				if v.Type == gjson.String && v.String() != "" {
+					seqs = append(seqs, v.String())
+				}
+			}
+		} else if st.Type == gjson.String && st.String() != "" {
+			seqs = append(seqs, st.String())
+		}
+		if len(seqs) > 0 {
+			out, _ = sjson.SetBytes(out, "request.generationConfig.stopSequences", seqs)
+		}
+	}
+
 	// Map OpenAI response_format to Antigravity structured output settings.
 	if responseFormat := gjson.GetBytes(rawJSON, "response_format"); responseFormat.Exists() {
 		switch responseFormatType := strings.ToLower(strings.TrimSpace(responseFormat.Get("type").String())); responseFormatType {
