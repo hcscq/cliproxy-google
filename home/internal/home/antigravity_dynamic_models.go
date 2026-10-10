@@ -172,10 +172,9 @@ func (r *Runtime) cachedAntigravityCatalog(a *coreauth.Auth) map[string]antigrav
 	stale := entry.models == nil || now.Sub(entry.fetchedAt) > antigravityDynamicRefreshInterval
 	retryOK := now.Sub(entry.failedAt) > antigravityDynamicRetryInterval || entry.tokenHash != token
 	models := entry.models
-	if token == "" {
-		log.Infof("antigravity model catalog: credential %s has no access token yet", a.ID)
-	}
-	if stale && retryOK && !entry.inFlight && token != "" {
+	// In cluster mode the in-memory auth is a minimal index without secrets;
+	// the refresh goroutine loads the full credential from PostgreSQL.
+	if stale && retryOK && !entry.inFlight {
 		entry.inFlight = true
 		entry.tokenHash = token
 		go r.refreshAntigravityCatalog(a.ID, a.Clone())
@@ -187,7 +186,7 @@ func (r *Runtime) cachedAntigravityCatalog(a *coreauth.Auth) map[string]antigrav
 func (r *Runtime) refreshAntigravityCatalog(authID string, snapshot *coreauth.Auth) {
 	auth := snapshot
 	if r != nil && r.coreManager != nil {
-		if current, ok := r.coreManager.GetByID(authID); ok && current != nil && extractAccessToken(current) != "" {
+		if current, ok := r.coreManager.GetByID(authID); ok && current != nil {
 			auth = current
 		}
 	}
@@ -195,7 +194,17 @@ func (r *Runtime) refreshAntigravityCatalog(authID string, snapshot *coreauth.Au
 	var err error
 	if auth != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		models, err = fetchAntigravityCatalog(ctx, auth)
+		full := auth
+		if extractAccessToken(full) == "" && r != nil && r.clusterAdapter != nil && r.clusterAdapter.Enabled() {
+			if loaded, errLoad := r.clusterAdapter.GetFullAuth(ctx, authID); errLoad == nil && loaded != nil {
+				full = loaded
+			} else if errLoad != nil {
+				err = errLoad
+			}
+		}
+		if err == nil {
+			models, err = fetchAntigravityCatalog(ctx, full)
+		}
 		cancel()
 	}
 	antigravityCatalogMu.Lock()
