@@ -537,3 +537,24 @@ export function maskSecret(s: string, keep = 4): string {
   if (s.length <= keep * 2) return '•'.repeat(s.length);
   return `${s.slice(0, keep)}…${s.slice(-keep)}`;
 }
+
+/**
+ * Collapses Home topology for display. After Home pods are replaced, Home keeps
+ * rows of the dead replicas (state "stale"/"draining") until garbage collection,
+ * and each proxy appears once per Home it was attached to. We keep one row per
+ * proxy (preferring the healthy/active one) and separate live from stale Homes.
+ */
+export function normalizeTopology(t: Topology | undefined): { homes: HomeNode[]; staleHomes: HomeNode[]; proxies: ProxyNode[]; leader?: HomeNode } {
+  if (!t) return { homes: [], staleHomes: [], proxies: [] };
+  const live = (t.homes ?? []).filter((h) => h.healthy || h.health === 'healthy');
+  const stale = (t.homes ?? []).filter((h) => !(h.healthy || h.health === 'healthy'));
+  const score = (p: ProxyNode) => (p.healthy ? 4 : 0) + (p.state === 'active' ? 2 : 0) + (p.last_seen_at ? new Date(p.last_seen_at).getTime() / 1e15 : 0);
+  const byId = new Map<string, ProxyNode>();
+  for (const p of t.cpas ?? []) {
+    const prev = byId.get(p.node_id);
+    if (!prev || score(p) > score(prev)) byId.set(p.node_id, p);
+  }
+  const proxies = Array.from(byId.values()).sort((a, b) => (a.node_name ?? a.node_id).localeCompare(b.node_name ?? b.node_id));
+  const leader = live.find((h) => h.is_master) ?? (t.master && (t.master.healthy || t.master.health === 'healthy') ? t.master : undefined);
+  return { homes: live, staleHomes: stale, proxies, leader };
+}

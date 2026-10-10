@@ -60,7 +60,7 @@ h2 { font-size: 16px; }
 h3 { font-size: 14px; }
 
 /* Layout */
-.shell { display: flex; min-height: 100%; }
+.shell { display: flex; min-height: 100%; background: linear-gradient(to right, var(--bg-elev) 228px, var(--border) 228px, var(--border) 229px, var(--bg) 229px); }
 .sidebar {
   width: 228px; flex-shrink: 0; background: var(--bg-elev); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
@@ -236,6 +236,7 @@ table.table { width: 100%; border-collapse: collapse; }
   .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 860px) {
+  .shell { background: var(--bg); }
   .sidebar { position: fixed; left: 0; top: 0; z-index: 30; transform: translateX(-100%); transition: transform .18s; box-shadow: var(--shadow); }
   .sidebar.open { transform: none; }
   .topbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-elev); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20; }

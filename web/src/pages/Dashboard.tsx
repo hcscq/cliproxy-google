@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useApi, useAsync } from '../app-context';
-import { isSupportedProvider, type Credential, type QuotaItem } from '../api/client';
+import { isSupportedProvider, normalizeTopology, type Credential, type QuotaItem } from '../api/client';
 import { fmtCompact, fmtMs, fmtPct, fmtRelative, fmtTime } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, Empty, ErrorBox, Loading, Stat } from '../components/ui';
@@ -19,9 +19,7 @@ export function DashboardPage() {
 
   const reloadAll = () => Promise.all([topo.reload(), creds.reload(), quota.reload(), usage.reload(), failures.reload()]);
 
-  const homes = topo.data?.homes ?? [];
-  const proxies = topo.data?.cpas ?? [];
-  const leader = homes.find((h) => h.is_master);
+  const { homes, staleHomes, proxies, leader } = normalizeTopology(topo.data);
   const files: Credential[] = (creds.data?.files ?? []).filter((c) => isSupportedProvider(c.provider));
   const activeCreds = files.filter((c) => !c.disabled && !c.unavailable && c.status === 'active').length;
   const quotaById = new Map<string, QuotaItem>((quota.data?.items ?? []).map((q) => [q.credential_id, q]));
@@ -43,8 +41,8 @@ export function DashboardPage() {
       <div className="grid grid-4">
         <Stat
           label={t('homeReplicas')}
-          value={topo.data ? `${homes.filter((h) => h.healthy).length} / ${homes.length}` : '…'}
-          sub={leader ? `${t('leader')}: ${leader.id}` : tr('无主节点', 'No leader elected')}
+          value={topo.data ? String(homes.length) : '…'}
+          sub={`${leader ? `${t('leader')}: ${leader.id}` : tr('无主节点', 'No leader elected')}${staleHomes.length ? tr(` · ${staleHomes.length} 个失联待回收`, ` · ${staleHomes.length} stale`) : ''}`}
         />
         <Stat
           label={t('proxyNodes')}

@@ -145,3 +145,32 @@ describe('helpers', () => {
     expect(maskSecret('abc')).toBe('•••');
   });
 });
+
+import { normalizeTopology } from './client';
+
+describe('normalizeTopology', () => {
+  it('dedupes proxies and separates stale homes after a rollout', () => {
+    const now = new Date().toISOString();
+    const old = new Date(Date.now() - 60000).toISOString();
+    const r = normalizeTopology({
+      homes: [
+        { id: 'old:1', ip: 'old', port: 1, is_master: true, healthy: false, health: 'stale', last_seen_at: old },
+        { id: 'new:1', ip: 'new', port: 1, is_master: false, healthy: true, health: 'healthy', last_seen_at: now },
+        { id: 'new:2', ip: 'new2', port: 1, is_master: true, healthy: true, health: 'healthy', last_seen_at: now },
+      ],
+      cpas: [
+        { node_id: 'a', node_name: 'pod-a', healthy: false, state: 'draining', last_seen_at: old },
+        { node_id: 'a', node_name: 'pod-a', healthy: true, state: 'active', last_seen_at: now },
+        { node_id: 'b', node_name: 'pod-b', healthy: true, state: 'active', last_seen_at: now },
+      ],
+    });
+    expect(r.homes.map((h) => h.id)).toEqual(['new:1', 'new:2']);
+    expect(r.staleHomes.map((h) => h.id)).toEqual(['old:1']);
+    expect(r.leader?.id).toBe('new:2');
+    expect(r.proxies).toHaveLength(2);
+    expect(r.proxies[0]).toMatchObject({ node_id: 'a', healthy: true });
+  });
+  it('handles missing topology', () => {
+    expect(normalizeTopology(undefined)).toEqual({ homes: [], staleHomes: [], proxies: [] });
+  });
+});
