@@ -122,7 +122,7 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
    kubectl apply -f deploy/k3s/40-home.yaml
    ```
    每个副本以 Pod IP 作为对外地址，服务端证书由 PG 中的集群 CA 签发，SAN 包含 Pod IP 和 `cliproxy-home` Service 的各个 DNS 名。
-4. 启动代理节点和入口（不需要任何注册脚本）：
+4. 启动代理节点和入口（不需要任何注册脚本）。`60-ingress.yaml` 只对公网暴露 Home 管理面板（`/`、`/index.html`、`/management.html`、`/assets/*`、`/v0/management/*` 以及 OAuth 回调），**不暴露代理 API**：
    ```bash
    kubectl apply -f deploy/k3s/50-proxy.yaml -f deploy/k3s/60-ingress.yaml
    kubectl -n cliproxy scale deploy/cliproxy --replicas=5   # 随意扩缩
@@ -138,6 +138,18 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
    - Antigravity 通过 `GET /v8/management/oauth/auth-url?provider=antigravity` 发起 OAuth 登录。
 
    回调会落到 Home，会话存在 PostgreSQL 中，所以由哪个副本处理都可以。
+
+### 访问方式
+
+- **代理 API（只在集群内部）**：`http://cliproxy.<命名空间>.svc.cluster.local:8317/v1`（本部署为 `http://cliproxy.cliproxy-google.svc.cluster.local:8317/v1`）。请求头 `Authorization: Bearer <API Key>`，API Key 在面板的 “Access keys” 页面，或者通过 `POST /v0/management/access/api-keys` 管理。
+- **管理面板（公网）**：`https://<面板域名>/`，用管理密钥（Secret `home-management` 的 `password`，即 `MANAGEMENT_PASSWORD`）登录。
+  - 所有 Management API 请求都必须带管理密钥；
+  - 从集群外访问需要开启 `management.allow-remote: true`；
+  - 同一个 IP 连续输错 5 次会被封禁 30 分钟；
+  - Ingress 上还加了 Traefik `rateLimit`。
+  - k3s 自带的 Traefik 不信任客户端自己带的 `X-Forwarded-For`，所以封禁按真实客户端 IP 生效。
+- **管理面板来源**：面板的源码仓库（router-for-me/Home-Management-Center）不是公开的。镜像构建时会下载固定版本的 CLIProxyAPIHome 发行包（v1.1.0，校验 sha256），再用 `tools/extract-embed` 从二进制里提取内嵌的面板静态文件。上游是 MIT 协议，见 `NOTICE`。
+- 面板里仍然能看到已删除 provider（Claude、Codex 等）的页面，这些页面不会生效。
 
 ### 扩缩容和共享状态
 
