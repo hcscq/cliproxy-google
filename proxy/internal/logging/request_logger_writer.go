@@ -104,6 +104,14 @@ func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHea
 		return l.forwardRequestLogToHome(context.Background(), requestHeaders, requestID, buf.String())
 	}
 
+	if StdoutOnly() {
+		// Local request/error log files are disabled in stdout-only mode.
+		if force && !l.enabled {
+			log.WithField("request_id", requestID).Warnf("request failed: %s %s status=%d", method, url, statusCode)
+		}
+		return nil
+	}
+
 	// Ensure logs directory exists
 	if errEnsure := l.ensureLogsDir(); errEnsure != nil {
 		return fmt.Errorf("failed to create logs directory: %w", errEnsure)
@@ -203,6 +211,9 @@ func (l *FileRequestLogger) LogStreamingRequest(url, method string, headers map[
 			return &NoOpStreamingLogWriter{}, nil
 		}
 		return newHomeStreamingLogWriter(url, method, headers, body, requestID), nil
+	}
+	if StdoutOnly() {
+		return &NoOpStreamingLogWriter{}, nil
 	}
 
 	// Ensure logs directory exists

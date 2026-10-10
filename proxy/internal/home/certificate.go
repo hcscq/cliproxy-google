@@ -122,6 +122,11 @@ func defaultCertificatePaths() (certificatePaths, error) {
 		return certificatePaths{}, errHome
 	}
 	dir := filepath.Join(homeDir, ".cli-proxy-api")
+	// HOME_CERT_DIR lets container deployments point at a pre-enrolled, read-only
+	// certificate directory (for example a Kubernetes Secret volume).
+	if override := strings.TrimSpace(os.Getenv("HOME_CERT_DIR")); override != "" {
+		dir = filepath.Clean(override)
+	}
 	return certificatePaths{
 		Dir:        dir,
 		ClientCert: filepath.Join(dir, "client-crt.pem"),
@@ -251,6 +256,11 @@ func writeFile0600(path string, raw []byte) error {
 
 func chmodCertificateFiles(paths certificatePaths) error {
 	for _, path := range []string{paths.ClientCert, paths.ClientKey, paths.CACert} {
+		// Files that are already private (e.g. a Secret volume with defaultMode 0400)
+		// are left untouched so the directory can be mounted read-only.
+		if info, errStat := os.Stat(path); errStat == nil && info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
 		if errChmod := os.Chmod(path, 0o600); errChmod != nil {
 			return errChmod
 		}

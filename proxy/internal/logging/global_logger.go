@@ -217,6 +217,15 @@ func ConfigureLogOutput(cfg *config.Config) error {
 	logDir := ResolveLogDirectory(cfg)
 
 	protectedPath := ""
+	if StdoutOnly() {
+		if logWriter != nil {
+			_ = logWriter.Close()
+			logWriter = nil
+		}
+		log.SetOutput(os.Stdout)
+		stopLogDirCleanerLocked()
+		return nil
+	}
 	if cfg.LoggingToFile {
 		if err := os.MkdirAll(logDir, 0o755); err != nil {
 			return fmt.Errorf("logging: failed to create log directory: %w", err)

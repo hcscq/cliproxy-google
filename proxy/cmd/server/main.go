@@ -140,6 +140,8 @@ func main() {
 	flag.StringVar(&vertexImportPrefix, "vertex-import-prefix", "", "Prefix for Vertex model namespacing (use with -vertex-import)")
 	flag.StringVar(&password, "password", "", "")
 	flag.StringVar(&homeJWT, "home-jwt", "", "Home control plane JWT for mTLS certificate bootstrap and connection")
+	var homeEnrollOnly bool
+	flag.BoolVar(&homeEnrollOnly, "home-enroll", false, "Enroll with Home using -home-jwt/HOME_JWT, write client certificates to HOME_CERT_DIR (or ~/.cli-proxy-api) and exit")
 	flag.BoolVar(&homeDisableClusterDiscovery, "home-disable-cluster-discovery", false, "Disable Home CLUSTER NODES discovery and keep using the configured -home-jwt address")
 	flag.BoolVar(&tuiMode, "tui", false, "Start with terminal management UI")
 	flag.BoolVar(&standalone, "standalone", false, "In TUI mode, start an embedded local server")
@@ -257,6 +259,32 @@ func main() {
 		if v, ok := lookupEnv("HOME_JWT", "home_jwt"); ok {
 			homeJWT = v
 		}
+	}
+	if strings.TrimSpace(homeJWT) == "" {
+		// HOME_JWT_FILE allows the JWT to be mounted from a Kubernetes Secret.
+		if p, ok := lookupEnv("HOME_JWT_FILE", "home_jwt_file"); ok {
+			raw, errRead := os.ReadFile(p)
+			if errRead != nil {
+				log.Errorf("failed to read HOME_JWT_FILE %s: %v", p, errRead)
+				return
+			}
+			homeJWT = strings.TrimSpace(string(raw))
+		}
+	}
+	if homeEnrollOnly {
+		if strings.TrimSpace(homeJWT) == "" {
+			log.Error("-home-enroll requires -home-jwt, HOME_JWT or HOME_JWT_FILE")
+			os.Exit(1)
+		}
+		ctxEnroll, cancelEnroll := context.WithTimeout(context.Background(), 60*time.Second)
+		enrolledCfg, errEnroll := home.ConfigFromJWT(ctxEnroll, homeJWT)
+		cancelEnroll()
+		if errEnroll != nil {
+			log.Errorf("home enrollment failed: %v", errEnroll)
+			os.Exit(1)
+		}
+		fmt.Printf("home enrollment ok: node=%s home=%s:%d cert=%s key=%s ca=%s\n", enrolledCfg.NodeID, enrolledCfg.Host, enrolledCfg.Port, enrolledCfg.TLS.ClientCert, enrolledCfg.TLS.ClientKey, enrolledCfg.TLS.CACert)
+		return
 	}
 
 	if value, ok := lookupEnv("PGSTORE_DSN", "pgstore_dsn"); ok {
@@ -615,6 +643,7 @@ func main() {
 	coreauth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	coreauth.SetTransientErrorCooldownSeconds(cfg.TransientErrorCooldownSeconds)
 
+	logging.SetStdoutOnly(logging.StdoutOnlyFromEnv())
 	if err = logging.ConfigureLogOutput(cfg); err != nil {
 		log.Errorf("failed to configure log output: %v", err)
 		return
