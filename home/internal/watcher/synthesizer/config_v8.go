@@ -1,0 +1,52 @@
+package synthesizer
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// addV8CredentialOptions keeps provider options lossless across the database
+// credential projection and publishes the names expected by CPA execution.
+func addV8CredentialOptions(entry any, attrs map[string]string, metadata map[string]any) {
+	data, errMarshal := json.Marshal(entry)
+	if errMarshal != nil {
+		return
+	}
+	var fields map[string]any
+	if errDecode := json.Unmarshal(data, &fields); errDecode != nil {
+		return
+	}
+	options, _ := metadata["credential_options"].(map[string]any)
+	if options == nil {
+		options = make(map[string]any)
+	}
+	for _, key := range []string{"weight", "disable-codex-cloaking", "request-scoped-errors", "rebuild-mid-system-message", "fingerprint-profile", "support-prompt-cache-key", "models"} {
+		value, exists := fields[key]
+		// Keep empty model configuration distinguishable from older payloads.
+		if !exists || (value == nil && key != "models") {
+			continue
+		}
+		options[key] = value
+		switch key {
+		case "weight":
+			weight, ok := value.(float64)
+			if ok {
+				attrs["weight"] = strconv.FormatInt(max(0, int64(weight)), 10)
+			}
+		case "request-scoped-errors":
+			metadata["request_scoped_errors"] = value
+		case "models":
+		default:
+			attribute := strings.ReplaceAll(key, "-", "_")
+			if key == "disable-codex-cloaking" {
+				attribute = "codex_disable_cloaking"
+			}
+			attrs[attribute] = fmt.Sprint(value)
+		}
+	}
+	if len(options) > 0 {
+		metadata["credential_options"] = options
+	}
+}

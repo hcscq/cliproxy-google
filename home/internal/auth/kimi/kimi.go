@@ -1,0 +1,284 @@
+// Package kimi provides token refresh for Kimi (Moonshot AI) credentials used by the scheduler.
+package kimi
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/oautherror"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
+	log "github.com/sirupsen/logrus"
+)
+
+const (
+	kimiClientID    = "17e5f671-d194-4dfb-9706-5516cb48c098"
+	kimiOAuthHost   = "https://auth.kimi.com"
+	kimiHTTPTimeout = 30 * time.Second
+	// KimiDefaultDomain and KimiAIDomain select independent OAuth endpoints.
+	KimiDefaultDomain = "kimi.com"
+	KimiAIDomain      = "kimi.ai"
+)
+
+// ErrRefreshTokenRejected marks an explicit terminal OAuth refresh response.
+var ErrRefreshTokenRejected = errors.New("kimi refresh token rejected")
+
+type refreshTokenRejectedError struct {
+	upstream *oautherror.ResponseError
+}
+
+func (e *refreshTokenRejectedError) Error() string {
+	if e == nil || e.upstream == nil {
+		return ErrRefreshTokenRejected.Error()
+	}
+	return e.upstream.Error()
+}
+
+func (e *refreshTokenRejectedError) Unwrap() []error {
+	if e == nil || e.upstream == nil {
+		return []error{ErrRefreshTokenRejected}
+	}
+	return []error{ErrRefreshTokenRejected, e.upstream}
+}
+
+// DeviceFlowClient is a minimal Kimi OAuth client used for refresh-token exchange.
+type DeviceFlowClient struct {
+	httpClient *http.Client
+	deviceID   string
+	domain     string
+}
+
+// NewDeviceFlowClientWithDeviceIDAndProxyURL creates a new refresh client with proxy override.
+// proxyURL takes precedence over cfg.ProxyURL when non-empty.
+func NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg *config.Config, deviceID string, proxyURL string, domains ...string) *DeviceFlowClient {
+	client := &http.Client{Timeout: kimiHTTPTimeout}
+	effectiveProxyURL := strings.TrimSpace(proxyURL)
+	var sdkCfg config.SDKConfig
+	if cfg != nil {
+		sdkCfg = cfg.SDKConfig
+		if effectiveProxyURL == "" {
+			effectiveProxyURL = strings.TrimSpace(cfg.ProxyURL)
+		}
+	}
+	sdkCfg.ProxyURL = effectiveProxyURL
+	client = util.SetProxy(&sdkCfg, client)
+
+	resolvedDeviceID := strings.TrimSpace(deviceID)
+	if resolvedDeviceID == "" {
+		resolvedDeviceID = newRandomID(16)
+	}
+	domain := KimiDefaultDomain
+	if len(domains) > 0 {
+		domain = NormalizeKimiDomain(domains[0])
+	}
+	return &DeviceFlowClient{
+		httpClient: client,
+		deviceID:   resolvedDeviceID,
+		domain:     domain,
+	}
+}
+
+// newRandomID creates a random id.
+func newRandomID(nbytes int) string {
+	if nbytes <= 0 {
+		nbytes = 16
+	}
+	buf := make([]byte, nbytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "device"
+	}
+	return hex.EncodeToString(buf)
+}
+
+// getDeviceModel returns a device model.
+func getDeviceModel() string {
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+
+	switch osName {
+	case "darwin":
+		return fmt.Sprintf("macOS %s", arch)
+	case "windows":
+		return fmt.Sprintf("Windows %s", arch)
+	case "linux":
+		return fmt.Sprintf("Linux %s", arch)
+	default:
+		return fmt.Sprintf("%s %s", osName, arch)
+	}
+}
+
+// getHostname returns a hostname.
+func getHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return hostname
+}
+
+// commonHeaders handles a common headers.
+func (c *DeviceFlowClient) commonHeaders() map[string]string {
+	if c == nil {
+		return nil
+	}
+	return map[string]string{
+		"X-Msh-Platform":     "cli-proxy-api-home",
+		"X-Msh-Version":      "1.0.0",
+		"X-Msh-Device-Name":  getHostname(),
+		"X-Msh-Device-Model": getDeviceModel(),
+		"X-Msh-Device-Id":    c.deviceID,
+	}
+}
+
+// RefreshToken exchanges a refresh token for a new access token.
+func (c *DeviceFlowClient) RefreshToken(ctx context.Context, refreshToken string) (*KimiTokenData, error) {
+	// Resolve credential context before calling upstream OAuth services.
+	if c == nil || c.httpClient == nil {
+		return nil, fmt.Errorf("kimi: client not ready")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(refreshToken) == "" {
+		return nil, fmt.Errorf("kimi: refresh token is required")
+	}
+
+	data := url.Values{}
+	data.Set("client_id", kimiClientID)
+	data.Set("grant_type", "refresh_token")
+	data.Set("refresh_token", refreshToken)
+
+	req, errReq := http.NewRequestWithContext(ctx, http.MethodPost, ResolveKimiOAuthHost(c.domain)+"/api/oauth/token", strings.NewReader(data.Encode()))
+	if errReq != nil {
+		return nil, fmt.Errorf("kimi: failed to create refresh request: %w", errReq)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	for k, v := range c.commonHeaders() {
+		req.Header.Set(k, v)
+	}
+
+	resp, errDo := c.httpClient.Do(req)
+	if errDo != nil {
+		return nil, fmt.Errorf("kimi: refresh request failed: %w", errDo)
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("kimi refresh token: response body close error: %v", errClose)
+		}
+	}()
+
+	bodyBytes, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return nil, fmt.Errorf("kimi: failed to read refresh response: %w", errRead)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, kimiRefreshResponseError(resp.StatusCode, bodyBytes)
+	}
+
+	var tokenResp struct {
+		AccessToken  string  `json:"access_token"`
+		RefreshToken string  `json:"refresh_token"`
+		TokenType    string  `json:"token_type"`
+		ExpiresIn    float64 `json:"expires_in"`
+		Scope        string  `json:"scope"`
+	}
+	if errUnmarshal := json.Unmarshal(bodyBytes, &tokenResp); errUnmarshal != nil {
+		return nil, fmt.Errorf("kimi: failed to parse refresh response: %w", errUnmarshal)
+	}
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("kimi: empty access token in refresh response")
+	}
+
+	var expiresAt int64
+	if tokenResp.ExpiresIn > 0 {
+		expiresAt = time.Now().Unix() + int64(tokenResp.ExpiresIn)
+	}
+
+	return &KimiTokenData{
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		TokenType:    tokenResp.TokenType,
+		ExpiresAt:    expiresAt,
+		Scope:        tokenResp.Scope,
+	}, nil
+}
+
+func kimiRefreshResponseError(statusCode int, body []byte) error {
+	upstream := oautherror.NewResponseError(statusCode, body)
+	code := strings.ToLower(strings.TrimSpace(upstream.OAuthError()))
+	if code == "" {
+		code = strings.ToLower(strings.TrimSpace(upstream.Code()))
+	}
+	switch code {
+	case "invalid_grant", "refresh_token_expired", "refresh_token_revoked", "refresh_token_reused":
+		return &refreshTokenRejectedError{upstream: upstream}
+	}
+	description := strings.ToLower(strings.Join([]string{upstream.ErrorDescription(), upstream.Message(), upstream.Detail()}, " "))
+	if strings.Contains(description, "refresh token") || strings.Contains(description, "refresh_token") {
+		if strings.Contains(description, "expired") || strings.Contains(description, "revoked") || strings.Contains(description, "reused") {
+			return &refreshTokenRejectedError{upstream: upstream}
+		}
+	}
+	return upstream
+}
+
+// NormalizeKimiDomain keeps endpoint selection limited to the supported Kimi domains.
+func NormalizeKimiDomain(domain string) string {
+	value := strings.ToLower(strings.TrimSpace(domain))
+	if value == "kimi.ai" || value == "ai" || value == "kimi-ai" || strings.HasSuffix(value, ".kimi.ai") {
+		return KimiAIDomain
+	}
+	return KimiDefaultDomain
+}
+
+// ResolveKimiOAuthHost returns the OAuth endpoint for the selected Kimi domain.
+func ResolveKimiOAuthHost(domain string) string {
+	if NormalizeKimiDomain(domain) == KimiAIDomain {
+		return "https://auth.kimi.ai"
+	}
+	return kimiOAuthHost
+}
+
+// ResolveKimiAPIBaseURL matches CPA's base URL, before its versioned API path is appended.
+func ResolveKimiAPIBaseURL(domain string) string {
+	if NormalizeKimiDomain(domain) == KimiAIDomain {
+		return "https://api.kimi.ai/coding"
+	}
+	return "https://api.kimi.com/coding"
+}
+
+// ResolveKimiDomain uses explicit account settings before the provider's default domain.
+func ResolveKimiDomain(provider string, attributes map[string]string, metadata map[string]any) string {
+	values := []string{attributes["domain"], attributes["base_url"]}
+	for _, key := range []string{"domain", "base_url", "type"} {
+		value, _ := metadata[key].(string)
+		values = append(values, value)
+	}
+	values = append(values, provider)
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if parsed, errParse := url.Parse(value); errParse == nil && parsed.Hostname() != "" {
+			value = parsed.Hostname()
+		}
+		if value == "kimi.ai" || value == "ai" || value == "kimi-ai" || strings.HasSuffix(value, ".kimi.ai") {
+			return KimiAIDomain
+		}
+		if value == "kimi.com" || value == "com" || value == "kimi" || strings.HasSuffix(value, ".kimi.com") {
+			return KimiDefaultDomain
+		}
+	}
+	return KimiDefaultDomain
+}

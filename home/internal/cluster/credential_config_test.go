@@ -1,0 +1,118 @@
+package cluster
+
+import (
+	"testing"
+
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+)
+
+// TestApplyCredentialConfigToRootHydratesAPIKeyAuths verifies test apply credential config to root hydrates api key auths behavior.
+func TestApplyCredentialConfigToRootHydratesAPIKeyAuths(t *testing.T) {
+	// Normalize source data before building the derived payload.
+	root := map[string]any{"debug": true}
+	auths := []*coreauth.Auth{
+		testConfigAPIKeyAuth("gemini-id", "gemini", "config:gemini[token]", "gemini-key"),
+		testConfigAPIKeyAuth("interactions-id", "gemini-interactions", "config:interactions[token]", "interactions-key"),
+		testConfigAPIKeyAuth("vertex-id", "vertex", "config:vertex-apikey[token]", "vertex-key"),
+		testConfigAPIKeyAuth("codex-id", "codex", "config:codex[token]", "codex-key"),
+		testConfigAPIKeyAuth("xai-id", "xai", "config:xai[token]", "xai-key"),
+		testConfigAPIKeyAuth("meta-id", "meta", "config:meta[token]", "meta-key"),
+		testConfigAPIKeyAuth("claude-id", "claude", "config:claude[token]", "claude-key"),
+		testConfigAPIKeyAuth("compat-id", "compat", "config:compat[token]", "compat-key"),
+		testConfigAPIKeyAuth("codex-file-id", "codex", "auth-file.json", "ignored-key"),
+	}
+	auths[1].Metadata = map[string]any{
+		"request_retry": 1,
+		"home_config_models": []any{map[string]any{
+			"id":                  "interactions-alias",
+			"name":                "interactions-upstream",
+			"config_display_name": "Interactions Catalog Name",
+			"force_mapping":       true,
+		}},
+	}
+	auths[4].Metadata = map[string]any{"disable_cooling": false, "request_retry": 0}
+	auths[7].Attributes["compat_name"] = "compat"
+	auths[7].Attributes["provider_key"] = "compat"
+	auths[7].Metadata = map[string]any{"request_retry": 2}
+
+	counts := ApplyCredentialConfigToRoot(root, auths)
+	if counts.GeminiKeys != 1 || counts.InteractionsKeys != 1 || counts.VertexKeys != 1 || counts.CodexKeys != 1 || counts.XAIKeys != 1 || counts.MetaKeys != 1 || counts.ClaudeKeys != 1 || counts.OpenAICompatibility != 1 {
+		t.Fatalf("unexpected credential counts: %#v", counts)
+	}
+	if got := root["debug"]; got != true {
+		t.Fatalf("debug root value changed to %#v", got)
+	}
+
+	geminiKeys, ok := root["gemini-api-key"].([]appconfig.GeminiKey)
+	if !ok || len(geminiKeys) != 1 || geminiKeys[0].APIKey != "gemini-key" {
+		t.Fatalf("unexpected gemini-api-key root value: %#v", root["gemini-api-key"])
+	}
+	if geminiKeys[0].ID != "gemini-id" || geminiKeys[0].UUID != "" {
+		t.Fatalf("gemini credential identity = %#v, want exported id only", geminiKeys[0])
+	}
+	interactionsKeys, ok := root["interactions-api-key"].([]appconfig.GeminiKey)
+	if !ok || len(interactionsKeys) != 1 || interactionsKeys[0].APIKey != "interactions-key" {
+		t.Fatalf("unexpected interactions-api-key root value: %#v", root["interactions-api-key"])
+	}
+	if interactionsKeys[0].ID != "interactions-id" || interactionsKeys[0].RequestRetry == nil || *interactionsKeys[0].RequestRetry != 1 {
+		t.Fatalf("interactions credential = %#v, want exported id and request-retry", interactionsKeys[0])
+	}
+	if len(interactionsKeys[0].Models) != 1 || interactionsKeys[0].Models[0].DisplayName != "Interactions Catalog Name" || !interactionsKeys[0].Models[0].ForceMapping {
+		t.Fatalf("interactions models = %#v", interactionsKeys[0].Models)
+	}
+	vertexKeys, ok := root["vertex-api-key"].([]appconfig.VertexCompatKey)
+	if !ok || len(vertexKeys) != 1 || vertexKeys[0].APIKey != "vertex-key" {
+		t.Fatalf("unexpected vertex-api-key root value: %#v", root["vertex-api-key"])
+	}
+	codexKeys, ok := root["codex-api-key"].([]appconfig.CodexKey)
+	if !ok || len(codexKeys) != 1 || codexKeys[0].APIKey != "codex-key" {
+		t.Fatalf("unexpected codex-api-key root value: %#v", root["codex-api-key"])
+	}
+	xaiKeys, ok := root["xai-api-key"].([]appconfig.XAIKey)
+	if !ok || len(xaiKeys) != 1 || xaiKeys[0].APIKey != "xai-key" {
+		t.Fatalf("unexpected xai-api-key root value: %#v", root["xai-api-key"])
+	}
+	if xaiKeys[0].DisableCooling == nil || *xaiKeys[0].DisableCooling {
+		t.Fatalf("xAI disable-cooling override = %#v, want explicit false", xaiKeys[0].DisableCooling)
+	}
+	if xaiKeys[0].RequestRetry == nil || *xaiKeys[0].RequestRetry != 0 {
+		t.Fatalf("xAI request-retry override = %#v, want explicit zero", xaiKeys[0].RequestRetry)
+	}
+	if geminiKeys[0].DisableCooling != nil {
+		t.Fatalf("Gemini disable-cooling override = %#v, want inherited setting", geminiKeys[0].DisableCooling)
+	}
+	claudeKeys, ok := root["claude-api-key"].([]appconfig.ClaudeKey)
+	if !ok || len(claudeKeys) != 1 || claudeKeys[0].APIKey != "claude-key" {
+		t.Fatalf("unexpected claude-api-key root value: %#v", root["claude-api-key"])
+	}
+	metaKeys, ok := root["meta-api-key"].([]appconfig.MetaKey)
+	if !ok || len(metaKeys) != 1 || metaKeys[0].APIKey != "meta-key" {
+		t.Fatalf("unexpected meta-api-key root value: %#v", root["meta-api-key"])
+	}
+	if vertexKeys[0].ID != "vertex-id" || codexKeys[0].ID != "codex-id" || xaiKeys[0].ID != "xai-id" || metaKeys[0].ID != "meta-id" || claudeKeys[0].ID != "claude-id" {
+		t.Fatalf("provider credential IDs were not exported")
+	}
+	compat, ok := root["openai-compatibility"].([]appconfig.OpenAICompatibility)
+	if !ok || len(compat) != 1 || compat[0].RequestRetry == nil || *compat[0].RequestRetry != 2 {
+		t.Fatalf("OpenAI compatibility request-retry override = %#v, want 2", root["openai-compatibility"])
+	}
+}
+
+// testConfigAPIKeyAuth handles a test config api key auth.
+func testConfigAPIKeyAuth(id, provider, source, apiKey string) *coreauth.Auth {
+	return &coreauth.Auth{
+		ID:       id,
+		Index:    id,
+		Provider: provider,
+		Prefix:   "test-prefix",
+		ProxyURL: "http://proxy.example",
+		Attributes: map[string]string{
+			"source":        source,
+			"api_key":       apiKey,
+			"base_url":      "https://api.example",
+			"priority":      "7",
+			"header:X-Test": "test",
+		},
+	}
+}

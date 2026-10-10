@@ -1,0 +1,54 @@
+# CLIProxyAPIHome PostgreSQL cluster mode configuration.
+# Copy this file to cluster.yaml to enable cluster behavior.
+
+# Database configuration: PostgreSQL
+#
+# Configure exactly one database backend; do not add a sqlite section.
+# PostgreSQL accepts either postgres_uri or individual connection fields.
+# Choose exactly one format: postgres_uri cannot be combined with host, port,
+# user, password, database, or sslmode.
+#
+# Active example: postgres_uri connection string.
+# Paste the actual value supplied by the provider. Home does not expand
+# environment placeholders inside this file.
+# Percent-encode reserved characters in the username or password.
+pgsql:
+  postgres_uri: "postgresql://cliproxy:secret@127.0.0.1:5432/cliproxy_home?sslmode=disable"
+
+  # Alternative: individual connection fields.
+  # Remove postgres_uri above, then uncomment the fields below.
+  # host: "127.0.0.1"
+  # For Docker Compose, use the PostgreSQL service name instead.
+  # host: "postgres"
+  # port: 5432
+  # user: "cliproxy"
+  # password: "secret"
+  # database: "cliproxy_home"
+  # sslmode: "disable"
+
+  # Queries taking longer than this threshold are logged as slow SQL.
+  # Optional; defaults to "200ms". Uses Go duration syntax such as "1s".
+  slow-query-threshold: "200ms"
+
+node:
+  # Optional public address advertised to other Home nodes and CPA clients.
+  # external-ip: "203.0.113.10"
+  # Optional public port advertised to other Home nodes and CPA clients when a reverse proxy changes the reachable port.
+  # external-port: 443
+  port: 8327
+  heartbeat-interval: "5s"
+  # Keep this at 20s for the lifecycle foundation. It must satisfy:
+  # heartbeat-timeout + reclaim-grace > cpa-heartbeat-timeout + cpa-cancel-bound.
+  heartbeat-timeout: "20s"
+  event-poll-interval: "3s"
+
+# Database time is authoritative for lifecycle, liveness, timeout, connected_at, and expiration
+# decisions; never use an individual Home host clock. Every Home in a multi-Home deployment must
+# use the same database time authority.
+# Credential lifecycle upgrade order: first upgrade every Home while no limits are active;
+# then upgrade every CPA, confirm protocol 1 membership, and verify the concurrency limiter
+# capability before enabling limits. The in-flight snapshot capability is optional diagnostics.
+# Do not mix in an older Home.
+# Each CPA must use a unique mTLS client certificate; never share a certificate between CPAs.
+# If a Home loses database liveness, it stops sending pong. A CPA that cannot cancel within its
+# cancel bound closes its service rather than continuing with an unsafe lifecycle.
