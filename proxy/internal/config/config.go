@@ -102,6 +102,11 @@ type Config struct {
 	// failover or immediate additional rounds allowed by RequestRetry.
 	MaxRetryInterval int `yaml:"max-retry-interval" json:"max-retry-interval"`
 
+	// CapacityRetry retries requests that failed because the upstream had no
+	// capacity for the requested model (503 UNAVAILABLE / MODEL_CAPACITY_EXHAUSTED,
+	// capacity-flavoured 429). The requested model is never changed.
+	CapacityRetry CapacityRetryConfig `yaml:"capacity-retry,omitempty" json:"capacity-retry,omitempty"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 
@@ -196,4 +201,19 @@ type Config struct {
 
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
+}
+
+// CapacityRetryConfig configures same-model retries on upstream capacity errors.
+// Every retry first tries the other available credentials (a normal credential
+// round), then backs off with jitter before the next round.
+type CapacityRetryConfig struct {
+	// Enabled toggles capacity retries; nil means enabled.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// MaxAttempts is the number of extra rounds after the first failure (default 3).
+	MaxAttempts int `yaml:"max-attempts,omitempty" json:"max-attempts,omitempty"`
+	// BaseDelay is the first backoff delay (Go duration, default 1s); it doubles per attempt.
+	BaseDelay string `yaml:"base-delay,omitempty" json:"base-delay,omitempty"`
+	// MaxDelay caps a single backoff delay (default 8s). An upstream RetryInfo
+	// retryDelay is honoured up to this cap.
+	MaxDelay string `yaml:"max-delay,omitempty" json:"max-delay,omitempty"`
 }

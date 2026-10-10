@@ -222,7 +222,13 @@ func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel s
 	}
 
 	statusCode := statusCodeFromResult(result.Error)
-	if isModelSupportResultError(result.Error) {
+	if isCapacityResultError(result.Error) {
+		// Upstream had no capacity for this model right now; that says nothing
+		// about the credential, so do not cool it down (the proxy retries the
+		// same model with backoff).
+		state.NextRetryAfter = time.Time{}
+		state.Unavailable = false
+	} else if isModelSupportResultError(result.Error) {
 		next := now.Add(12 * time.Hour)
 		state.NextRetryAfter = next
 		transition.suspendReason = "model_not_supported"
@@ -1116,4 +1122,15 @@ func parseDurationPointer(value string) *time.Duration {
 		return nil
 	}
 	return &duration
+}
+
+// isCapacityResultError reports upstream model-capacity failures
+// (MODEL_CAPACITY_EXHAUSTED / "No capacity available"), which are transient and
+// not tied to the credential.
+func isCapacityResultError(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Message)
+	return strings.Contains(msg, "model_capacity_exhausted") || strings.Contains(msg, "no capacity available")
 }

@@ -218,6 +218,9 @@ func TestHomeModelErrorOutranksLaterRefreshPreparationError(t *testing.T) {
 			manager.SetConfig(&internalconfig.Config{Home: internalconfig.HomeConfig{Enabled: true}})
 			manager.PublishHomeDispatch(&homeErrorPriorityDispatcher{}, executionregistry.New(), 1)
 			manager.RegisterExecutor(executor)
+			// This test is about error priority within one round; capacity retries
+			// are covered by capacity_retry_test.go.
+			manager.SetCapacityRetry(CapacityRetrySettings{Enabled: false})
 
 			errRun := path.run(manager)
 			if errRun == nil || errRun.Error() != modelErr.Message || statusCodeFromError(errRun) != http.StatusServiceUnavailable {

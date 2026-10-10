@@ -204,6 +204,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.applyAccessConfig(nil, cfg)
 	if authManager != nil {
 		authManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
+		authManager.SetCapacityRetry(auth.NewCapacityRetrySettings(cfg.CapacityRetry.Enabled, cfg.CapacityRetry.MaxAttempts, cfg.CapacityRetry.BaseDelay, cfg.CapacityRetry.MaxDelay))
 	}
 	githubauth.SetToken(cfg.GitHubToken)
 	managementasset.SetCurrentConfig(cfg)

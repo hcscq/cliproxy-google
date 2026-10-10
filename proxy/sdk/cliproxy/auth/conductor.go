@@ -185,6 +185,7 @@ type Manager struct {
 	requestRetry        atomic.Int32
 	maxRetryCredentials atomic.Int32
 	maxRetryInterval    atomic.Int64
+	capacityRetry       atomic.Pointer[CapacityRetrySettings]
 
 	// oauthModelAlias stores global OAuth model alias mappings (alias -> upstream name) keyed by channel.
 	oauthModelAlias atomic.Value

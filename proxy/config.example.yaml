@@ -191,6 +191,15 @@ routing:
     # Set to 0 or below to never wait for credential cooldown.
     # Retry rounds that need no wait remain controlled by request-retry.
     max-retry-interval: 30
+    # Upstream model-capacity errors (503 UNAVAILABLE / MODEL_CAPACITY_EXHAUSTED,
+    # capacity 429): try other credentials first, then back off (exponential,
+    # ±20% jitter, RetryInfo retryDelay honoured up to max-delay) and retry the
+    # SAME model. The requested model is never changed.
+    capacity-retry:
+      enabled: true
+      max-attempts: 3
+      base-delay: 1s
+      max-delay: 8s
 
   cooldown:
     # When true, disable auth/model cooldown scheduling globally (prevents blackout windows after failure states).

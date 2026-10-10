@@ -860,7 +860,12 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					}
 
 					statusCode := statusCodeFromResult(result.Error)
-					if isModelSupportResultError(result.Error) {
+					if isCapacityResultError(result.Error) {
+						// Model capacity is an upstream condition, not a credential
+						// problem: keep the credential eligible; capacity retry backs off.
+						state.NextRetryAfter = time.Time{}
+						state.Unavailable = false
+					} else if isModelSupportResultError(result.Error) {
 						if disableCooling {
 							state.NextRetryAfter = time.Time{}
 						} else if result.RetryAfter != nil && *result.RetryAfter > 0 {

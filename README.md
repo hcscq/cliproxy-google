@@ -190,3 +190,14 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
 
 - Home 里还保留了部分非 Google 的模型目录逻辑（例如 Devin 和其他 provider 的模型列表刷新），以及 API Key 配置项。这些不影响运行，以后的阶段再清理。
 - 删除的测试只包括明确针对已删除 provider 的用例。
+
+## 上游容量不足重试
+
+Antigravity / Gemini 在模型容量不足时会返回 503 `UNAVAILABLE` / `MODEL_CAPACITY_EXHAUSTED`（或带容量原因的 429）。这类错误和账号额度无关，处理方式是：
+
+1. 本轮先换其他可用凭据（容量错误不会让凭据进入冷却）；
+2. 所有凭据都失败后，按指数退避 + ±20% 抖动等待（默认 1s → 2s → 4s，单次不超过 8s；上游 `RetryInfo.retryDelay` 会被采纳但同样不超过上限），再用**同一个模型**重试，默认最多 3 轮；
+3. 流式请求只在还没有向客户端发送任何数据前重试；
+4. **永远不会更换请求的模型**（没有模型降级/回退链）。
+
+配置位置：`routing.retry.capacity-retry`（`enabled` / `max-attempts` / `base-delay` / `max-delay`），保存在 Home 配置中，所有代理共享；面板“设置 → 重试与冷却”中也可以修改。账号额度类 429（`QUOTA_EXHAUSTED` / `RATE_LIMIT_EXCEEDED`）仍走原有的冷却和凭据轮换。

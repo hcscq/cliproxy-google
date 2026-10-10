@@ -13,6 +13,8 @@ interface FieldDef {
   hintEn?: string;
   options?: string[];
   danger?: boolean;
+  /** Value shown when the key is absent from the config (server-side default). */
+  def?: unknown;
 }
 
 const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
@@ -33,6 +35,10 @@ const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
       { path: 'routing.retry.request-retry', type: 'number', zh: '额外重试轮数', en: 'Request retry rounds', hintZh: '403/408/429/5xx 时换凭据重试的额外轮数。', hintEn: 'Extra rounds on 403/408/429/5xx.' },
       { path: 'routing.retry.max-retry-credentials', type: 'number', zh: '每轮最多尝试凭据数', en: 'Max credentials per round', hintZh: '≤0 表示全部', hintEn: '≤0 means all' },
       { path: 'routing.retry.max-retry-interval', type: 'number', zh: '最长等待冷却（秒）', en: 'Max cooldown wait (s)' },
+      { path: 'routing.retry.capacity-retry.enabled', type: 'bool', def: true, zh: '上游容量不足时重试', en: 'Retry on upstream capacity errors', hintZh: '503 UNAVAILABLE / MODEL_CAPACITY_EXHAUSTED 等容量错误：先换其他凭据，再退避后用同一模型重试。不会更换模型。', hintEn: '503 UNAVAILABLE / MODEL_CAPACITY_EXHAUSTED: try other credentials first, then back off and retry the same model. The model is never changed.' },
+      { path: 'routing.retry.capacity-retry.max-attempts', type: 'number', def: 3, zh: '容量重试次数', en: 'Capacity retry attempts', hintZh: '首次失败后的最多重试轮数（默认 3，最大 10）', hintEn: 'Extra rounds after the first failure (default 3, max 10)' },
+      { path: 'routing.retry.capacity-retry.base-delay', type: 'text', def: '1s', zh: '容量重试初始退避', en: 'Capacity retry base delay', hintZh: '每次翻倍并加 ±20% 抖动，例如 1s', hintEn: 'Doubles per attempt with ±20% jitter, e.g. 1s' },
+      { path: 'routing.retry.capacity-retry.max-delay', type: 'text', def: '8s', zh: '容量重试最长退避', en: 'Capacity retry max delay', hintZh: '上游 RetryInfo 的 retryDelay 会被采纳，但不超过此值', hintEn: 'Upstream RetryInfo retryDelay is honoured up to this cap' },
       { path: 'routing.cooldown.disable-cooling', type: 'bool', zh: '全局禁用冷却', en: 'Disable cooldown globally' },
       { path: 'quota-exceeded.switch-project', type: 'bool', zh: '额度耗尽时切换项目', en: 'Switch project on quota exceeded' },
       { path: 'quota-exceeded.switch-preview-model', type: 'bool', zh: '额度耗尽时切换预览模型', en: 'Switch to preview model on quota exceeded' },
@@ -115,7 +121,7 @@ function SettingsForm() {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const initial = useMemo(() => {
     const out: Record<string, unknown> = {};
-    for (const s of SECTIONS) for (const f of s.fields) out[f.path] = getPath(cfg.data, f.path);
+    for (const s of SECTIONS) for (const f of s.fields) out[f.path] = getPath(cfg.data, f.path) ?? f.def;
     return out;
   }, [cfg.data]);
   useEffect(() => setValues(initial), [initial]);
