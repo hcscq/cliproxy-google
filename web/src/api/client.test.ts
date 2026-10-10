@@ -1,0 +1,147 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ApiClient, ApiError, buildQuery, configPath, generateApiKey, isSupportedProvider, maskSecret, stateFromRedirect } from './client';
+
+function mockFetch(status: number, body: unknown, contentType = 'application/json') {
+  const calls: { url: string; init?: RequestInit }[] = [];
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    return new Response(status === 204 ? null : text, { status, headers: { 'Content-Type': contentType } });
+  });
+  return { fn, calls };
+}
+
+describe('ApiClient', () => {
+  it('sends bearer key and parses JSON', async () => {
+    const { fn, calls } = mockFetch(200, { files: [] });
+    const c = new ApiClient('secret', { fetch: fn });
+    const res = await c.credentials();
+    expect(res.files).toEqual([]);
+    expect(calls[0].url).toBe('/v8/management/credentials');
+    expect((calls[0].init?.headers as Record<string, string>).Authorization).toBe('Bearer secret');
+    expect(calls[0].init?.method).toBe('GET');
+  });
+
+  it('encodes query parameters and skips empty ones', async () => {
+    const { fn, calls } = mockFetch(200, { items: [], total: 0, limit: 50, offset: 0 });
+    const c = new ApiClient('k', { fetch: fn });
+    await c.requestEvents({ limit: 50, offset: 0, model: '', status: 'failed', search: 'a b' });
+    expect(calls[0].url).toBe('/v8/management/request-events?limit=50&offset=0&status=failed&search=a+b');
+  });
+
+  it('sends JSON bodies for mutations', async () => {
+    const { fn, calls } = mockFetch(200, { status: 'ok', disabled: true });
+    const c = new ApiClient('k', { fetch: fn });
+    await c.setCredentialDisabled('cred.json', true);
+    expect(calls[0].init?.method).toBe('PATCH');
+    expect(calls[0].url).toBe('/v8/management/credentials/status');
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ name: 'cred.json', disabled: true });
+    expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+  });
+
+  it('deletes access keys by stable id', async () => {
+    const { fn, calls } = mockFetch(200, { status: 'ok' });
+    await new ApiClient('k', { fetch: fn }).deleteAccessKey(7);
+    expect(calls[0].init?.method).toBe('DELETE');
+    expect(calls[0].url).toBe('/v8/management/access/api-keys?id=7');
+  });
+
+  it('raises ApiError with server code and message', async () => {
+    const { fn } = mockFetch(409, { error: 'api_key_exists', message: 'already exists' });
+    const c = new ApiClient('k', { fetch: fn });
+    await expect(c.createAccessKey('sk-x')).rejects.toMatchObject({ status: 409, code: 'api_key_exists', message: 'already exists' });
+  });
+
+  it('invokes onUnauthorized for 401', async () => {
+    const { fn } = mockFetch(401, { error: 'invalid management key' });
+    const c = new ApiClient('bad', { fetch: fn });
+    const spy = vi.fn();
+    c.onUnauthorized = spy;
+    await expect(c.verify()).rejects.toBeInstanceOf(ApiError);
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it('treats an IP ban as an auth error', async () => {
+    const { fn } = mockFetch(403, { error: 'IP banned due to too many failed attempts. Try again in 29m59s' });
+    const c = new ApiClient('bad', { fetch: fn });
+    const err = await c.verify().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.isAuth).toBe(true);
+    expect(err.message).toMatch(/banned/);
+  });
+
+  it('returns fallback for missing config paths', async () => {
+    const { fn, calls } = mockFetch(404, { error: 'not_found' });
+    const c = new ApiClient('k', { fetch: fn });
+    expect(await c.configGet('api-keys/gemini', [])).toEqual([]);
+    expect(calls[0].url).toBe('/v8/management/config/api-keys/gemini');
+  });
+
+  it('rethrows non-404 config errors', async () => {
+    const { fn } = mockFetch(500, { error: 'config_load_failed' });
+    await expect(new ApiClient('k', { fetch: fn }).configGet('x', null)).rejects.toMatchObject({ status: 500 });
+  });
+
+  it('uploads YAML as raw text', async () => {
+    const { fn, calls } = mockFetch(200, { status: 'ok' });
+    await new ApiClient('k', { fetch: fn }).putConfigYAML('a: 1\n');
+    expect(calls[0].init?.body).toBe('a: 1\n');
+    expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe('application/yaml');
+  });
+
+  it('posts multipart credential uploads without a JSON content type', async () => {
+    const { fn, calls } = mockFetch(200, { status: 'ok', uploaded: 1 });
+    const file = new File(['{"type":"antigravity"}'], 'a.json', { type: 'application/json' });
+    await new ApiClient('k', { fetch: fn }).uploadCredentialFiles([file]);
+    expect(calls[0].init?.body).toBeInstanceOf(FormData);
+    expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+  });
+
+  it('submits OAuth callbacks with the pasted redirect URL', async () => {
+    const { fn, calls } = mockFetch(200, { status: 'ok' });
+    await new ApiClient('k', { fetch: fn }).oauthSubmitCallback('http://localhost:51121/oauth-callback?code=c&state=s', 's', 'antigravity');
+    expect(calls[0].url).toBe('/v8/management/oauth/callback');
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      redirect_url: 'http://localhost:51121/oauth-callback?code=c&state=s',
+      state: 's',
+      provider: 'antigravity',
+    });
+  });
+
+  it('handles empty successful responses', async () => {
+    const fn = vi.fn(async () => new Response('', { status: 200 }));
+    expect(await new ApiClient('k', { fetch: fn }).clearLogs()).toBeUndefined();
+  });
+});
+
+describe('helpers', () => {
+  it('buildQuery', () => {
+    expect(buildQuery()).toBe('');
+    expect(buildQuery({ a: 1, b: undefined, c: null, d: '', e: true })).toBe('?a=1&e=true');
+  });
+  it('configPath encodes segments', () => {
+    expect(configPath('/oauth/excluded-models/')).toBe('oauth/excluded-models');
+    expect(configPath('oauth/model-alias/a b')).toBe('oauth/model-alias/a%20b');
+  });
+  it('generateApiKey', () => {
+    const k = generateApiKey();
+    expect(k).toMatch(/^sk-[0-9a-f]{48}$/);
+    expect(generateApiKey()).not.toBe(k);
+  });
+  it('stateFromRedirect', () => {
+    expect(stateFromRedirect('http://localhost:51121/oauth-callback?code=x&state=agv-123')).toBe('agv-123');
+    expect(stateFromRedirect('code=x&state=abc')).toBe('abc');
+    expect(stateFromRedirect('nothing')).toBeUndefined();
+  });
+  it('isSupportedProvider', () => {
+    expect(isSupportedProvider('antigravity')).toBe(true);
+    expect(isSupportedProvider('vertex')).toBe(true);
+    expect(isSupportedProvider('gemini-interactions')).toBe(true);
+    expect(isSupportedProvider('codex')).toBe(false);
+    expect(isSupportedProvider(undefined)).toBe(false);
+  });
+  it('maskSecret', () => {
+    expect(maskSecret('sk-1234567890abcdef')).toBe('sk-1…cdef');
+    expect(maskSecret('abc')).toBe('•••');
+  });
+});

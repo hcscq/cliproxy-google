@@ -50,9 +50,72 @@ jobs:
           echo "::warning::first test run failed, rerunning failed packages: ${failed:-./...}"
           go test -count=1 ${failed:-./...}
 
+  web:
+    name: test (web panel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: home/go.mod
+          cache: true
+          cache-dependency-path: |
+            proxy/go.sum
+            home/go.sum
+      - name: install
+        working-directory: web
+        run: npm ci
+      - name: typecheck + unit tests
+        working-directory: web
+        run: npm run typecheck && npm test
+      - name: build panel
+        working-directory: web
+        run: npm run build
+      - name: build Home with the embedded panel
+        run: |
+          S=home/internal/managementasset/static
+          find "$S" -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+          cp -R web/dist/. "$S/"
+          cd home && go build -o /tmp/home ./cmd/home
+      - name: start Home (SQLite)
+        run: |
+          mkdir -p /tmp/e2e/auths && cd /tmp/e2e
+          cp "$GITHUB_WORKSPACE/home/config.example.yaml" config.yaml
+          printf 'sqlite:\n  path: "home.db"\nnode:\n  external-ip: "127.0.0.1"\n  port: 18327\n' > cluster.yaml
+          /tmp/home -import -auth-dir ./auths
+          MANAGEMENT_PASSWORD=ci-e2e-key nohup /tmp/home > home.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:18327/ >/dev/null 2>&1 && exit 0; sleep 1; done
+          cat home.log; exit 1
+      - name: playwright e2e
+        working-directory: web
+        env:
+          PANEL_URL: http://127.0.0.1:18327
+          MANAGEMENT_KEY: ci-e2e-key
+          E2E_LOCAL: "1"
+          SCREENSHOT_DIR: /tmp/e2e/shots
+        run: |
+          mkdir -p /tmp/e2e/shots
+          npx playwright install --with-deps chromium
+          npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: panel-e2e
+          path: |
+            web/playwright-report
+            web/test-results
+            /tmp/e2e/shots
+            /tmp/e2e/home.log
+          if-no-files-found: ignore
+
   image:
     name: image (${{ matrix.component }})
-    needs: test
+    needs: [test, web]
     runs-on: ubuntu-latest
     permissions:
       contents: read

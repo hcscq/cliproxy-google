@@ -76,7 +76,7 @@ docker build -f deploy/docker/proxy.Dockerfile -t ghcr.io/hcscq/cliproxy-google-
 docker build -f deploy/docker/home.Dockerfile  -t ghcr.io/hcscq/cliproxy-google-home:latest  .
 ```
 
-Home 的 Web 管理面板是可选的。如果需要，先按 `home/Makefile` 的 `panel-assets-local` 生成静态文件再构建；不生成也不影响 Management API 使用。
+Home 镜像内置本项目的 Web 管理面板（`web/`，构建时由 Dockerfile 生成并嵌入），无需额外步骤。
 
 ## 镜像（GitHub Actions / GHCR）
 
@@ -122,7 +122,7 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
    kubectl apply -f deploy/k3s/40-home.yaml
    ```
    每个副本以 Pod IP 作为对外地址，服务端证书由 PG 中的集群 CA 签发，SAN 包含 Pod IP 和 `cliproxy-home` Service 的各个 DNS 名。
-4. 启动代理节点和入口（不需要任何注册脚本）。`60-ingress.yaml` 只对公网暴露 Home 管理面板（`/`、`/index.html`、`/management.html`、`/assets/*`、`/v0/management/*` 以及 OAuth 回调），**不暴露代理 API**：
+4. 启动代理节点和入口（不需要任何注册脚本）。`60-ingress.yaml` 只对公网暴露 Home 管理面板（`/`、`/index.html`、`/management.html`、`/assets/*`、`/v8/management/*`（包含 OAuth 回调）），**不暴露代理 API**：
    ```bash
    kubectl apply -f deploy/k3s/50-proxy.yaml -f deploy/k3s/60-ingress.yaml
    kubectl -n cliproxy scale deploy/cliproxy --replicas=5   # 随意扩缩
@@ -148,8 +148,18 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
   - 同一个 IP 连续输错 5 次会被封禁 30 分钟；
   - Ingress 上还加了 Traefik `rateLimit`。
   - k3s 自带的 Traefik 不信任客户端自己带的 `X-Forwarded-For`，所以封禁按真实客户端 IP 生效。
-- **管理面板来源**：面板的源码仓库（router-for-me/Home-Management-Center）不是公开的。镜像构建时会下载固定版本的 CLIProxyAPIHome 发行包（v1.1.0，校验 sha256），再用 `tools/extract-embed` 从二进制里提取内嵌的面板静态文件。上游是 MIT 协议，见 `NOTICE`。
-- 面板里仍然能看到已删除 provider（Claude、Codex 等）的页面，这些页面不会生效。
+- **管理面板**：`web/` 是本项目自己的面板（Vite + React + TypeScript，中文界面，可切换英文，支持深色模式和手机屏幕）。CI 会构建它，然后嵌入 Home 镜像，由 Home 在 `/` 提供。功能：
+  - 总览：集群健康、主节点、凭据额度、24 小时趋势、最近失败请求
+  - 凭据：Antigravity OAuth 登录、上传或粘贴 JSON、Vertex 服务账号导入；启用/禁用、刷新令牌、查询额度、清除冷却；编辑优先级、前缀、代理、重试和冷却；查看模型、下载、删除（删除需要二次确认）
+  - Gemini / Vertex API Key 分组：可以用表单或 JSON 编辑，每个 Key 可设置权重
+  - 模型：可用模型（包括 Antigravity 动态目录）、排除模型、别名/扩展模型、内置目录
+  - 访问密钥：创建、重命名、删除
+  - 用量与请求：趋势、排行、请求明细和 CSV 导出
+  - 日志：实时刷新、过滤、清空
+  - 节点：Home 副本和代理的临时身份
+  - 设置：常用设置表单，以及完整 YAML 编辑
+  - 本地开发：`cd web && npm ci && HOME_URL=http://127.0.0.1:8327 npm run dev`
+  - 测试：`npm test`（API 客户端单元测试）、`npx playwright test`（e2e，需要一个运行中的 Home，见 CI 的 `web` job）
 
 ### 扩缩容和共享状态
 

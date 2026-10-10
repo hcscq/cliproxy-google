@@ -20,10 +20,6 @@ stdout-only logging, /readyz endpoint, Home identity loading from mounted files
 (HOME_JWT_FILE, HOME_CERT_DIR, -home-enroll), and Kubernetes (k3s) deployment assets.
 See the git history for details.
 
-Home management panel: the compiled web panel embedded in the Home image is
-extracted, unmodified, from the CLIProxyAPIHome v1.1.0 release binary
-(https://github.com/router-for-me/CLIProxyAPIHome/releases/tag/v1.1.0,
-CLIProxyAPIHome_1.1.0_linux_amd64.tar.gz, sha256
-afc33216b20a86e69f43e9318e0fba4b6619fd37746d8f3a228f6f55db6f5e83),
-distributed under the MIT License (see home/LICENSE). Panel source:
-router-for-me/Home-Management-Center (Copyright the router-for-me authors).
+Home management panel: web/ is an original panel written for this project
+(Vite + React + TypeScript) against the CLIProxyAPIHome Management API; it does
+not contain code from the upstream Home-Management-Center panel.

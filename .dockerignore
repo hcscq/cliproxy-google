@@ -6,3 +6,7 @@
 **/config.yaml
 **/cluster.yaml
 deploy/k3s
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report

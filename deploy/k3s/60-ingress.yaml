@@ -55,9 +55,9 @@ spec:
           - {path: /index.html, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
           - {path: /management.html, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
           - {path: /assets, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /v0/management, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          # OAuth login callback (authenticated by its pending OAuth state).
-          - {path: /v8/management/oauth/callback, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          # Management API v8 used by the panel. Every route requires the management key,
+          # except /v8/management/oauth/callback which is validated by its pending OAuth state.
+          - {path: /v8/management, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

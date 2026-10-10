@@ -1,19 +1,13 @@
 # Build context: repository root.  docker build -f deploy/docker/home.Dockerfile -t cliproxy-google-home .
 # home/go.mod replaces the proxy module with ../proxy, so both directories are copied.
-# Management web panel: the panel source repository (router-for-me/Home-Management-Center)
-# is private, so the compiled panel is vendored from a pinned, checksum-verified
-# CLIProxyAPIHome release (MIT) by extracting the files embedded in its binary.
-FROM golang:1.26-bookworm AS panel
-ARG PANEL_RELEASE=v1.1.0
-ARG PANEL_ASSET=CLIProxyAPIHome_1.1.0_linux_amd64.tar.gz
-ARG PANEL_SHA256=afc33216b20a86e69f43e9318e0fba4b6619fd37746d8f3a228f6f55db6f5e83
-WORKDIR /panel
-COPY tools/extract-embed/ ./extract-embed/
-RUN curl -fsSL -o home.tgz "https://github.com/router-for-me/CLIProxyAPIHome/releases/download/${PANEL_RELEASE}/${PANEL_ASSET}" \
-    && echo "${PANEL_SHA256}  home.tgz" | sha256sum -c - \
-    && mkdir bin && tar xzf home.tgz -C bin \
-    && cd extract-embed && go build -o /panel/xe . \
-    && /panel/xe -bin /panel/bin/cli-proxy-api -prefix static/ -out /panel/static -require management.html
+# Management web panel (web/, Vite + React + TypeScript), built here and embedded
+# into the Home binary via go:embed.
+FROM node:20-bookworm-slim AS panel
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build && test -s dist/management.html
 
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
@@ -26,7 +20,7 @@ COPY home/ ./home/
 ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
-COPY --from=panel /panel/static/ ./home/internal/managementasset/static/
+COPY --from=panel /web/dist/ ./home/internal/managementasset/static/
 RUN test -s home/internal/managementasset/static/management.html
 RUN cd home && CGO_ENABLED=1 GOOS=linux go build -buildvcs=false \
     -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" \
