@@ -172,19 +172,24 @@ func (r *Runtime) cachedAntigravityCatalog(a *coreauth.Auth) map[string]antigrav
 	stale := entry.models == nil || now.Sub(entry.fetchedAt) > antigravityDynamicRefreshInterval
 	retryOK := now.Sub(entry.failedAt) > antigravityDynamicRetryInterval || entry.tokenHash != token
 	models := entry.models
+	if token == "" {
+		log.Infof("antigravity model catalog: credential %s has no access token yet", a.ID)
+	}
 	if stale && retryOK && !entry.inFlight && token != "" {
 		entry.inFlight = true
 		entry.tokenHash = token
-		go r.refreshAntigravityCatalog(a.ID)
+		go r.refreshAntigravityCatalog(a.ID, a.Clone())
 	}
 	antigravityCatalogMu.Unlock()
 	return models
 }
 
-func (r *Runtime) refreshAntigravityCatalog(authID string) {
-	var auth *coreauth.Auth
+func (r *Runtime) refreshAntigravityCatalog(authID string, snapshot *coreauth.Auth) {
+	auth := snapshot
 	if r != nil && r.coreManager != nil {
-		auth, _ = r.coreManager.GetByID(authID)
+		if current, ok := r.coreManager.GetByID(authID); ok && current != nil && extractAccessToken(current) != "" {
+			auth = current
+		}
 	}
 	var models map[string]antigravityUpstreamModel
 	var err error
@@ -201,7 +206,10 @@ func (r *Runtime) refreshAntigravityCatalog(authID string) {
 	}
 	entry.inFlight = false
 	changed := false
-	if auth == nil || err != nil {
+	if auth == nil && err == nil {
+		err = antigravityStringError("credential not found")
+	}
+	if err != nil {
 		entry.failedAt = time.Now()
 	} else {
 		changed = !sameAntigravityCatalog(entry.models, models)
