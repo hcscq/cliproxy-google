@@ -73,7 +73,7 @@ Home 的 Web 管理面板是可选的。如果需要，先按 `home/Makefile` �
 
 ## 镜像（GitHub Actions / GHCR）
 
-工作流在 `.github/workflows/ci.yml`。push 到 main、推送 `v*` 标签、提交 PR，或者手动触发（workflow_dispatch）时，都会对 proxy 和 home 跑 `go vet` 和 `go test`。已知有两个上游测试不稳定，失败时会对失败的包自动重跑一次。测试通过后，会用 buildx + QEMU 构建 `linux/amd64` 和 `linux/arm64` 两种架构的镜像。PR 只构建，不推送。
+工作流在 `.github/workflows/ci.yml`。push 到 main、推送 `v*` 标签、提交 PR，或者手动触发（workflow_dispatch）时，都会对 proxy 和 home 跑 `go vet` 和 `go test`。已知有两个上游测试不稳定，失败时会对失败的包自动重跑一次。测试通过后，默认只构建 `linux/amd64` 镜像。如果需要 `linux/arm64`，可以在 Actions 页面手动运行（Run workflow）时勾选 `arm64` 选项，届时会通过 QEMU 额外构建 arm64 镜像，速度较慢。PR 只构建，不推送。
 
 | 镜像 | 标签 |
 | --- | --- |
