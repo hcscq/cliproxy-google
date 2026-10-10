@@ -72,17 +72,3 @@ func (p multiAuthParser) ParseAuths(ctx context.Context, req pluginapi.AuthParse
 	p.t.Helper()
 	return p.parseAuths(ctx, req)
 }
-
-func TestKimiAICredentialProvider(t *testing.T) {
-	for _, tc := range []struct{ raw, provider string }{
-		{`{"type":"kimi","access_token":"fixture"}`, "kimi"},
-		{`{"type":"kimi-ai","access_token":"fixture"}`, "kimi-ai"},
-		{`{"type":"kimi","domain":"kimi.ai","access_token":"fixture"}`, "kimi-ai"},
-		{`{"type":"kimi","base_url":"https://api.kimi.ai/coding","access_token":"fixture"}`, "kimi-ai"},
-	} {
-		auths := SynthesizeAuthFile(&SynthesisContext{}, "kimi-fixture.json", []byte(tc.raw))
-		if len(auths) != 1 || auths[0].Provider != tc.provider {
-			t.Fatalf("provider for %s = %+v", tc.raw, auths)
-		}
-	}
-}

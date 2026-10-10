@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,16 +14,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/antigravity"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/claude"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
-	devinauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/devin"
-	kimiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/kimi"
-	metaauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/meta"
-	xaiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
@@ -71,58 +63,6 @@ type oauthCallbackRequest struct {
 	Error       string `json:"error"`
 }
 
-// RequestAnthropicToken handles request anthropic token.
-func (h *Handler) RequestAnthropicToken(c *gin.Context) {
-	// Resolve credential context before calling upstream OAuth services.
-	pkce, errPKCE := generatePKCECodes()
-	if errPKCE != nil {
-		log.Errorf("cluster oauth: failed to generate anthropic PKCE codes: %v", errPKCE)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate PKCE codes"})
-		return
-	}
-	state, errState := generateOAuthState("cla")
-	if errState != nil {
-		log.Errorf("cluster oauth: failed to generate anthropic state: %v", errState)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
-		return
-	}
-	authURL := buildAnthropicAuthURL(state, pkce)
-	if errRegister := h.registerOAuthSession(c, "anthropic", state, map[string]any{
-		"code_verifier":  pkce.CodeVerifier,
-		"code_challenge": pkce.CodeChallenge,
-	}); errRegister != nil {
-		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
-}
-
-// RequestCodexToken handles request codex token.
-func (h *Handler) RequestCodexToken(c *gin.Context) {
-	// Resolve credential context before calling upstream OAuth services.
-	pkce, errPKCE := generatePKCECodes()
-	if errPKCE != nil {
-		log.Errorf("cluster oauth: failed to generate codex PKCE codes: %v", errPKCE)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate PKCE codes"})
-		return
-	}
-	state, errState := generateOAuthState("cdx")
-	if errState != nil {
-		log.Errorf("cluster oauth: failed to generate codex state: %v", errState)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
-		return
-	}
-	authURL := buildCodexAuthURL(state, pkce)
-	if errRegister := h.registerOAuthSession(c, "codex", state, map[string]any{
-		"code_verifier":  pkce.CodeVerifier,
-		"code_challenge": pkce.CodeChallenge,
-	}); errRegister != nil {
-		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
-}
-
 // RequestAntigravityToken handles request antigravity token.
 func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 	state, errState := generateOAuthState("agv")
@@ -140,184 +80,6 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
-}
-
-// RequestKimiToken handles request kimi token.
-func (h *Handler) RequestKimiToken(c *gin.Context) {
-	// Resolve credential context before calling upstream OAuth services.
-	cfg := h.oauthConfig()
-	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 30*time.Second)
-	defer cancel()
-
-	state, errState := generateOAuthState("kmi")
-	if errState != nil {
-		log.Errorf("cluster oauth: failed to generate kimi state: %v", errState)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
-		return
-	}
-
-	provider, domain := "kimi", kimiauth.KimiDefaultDomain
-	if strings.EqualFold(strings.TrimSpace(c.Query("provider")), "kimi-ai") {
-		provider, domain = "kimi-ai", kimiauth.KimiAIDomain
-	}
-	kimiAuth := kimiauth.NewKimiAuth(cfg, domain)
-	deviceFlow, errDevice := kimiAuth.StartDeviceFlow(ctx)
-	if errDevice != nil {
-		log.Errorf("cluster oauth: failed to start kimi device flow: %v", errDevice)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})
-		return
-	}
-	authURL := strings.TrimSpace(deviceFlow.VerificationURIComplete)
-	if authURL == "" {
-		authURL = strings.TrimSpace(deviceFlow.VerificationURI)
-	}
-
-	if errRegister := h.registerOAuthSession(c, provider, state, map[string]any{
-		"device_code": deviceFlow.DeviceCode,
-		"user_code":   deviceFlow.UserCode,
-	}); errRegister != nil {
-		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
-		return
-	}
-
-	go h.waitForKimiAuthorization(state, kimiAuth, deviceFlow)
-
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
-}
-
-// RequestXAIToken handles request xAI token.
-func (h *Handler) RequestXAIToken(c *gin.Context) {
-	// Resolve credential context before calling upstream OAuth services.
-	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 30*time.Second)
-	defer cancel()
-
-	pkceCodes, errPKCE := xaiauth.GeneratePKCECodes()
-	if errPKCE != nil {
-		log.Errorf("cluster oauth: failed to generate xai PKCE codes: %v", errPKCE)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate PKCE codes"})
-		return
-	}
-	state, errState := generateOAuthState("xai")
-	if errState != nil {
-		log.Errorf("cluster oauth: failed to generate xai state: %v", errState)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
-		return
-	}
-	nonce, errNonce := randomURLSafe(24)
-	if errNonce != nil {
-		log.Errorf("cluster oauth: failed to generate xai nonce: %v", errNonce)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate nonce parameter"})
-		return
-	}
-
-	authSvc := xaiauth.NewXAIAuth(h.oauthConfig())
-	discovery, errDiscover := authSvc.Discover(ctx)
-	if errDiscover != nil {
-		log.Errorf("cluster oauth: failed to discover xai OAuth endpoints: %v", errDiscover)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to discover oauth endpoints"})
-		return
-	}
-
-	redirectURI := fmt.Sprintf("http://%s:%d%s", xaiauth.RedirectHost, xaiauth.CallbackPort, xaiauth.RedirectPath)
-	authURL, errAuthURL := xaiauth.BuildAuthorizeURL(xaiauth.AuthorizeURLParams{
-		AuthorizationEndpoint: discovery.AuthorizationEndpoint,
-		RedirectURI:           redirectURI,
-		CodeChallenge:         pkceCodes.CodeChallenge,
-		State:                 state,
-		Nonce:                 nonce,
-	})
-	if errAuthURL != nil {
-		log.Errorf("cluster oauth: failed to generate xai authorization URL: %v", errAuthURL)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})
-		return
-	}
-
-	if errRegister := h.registerOAuthSession(c, "xai", state, map[string]any{
-		"code_verifier":          pkceCodes.CodeVerifier,
-		"code_challenge":         pkceCodes.CodeChallenge,
-		"nonce":                  nonce,
-		"redirect_uri":           redirectURI,
-		"authorization_endpoint": discovery.AuthorizationEndpoint,
-		"token_endpoint":         discovery.TokenEndpoint,
-	}); errRegister != nil {
-		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
-}
-
-// RequestDevinToken handles request Devin token.
-func (h *Handler) RequestDevinToken(c *gin.Context) {
-	pkceCodes, errPKCE := devinauth.GeneratePKCECodes()
-	if errPKCE != nil {
-		log.Errorf("cluster oauth: failed to generate devin PKCE codes: %v", errPKCE)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate PKCE codes"})
-		return
-	}
-	state, errState := generateOAuthState("dvn")
-	if errState != nil {
-		log.Errorf("cluster oauth: failed to generate devin state: %v", errState)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
-		return
-	}
-
-	authSvc := devinauth.NewDevinAuthService(h.oauthConfig())
-	redirectURI := devinauth.DefaultRedirectURI()
-	authURL := authSvc.BuildAuthorizationURL(redirectURI, pkceCodes.CodeChallenge, state)
-	if errRegister := h.registerOAuthSession(c, "devin", state, map[string]any{
-		"code_verifier":  pkceCodes.CodeVerifier,
-		"code_challenge": pkceCodes.CodeChallenge,
-		"redirect_uri":   redirectURI,
-	}); errRegister != nil {
-		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
-}
-
-// RequestMetaToken handles request Meta token.
-func (h *Handler) RequestMetaToken(c *gin.Context) {
-	cfg := h.oauthConfig()
-	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 30*time.Second)
-	defer cancel()
-
-	state, errState := generateOAuthState("mta")
-	if errState != nil {
-		log.Errorf("cluster oauth: failed to generate meta state: %v", errState)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
-		return
-	}
-
-	metaAuth := metaauth.NewMetaAuth(cfg)
-	deviceFlow, errDevice := metaAuth.StartDeviceFlow(ctx)
-	if errDevice != nil {
-		log.Errorf("cluster oauth: failed to start meta device flow: %v", errDevice)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})
-		return
-	}
-	authURL, userCode, errView := deviceFlowAuthView(deviceFlow.VerificationURIComplete, deviceFlow.VerificationURI, deviceFlow.UserCode)
-	if errView != nil {
-		log.Errorf("cluster oauth: meta device flow missing verification target: %v", errView)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})
-		return
-	}
-
-	if errRegister := h.registerOAuthSession(c, "meta", state, map[string]any{
-		"device_code": deviceFlow.DeviceCode,
-		"user_code":   userCode,
-	}); errRegister != nil {
-		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
-		return
-	}
-
-	go h.waitForMetaAuthorization(state, metaAuth, deviceFlow)
-
-	payload := gin.H{"status": "ok", "url": authURL, "state": state}
-	if userCode != "" {
-		payload["user_code"] = userCode
-	}
-	c.JSON(http.StatusOK, payload)
 }
 
 // GetAuthStatus returns an auth status.
@@ -530,103 +292,14 @@ func (h *Handler) processOAuthCallback(provider, state, code string) {
 
 	var errProcess error
 	switch provider {
-	case "anthropic":
-		errProcess = h.exchangeAnthropicCallback(ctx, state, code, data)
-	case "codex":
-		errProcess = h.exchangeCodexCallback(ctx, code, data)
 	case "antigravity":
 		errProcess = h.exchangeAntigravityCallback(ctx, code, data)
-	case "xai":
-		errProcess = h.exchangeXAICallback(ctx, code, data)
-	case "devin":
-		errProcess = h.exchangeDevinCallback(ctx, code, data)
 	default:
 		errProcess = fmt.Errorf("unsupported provider: %s", provider)
 	}
 	if errProcess != nil {
 		_ = h.repo.SetOAuthSessionError(ctx, state, authStatusMessage(provider, errProcess))
 		log.Errorf("cluster oauth: %s callback failed: %v", provider, errProcess)
-		return
-	}
-}
-
-// waitForKimiAuthorization returns a wait for kimi authorization.
-func (h *Handler) waitForKimiAuthorization(state string, kimiAuth *kimiauth.KimiAuth, deviceFlow *kimiauth.DeviceCodeResponse) {
-	// Validate request inputs before mutating persisted state.
-	ctx, cancel := h.oauthSessionContext(context.Background(), state, 16*time.Minute)
-	defer cancel()
-
-	authBundle, errWait := kimiAuth.WaitForAuthorization(ctx, deviceFlow)
-	if errWait != nil {
-		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Authentication failed")
-		log.Errorf("cluster oauth: kimi authorization failed: %v", errWait)
-		return
-	}
-	if authBundle == nil || authBundle.TokenData == nil {
-		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Authentication failed")
-		return
-	}
-
-	tokenData := authBundle.TokenData
-	provider := "kimi"
-	if authBundle.Domain == kimiauth.KimiAIDomain {
-		provider = "kimi-ai"
-	}
-	metadata := map[string]any{
-		"type":          provider,
-		"domain":        authBundle.Domain,
-		"base_url":      kimiauth.ResolveKimiAPIBaseURL(authBundle.Domain),
-		"access_token":  tokenData.AccessToken,
-		"refresh_token": tokenData.RefreshToken,
-		"token_type":    tokenData.TokenType,
-		"scope":         tokenData.Scope,
-		"timestamp":     time.Now().UnixMilli(),
-	}
-	if tokenData.ExpiresAt > 0 {
-		metadata["expired"] = time.Unix(tokenData.ExpiresAt, 0).UTC().Format(time.RFC3339)
-	}
-	if deviceID := strings.TrimSpace(authBundle.DeviceID); deviceID != "" {
-		metadata["device_id"] = deviceID
-	}
-
-	storeCtx, cancelStore := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelStore()
-	fileName := fmt.Sprintf("%s-%d.json", provider, time.Now().UnixMilli())
-	if errStore := h.storeOAuthMetadataWithContext(storeCtx, metadata, fileName); errStore != nil {
-		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Failed to save authentication tokens")
-		log.Errorf("cluster oauth: store kimi token failed: %v", errStore)
-		return
-	}
-}
-
-// waitForMetaAuthorization waits for Meta device-flow authorization to complete.
-func (h *Handler) waitForMetaAuthorization(state string, metaAuth *metaauth.MetaAuth, deviceFlow *metaauth.DeviceCodeResponse) {
-	ctx, cancel := h.oauthSessionContext(context.Background(), state, 16*time.Minute)
-	defer cancel()
-
-	authBundle, errWait := metaAuth.WaitForAuthorization(ctx, deviceFlow)
-	if errWait != nil {
-		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Authentication failed")
-		log.Errorf("cluster oauth: meta authorization failed: %v", errWait)
-		return
-	}
-	if authBundle == nil || authBundle.TokenData == nil {
-		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Authentication failed")
-		return
-	}
-
-	tokenStorage := metaAuth.CreateTokenStorage(authBundle)
-	if tokenStorage == nil || strings.TrimSpace(tokenStorage.AccessToken) == "" {
-		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Authentication failed")
-		return
-	}
-
-	storeCtx, cancelStore := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelStore()
-	fileName := metaauth.CredentialFileName(tokenStorage.Email, tokenStorage.DCAToken)
-	if errStore := h.storeOAuthMetadataWithContext(storeCtx, metaauth.BuildOAuthMetadata(tokenStorage), fileName); errStore != nil {
-		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Failed to save authentication tokens")
-		log.Errorf("cluster oauth: store meta token failed: %v", errStore)
 		return
 	}
 }
@@ -640,162 +313,6 @@ func (h *Handler) registerOAuthSession(c *gin.Context, provider, state string, d
 		return errRecord
 	}
 	return h.repo.UpsertOAuthSession(ctx, record)
-}
-
-// exchangeAnthropicCallback handles an exchange anthropic callback.
-func (h *Handler) exchangeAnthropicCallback(ctx context.Context, state, code string, data map[string]any) error {
-	// Validate request inputs before mutating persisted state.
-	pkce := pkceCodes{
-		CodeVerifier:  stringFromAny(data["code_verifier"]),
-		CodeChallenge: stringFromAny(data["code_challenge"]),
-	}
-	if pkce.CodeVerifier == "" {
-		return fmt.Errorf("missing PKCE verifier")
-	}
-
-	reqBody := map[string]any{
-		"code":          strings.Split(strings.TrimSpace(code), "#")[0],
-		"state":         state,
-		"grant_type":    "authorization_code",
-		"client_id":     claude.ClientID,
-		"redirect_uri":  anthropicRedirectURI,
-		"code_verifier": pkce.CodeVerifier,
-	}
-	if parts := strings.Split(strings.TrimSpace(code), "#"); len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
-		reqBody["state"] = strings.TrimSpace(parts[1])
-	}
-
-	rawBody, errMarshal := json.Marshal(reqBody)
-	if errMarshal != nil {
-		return errMarshal
-	}
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, claude.TokenURL, bytes.NewReader(rawBody))
-	if errRequest != nil {
-		return errRequest
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	client := claude.NewAnthropicHttpClient(&h.oauthConfig().SDKConfig)
-	resp, errDo := client.Do(req)
-	if errDo != nil {
-		return errDo
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("anthropic oauth: response body close error: %v", errClose)
-		}
-	}()
-	body, errRead := io.ReadAll(resp.Body)
-	if errRead != nil {
-		return errRead
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
-		Account      struct {
-			EmailAddress string `json:"email_address"`
-		} `json:"account"`
-	}
-	if errUnmarshal := json.Unmarshal(body, &tokenResp); errUnmarshal != nil {
-		return errUnmarshal
-	}
-	now := time.Now()
-	metadata := map[string]any{
-		"type":          "claude",
-		"access_token":  tokenResp.AccessToken,
-		"refresh_token": tokenResp.RefreshToken,
-		"last_refresh":  now.Format(time.RFC3339),
-		"email":         tokenResp.Account.EmailAddress,
-		"expired":       now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
-	}
-	return h.storeOAuthMetadataWithContext(ctx, metadata, claudeCredentialFileName(tokenResp.Account.EmailAddress))
-}
-
-// exchangeCodexCallback handles an exchange codex callback.
-func (h *Handler) exchangeCodexCallback(ctx context.Context, code string, data map[string]any) error {
-	// Validate request inputs before mutating persisted state.
-	pkce := pkceCodes{
-		CodeVerifier:  stringFromAny(data["code_verifier"]),
-		CodeChallenge: stringFromAny(data["code_challenge"]),
-	}
-	if pkce.CodeVerifier == "" {
-		return fmt.Errorf("missing PKCE verifier")
-	}
-
-	form := url.Values{}
-	form.Set("grant_type", "authorization_code")
-	form.Set("client_id", codex.ClientID)
-	form.Set("code", strings.TrimSpace(code))
-	form.Set("redirect_uri", codexRedirectURI)
-	form.Set("code_verifier", pkce.CodeVerifier)
-
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, codex.TokenURL, strings.NewReader(form.Encode()))
-	if errRequest != nil {
-		return errRequest
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	resp, errDo := h.oauthHTTPClient().Do(req)
-	if errDo != nil {
-		return errDo
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("codex oauth: response body close error: %v", errClose)
-		}
-	}()
-	body, errRead := io.ReadAll(resp.Body)
-	if errRead != nil {
-		return errRead
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		IDToken      string `json:"id_token"`
-		TokenType    string `json:"token_type"`
-		ExpiresIn    int    `json:"expires_in"`
-	}
-	if errUnmarshal := json.Unmarshal(body, &tokenResp); errUnmarshal != nil {
-		return errUnmarshal
-	}
-
-	accountID := ""
-	email := ""
-	planType := ""
-	hashAccountID := ""
-	if claims, errParse := codex.ParseJWTToken(tokenResp.IDToken); errParse == nil && claims != nil {
-		accountID = claims.GetAccountID()
-		email = claims.GetUserEmail()
-		planType = strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType)
-		if accountID != "" {
-			digest := sha256.Sum256([]byte(accountID))
-			hashAccountID = hex.EncodeToString(digest[:])[:8]
-		}
-	}
-
-	now := time.Now()
-	metadata := map[string]any{
-		"type":          "codex",
-		"id_token":      tokenResp.IDToken,
-		"access_token":  tokenResp.AccessToken,
-		"refresh_token": tokenResp.RefreshToken,
-		"account_id":    accountID,
-		"last_refresh":  now.Format(time.RFC3339),
-		"email":         email,
-		"expired":       now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
-	}
-	return h.storeOAuthMetadataWithContext(ctx, metadata, codexCredentialFileName(email, planType, hashAccountID, true))
 }
 
 // exchangeAntigravityCallback handles an exchange antigravity callback.
@@ -875,77 +392,6 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 	return h.storeOAuthMetadataWithContext(ctx, metadata, antigravityCredentialFileName(email))
 }
 
-// exchangeXAICallback handles an exchange xAI callback.
-func (h *Handler) exchangeXAICallback(ctx context.Context, code string, data map[string]any) error {
-	// Validate request inputs before mutating persisted state.
-	pkce := &xaiauth.PKCECodes{
-		CodeVerifier:  stringFromAny(data["code_verifier"]),
-		CodeChallenge: stringFromAny(data["code_challenge"]),
-	}
-	if pkce.CodeVerifier == "" {
-		return fmt.Errorf("missing PKCE verifier")
-	}
-	redirectURI := stringFromAny(data["redirect_uri"])
-	if redirectURI == "" {
-		redirectURI = fmt.Sprintf("http://%s:%d%s", xaiauth.RedirectHost, xaiauth.CallbackPort, xaiauth.RedirectPath)
-	}
-	tokenEndpoint := stringFromAny(data["token_endpoint"])
-
-	authSvc := xaiauth.NewXAIAuth(h.oauthConfig())
-	bundle, errExchange := authSvc.ExchangeCodeForTokens(ctx, strings.TrimSpace(code), redirectURI, pkce, tokenEndpoint)
-	if errExchange != nil {
-		return errExchange
-	}
-	if bundle == nil || strings.TrimSpace(bundle.TokenData.AccessToken) == "" {
-		return fmt.Errorf("token exchange returned empty access token")
-	}
-
-	tokenData := bundle.TokenData
-	metadata := map[string]any{
-		"type":           "xai",
-		"access_token":   tokenData.AccessToken,
-		"refresh_token":  tokenData.RefreshToken,
-		"id_token":       tokenData.IDToken,
-		"token_type":     tokenData.TokenType,
-		"expires_in":     tokenData.ExpiresIn,
-		"expired":        tokenData.Expire,
-		"last_refresh":   bundle.LastRefresh,
-		"base_url":       firstNonEmptyString(bundle.BaseURL, xaiauth.DefaultAPIBaseURL),
-		"redirect_uri":   bundle.RedirectURI,
-		"token_endpoint": bundle.TokenEndpoint,
-		"auth_kind":      "oauth",
-	}
-	if tokenData.Email != "" {
-		metadata["email"] = tokenData.Email
-	}
-	if tokenData.Subject != "" {
-		metadata["sub"] = tokenData.Subject
-	}
-	return h.storeOAuthMetadataWithContext(ctx, metadata, xaiauth.CredentialFileName(tokenData.Email, tokenData.Subject))
-}
-
-// exchangeDevinCallback handles a Devin OAuth callback.
-func (h *Handler) exchangeDevinCallback(ctx context.Context, code string, data map[string]any) error {
-	codeVerifier := stringFromAny(data["code_verifier"])
-	if codeVerifier == "" {
-		return fmt.Errorf("missing PKCE verifier")
-	}
-	authSvc := devinauth.NewDevinAuthService(h.oauthConfig())
-	token, errExchange := authSvc.ExchangeCodeForToken(ctx, strings.TrimSpace(code), codeVerifier)
-	if errExchange != nil {
-		return errExchange
-	}
-	sessionToken := devinauth.FormatSessionToken(token)
-	if sessionToken == "" {
-		return fmt.Errorf("token exchange returned empty session token")
-	}
-	userName, userID, orgID, errSelf := authSvc.FetchSelfProfile(ctx, sessionToken)
-	if errSelf != nil {
-		log.Warnf("cluster oauth: failed to fetch devin user profile: %v", errSelf)
-	}
-	return h.storeOAuthMetadataWithContext(ctx, devinauth.BuildOAuthMetadata(sessionToken, userName, userID, orgID), devinauth.CredentialFileName(userName, userID))
-}
-
 // storeOAuthMetadataWithContext stores an o auth metadata with context.
 func (h *Handler) storeOAuthMetadataWithContext(ctx context.Context, metadata map[string]any, originalFilename string) error {
 	raw, errMarshal := json.MarshalIndent(metadata, "", "  ")
@@ -955,38 +401,6 @@ func (h *Handler) storeOAuthMetadataWithContext(ctx context.Context, metadata ma
 	raw = append(raw, '\n')
 	_, errStore := h.storeOAuthPayloadWithContext(ctx, raw, originalFilename)
 	return errStore
-}
-
-// buildAnthropicAuthURL builds an anthropic auth url.
-func buildAnthropicAuthURL(state string, pkce *pkceCodes) string {
-	params := url.Values{
-		"code":                  {"true"},
-		"client_id":             {claude.ClientID},
-		"response_type":         {"code"},
-		"redirect_uri":          {anthropicRedirectURI},
-		"scope":                 {"user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"},
-		"code_challenge":        {pkce.CodeChallenge},
-		"code_challenge_method": {"S256"},
-		"state":                 {state},
-	}
-	return anthropicAuthURL + "?" + params.Encode()
-}
-
-// buildCodexAuthURL builds a codex auth url.
-func buildCodexAuthURL(state string, pkce *pkceCodes) string {
-	params := url.Values{
-		"client_id":                  {codex.ClientID},
-		"response_type":              {"code"},
-		"redirect_uri":               {codexRedirectURI},
-		"scope":                      {"openid email profile offline_access"},
-		"state":                      {state},
-		"code_challenge":             {pkce.CodeChallenge},
-		"code_challenge_method":      {"S256"},
-		"prompt":                     {"login"},
-		"id_token_add_organizations": {"true"},
-		"codex_cli_simplified_flow":  {"true"},
-	}
-	return codexAuthURL + "?" + params.Encode()
 }
 
 // buildAntigravityAuthURL builds an antigravity auth url.
@@ -1373,46 +787,6 @@ func requestContextOrBackground(c *gin.Context) context.Context {
 		return c.Request.Context()
 	}
 	return context.Background()
-}
-
-// claudeCredentialFileName handles a claude credential file name.
-func claudeCredentialFileName(email string) string {
-	return fmt.Sprintf("claude-%s.json", strings.TrimSpace(email))
-}
-
-// codexCredentialFileName handles a codex credential file name.
-func codexCredentialFileName(email, planType, hashAccountID string, includeProviderPrefix bool) string {
-	email = strings.TrimSpace(email)
-	plan := normalizePlanTypeForFilename(planType)
-	prefix := ""
-	if includeProviderPrefix {
-		prefix = "codex"
-	}
-	if plan == "" {
-		return fmt.Sprintf("%s-%s.json", prefix, email)
-	}
-	if plan == "team" {
-		return fmt.Sprintf("%s-%s-%s-%s.json", prefix, hashAccountID, email, plan)
-	}
-	return fmt.Sprintf("%s-%s-%s.json", prefix, email, plan)
-}
-
-// normalizePlanTypeForFilename normalizes a plan type for filename.
-func normalizePlanTypeForFilename(planType string) string {
-	planType = strings.TrimSpace(planType)
-	if planType == "" {
-		return ""
-	}
-	parts := strings.FieldsFunc(planType, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	if len(parts) == 0 {
-		return ""
-	}
-	for i, part := range parts {
-		parts[i] = strings.ToLower(strings.TrimSpace(part))
-	}
-	return strings.Join(parts, "-")
 }
 
 // antigravityCredentialFileName handles an antigravity credential file name.

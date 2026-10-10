@@ -32,7 +32,7 @@ func TestOAuthV8DatabaseSessions(t *testing.T) {
 	request("GET", "/v8/management/oauth/auth-url", 400)
 	request("GET", "/v8/management/oauth/auth-url?provider=unknown", 404)
 	request("GET", "/v8/management/oauth/callback", 400)
-	response := request("GET", "/v8/management/oauth/auth-url?provider=%20CODEX%20", 200)
+	response := request("GET", "/v8/management/oauth/auth-url?provider=%20ANTIGRAVITY%20", 200)
 	var login struct{ State, URL string }
 	if errDecode := json.Unmarshal(response.Body.Bytes(), &login); errDecode != nil {
 		t.Fatal(errDecode)
@@ -41,7 +41,7 @@ func TestOAuthV8DatabaseSessions(t *testing.T) {
 		t.Fatal("missing OAuth login")
 	}
 	session, errSession := repo.GetOAuthSession(context.Background(), login.State)
-	if errSession != nil || session == nil || session.Provider != "codex" || session.Status != "" {
+	if errSession != nil || session == nil || session.Provider != "antigravity" || session.Status != "" {
 		t.Fatalf("login was not persisted: %v", errSession)
 	}
 	request("GET", "/v0/management/get-auth-status?state="+login.State, 200)

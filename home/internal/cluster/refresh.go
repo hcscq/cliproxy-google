@@ -169,7 +169,6 @@ func (c *RefreshController) RefreshNowObserved(ctx context.Context, authIndex, o
 	} else {
 		return nil, fmt.Errorf("cluster refresh master is unavailable")
 	}
-	return nil, fmt.Errorf("cluster refresh master is unavailable")
 }
 
 // syncForwardedAuth applies the state already persisted by the master without

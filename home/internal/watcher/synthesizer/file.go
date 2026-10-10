@@ -10,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/kimi"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 )
 
@@ -109,13 +107,6 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 	if provider == "" {
 		return nil
 	}
-	if provider == "kimi" || provider == "kimi-ai" {
-		if kimi.ResolveKimiDomain(provider, nil, metadata) == kimi.KimiAIDomain {
-			provider = "kimi-ai"
-		} else {
-			provider = "kimi"
-		}
-	}
 	label := provider
 	if email, _ := metadata["email"].(string); email != "" {
 		label = email
@@ -192,16 +183,6 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 	}
 	coreauth.ApplyCustomHeadersFromMetadata(a)
 	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, "oauth")
-	// For codex auth files, extract plan_type from the JWT id_token.
-	if provider == "codex" {
-		if idTokenRaw, ok := metadata["id_token"].(string); ok && strings.TrimSpace(idTokenRaw) != "" {
-			if claims, errParse := codex.ParseJWTToken(idTokenRaw); errParse == nil && claims != nil {
-				if pt := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); pt != "" {
-					a.Attributes["plan_type"] = pt
-				}
-			}
-		}
-	}
 	applyClusterUUID(ctx, a)
 	return []*coreauth.Auth{a}
 }

@@ -162,9 +162,9 @@ func TestBuiltInRefreshWithoutExpiryPolicy(t *testing.T) {
 			wantDue: true,
 		},
 		{
-			name: "unknown Kimi expiry is rechecked without using lead as lifetime",
+			name: "unknown Antigravity expiry is rechecked without using lead as lifetime",
 			auth: &Auth{
-				Provider:        "kimi",
+				Provider:        "antigravity",
 				Status:          StatusActive,
 				LastRefreshedAt: now.Add(-24 * time.Hour),
 				Metadata: map[string]any{

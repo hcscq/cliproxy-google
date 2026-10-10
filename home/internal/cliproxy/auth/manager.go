@@ -2220,10 +2220,8 @@ func authSupportsBuiltInRefresh(auth *Auth) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
-	case "codex", "claude", "kimi", "kimi-ai", "antigravity", "xai":
+	case "antigravity":
 		return metaStringValue(auth.Metadata, "refresh_token") != ""
-	case "meta":
-		return extractMetaDCAToken(auth) != ""
 	default:
 		return false
 	}
