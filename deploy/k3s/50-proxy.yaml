@@ -1,21 +1,9 @@
-# Stateless proxy nodes (Home mode). 3 replicas.
-# Kind is StatefulSet only to get stable ordinal pod names (cliproxy-0..2): Home requires a
-# UNIQUE mTLS client identity per CPA node and enrollment secrets are single-use, so each
-# ordinal maps to one pre-enrolled identity in Secret proxy-home-identities.
-# No PVCs are used; the root filesystem is read-only and nothing is persisted locally.
-apiVersion: v1
-kind: Service
-metadata:
-  name: cliproxy-headless
-  namespace: cliproxy
-spec:
-  clusterIP: None
-  selector:
-    app: cliproxy
-  ports:
-    - name: http
-      port: 8317
----
+# Stateless proxy nodes (Home mode) as a Deployment. Scale freely (kubectl scale / HPA).
+# Every pod self-enrolls at startup: it generates a fresh key, sends a CSR plus the
+# reusable bootstrap token to Home and receives an ephemeral client certificate.
+# Key/cert live only in an in-memory emptyDir and die with the pod; Home stores the
+# identity in PostgreSQL and garbage-collects it once heartbeats stop
+# (HOME_EPHEMERAL_NODE_TTL). If Home is unavailable the proxy retries with backoff.
 apiVersion: v1
 kind: Service
 metadata:
@@ -30,23 +18,24 @@ spec:
       targetPort: http
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: cliproxy
   namespace: cliproxy
 spec:
-  serviceName: cliproxy-headless
   replicas: 3
-  podManagementPolicy: Parallel
-  updateStrategy:
+  strategy:
     type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
   selector:
     matchLabels:
       app: cliproxy
+      workload: deployment
   template:
     metadata:
       labels:
         app: cliproxy
+        workload: deployment
     spec:
       terminationGracePeriodSeconds: 60
       securityContext:
@@ -62,51 +51,36 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
                   matchLabels: {app: cliproxy}
-      initContainers:
-        # Select this pod's identity (<pod>.*) from the shared Secret.
-        - name: select-identity
-          image: busybox:1.36
-          env:
-            - name: POD_NAME
-              valueFrom: {fieldRef: {fieldPath: metadata.name}}
-          command:
-            - sh
-            - -ec
-            - |
-              for f in jwt client-crt.pem client-key.pem home-ca-crt.pem; do
-                test -s "/all/${POD_NAME}.${f}" || { echo "missing ${POD_NAME}.${f} in proxy-home-identities"; exit 1; }
-                cp "/all/${POD_NAME}.${f}" "/identity/${f}"
-              done
-              chmod 400 /identity/*
-          securityContext:
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-          volumeMounts:
-            - {name: all-identities, mountPath: /all, readOnly: true}
-            - {name: identity, mountPath: /identity}
       containers:
         - name: proxy
           image: ghcr.io/hcscq/cliproxy-google-proxy:latest
           imagePullPolicy: IfNotPresent
           env:
-            - {name: HOME_JWT_FILE, value: /identity/jwt}
+            - {name: HOME_ADDRESS, value: "cliproxy-home.cliproxy.svc.cluster.local:8327"}
+            - name: HOME_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: home-bootstrap, key: token}
+            # Pins Home's cluster CA (sha256 of the CA cert DER, hex). Optional but recommended.
+            - name: HOME_CA_FINGERPRINT
+              valueFrom:
+                secretKeyRef: {name: home-bootstrap, key: ca-fingerprint, optional: true}
+            - name: HOME_NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - {name: HOME_CERT_DIR, value: /identity}
             - {name: WRITABLE_PATH, value: /tmp/cliproxy}
             - {name: HOME, value: /tmp}
-            # stdout-only logging is the default; set CLIPROXY_FILE_LOGS=true to re-enable files.
           ports:
             - name: http
               containerPort: 8317   # port distributed by Home config (server.port)
           startupProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5
-            failureThreshold: 60
+            failureThreshold: 120   # Home may be restarting; the proxy retries with backoff
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 20
             failureThreshold: 3
           readinessProbe:
-            # 503 until the Home client is connected and its heartbeat is healthy.
             httpGet: {path: /readyz, port: http}
             periodSeconds: 5
             failureThreshold: 2
@@ -118,11 +92,9 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
           volumeMounts:
-            - {name: identity, mountPath: /identity, readOnly: true}
+            - {name: identity, mountPath: /identity}
             - {name: tmp, mountPath: /tmp}
       volumes:
-        - name: all-identities
-          secret: {secretName: proxy-home-identities, defaultMode: 0400}
         - name: identity
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
         - name: tmp

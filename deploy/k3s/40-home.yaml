@@ -1,23 +1,11 @@
-# Home control plane: 2 replicas. Home performs leader election and node discovery
-# through PostgreSQL, so replicas are active/standby for scheduling and refresh.
-# A StatefulSet (not a Deployment) gives every replica a stable DNS name that is
-# used as its advertised host (node.external-ip) and baked into the server certificate
-# and into the enrollment JWTs it issues.
-apiVersion: v1
-kind: Service
-metadata:
-  name: cliproxy-home-headless
-  namespace: cliproxy
-spec:
-  clusterIP: None
-  publishNotReadyAddresses: true
-  selector:
-    app: cliproxy-home
-  ports:
-    - name: home
-      port: 8327
----
-# ClusterIP service for the Home Management API (HTTP on the same port as RESP/mTLS).
+# Home control plane as a stateless Deployment (2 replicas).
+# - All state (config, credentials, cooldown/quota, concurrency, node identities,
+#   leader lease) lives in PostgreSQL; replicas elect a master through PG.
+# - Each replica advertises its pod IP (HOME_NODE_EXTERNAL_IP, downward API); its
+#   server certificate is issued from the PG-stored cluster CA for that IP plus the
+#   shared Service DNS names (HOME_SERVER_CERT_EXTRA_SANS), so proxies can dial any
+#   replica through the ClusterIP Service. No per-replica stable DNS is needed.
+# - Dead replicas' cluster rows / server certs are garbage collected by the master.
 apiVersion: v1
 kind: Service
 metadata:
@@ -32,21 +20,24 @@ spec:
       targetPort: 8327
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: cliproxy-home
   namespace: cliproxy
 spec:
-  serviceName: cliproxy-home-headless
   replicas: 2
-  podManagementPolicy: Parallel
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
   selector:
     matchLabels:
       app: cliproxy-home
+      workload: deployment
   template:
     metadata:
       labels:
         app: cliproxy-home
+        workload: deployment
     spec:
       securityContext:
         runAsNonRoot: true
@@ -62,12 +53,10 @@ spec:
                 labelSelector:
                   matchLabels: {app: cliproxy-home}
       initContainers:
-        - name: render-cluster-yaml
+        # Home reads ./cluster.yaml from its working directory; copy it from the Secret.
+        - name: copy-cluster-yaml
           image: busybox:1.36
-          env:
-            - name: POD_NAME
-              valueFrom: {fieldRef: {fieldPath: metadata.name}}
-          command: ["sh", "-c", "sed \"s/__POD_NAME__/${POD_NAME}/g\" /tmpl/cluster.yaml.tmpl > /work/cluster.yaml && chmod 600 /work/cluster.yaml"]
+          command: ["sh", "-c", "cp /tmpl/cluster.yaml.tmpl /work/cluster.yaml && chmod 600 /work/cluster.yaml"]
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -78,15 +67,24 @@ spec:
         - name: home
           image: ghcr.io/hcscq/cliproxy-google-home:latest
           imagePullPolicy: IfNotPresent
-          workingDir: /work          # cluster.yaml, logs/ and plugins/ live here (emptyDir)
+          workingDir: /work
           env:
             - name: MANAGEMENT_PASSWORD
               valueFrom:
                 secretKeyRef: {name: home-management, key: password}
+            - name: HOME_NODE_EXTERNAL_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - name: HOME_SERVER_CERT_EXTRA_SANS
+              value: "cliproxy-home,cliproxy-home.cliproxy,cliproxy-home.cliproxy.svc,cliproxy-home.cliproxy.svc.cluster.local"
+            # Reusable token that lets proxy replicas self-enroll (ephemeral identities).
+            - name: HOME_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: home-bootstrap, key: token}
+            # Ephemeral proxy identities without heartbeat for this long are revoked.
+            - {name: HOME_EPHEMERAL_NODE_TTL, value: "10m"}
           ports:
             - name: home
               containerPort: 8327
-          # Home has no HTTP health endpoint; TCP checks on the multiplexed port.
           startupProbe:
             tcpSocket: {port: home}
             periodSeconds: 5

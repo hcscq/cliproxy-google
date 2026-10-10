@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -606,6 +607,19 @@ func createServerCertificate(now time.Time, ca *x509.Certificate, caKey *rsa.Pri
 		template.IPAddresses = []net.IP{ip}
 	} else {
 		template.DNSNames = []string{host}
+	}
+	// HOME_SERVER_CERT_EXTRA_SANS (comma separated) adds shared names such as the
+	// Kubernetes Service DNS name, so clients can dial any replica via the Service.
+	for _, extra := range strings.Split(os.Getenv("HOME_SERVER_CERT_EXTRA_SANS"), ",") {
+		extra = strings.TrimSpace(extra)
+		if extra == "" || extra == host {
+			continue
+		}
+		if ip := net.ParseIP(extra); ip != nil {
+			template.IPAddresses = append(template.IPAddresses, ip)
+		} else {
+			template.DNSNames = append(template.DNSNames, extra)
+		}
 	}
 	der, errCreate := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
 	if errCreate != nil {

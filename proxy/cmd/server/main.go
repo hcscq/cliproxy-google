@@ -350,13 +350,22 @@ func main() {
 	// Determine and load the configuration file.
 	// Prefer the Postgres store when configured, otherwise fallback to git or local files.
 	var configFilePath string
-	if strings.TrimSpace(homeJWT) != "" {
+	if strings.TrimSpace(homeJWT) != "" || home.BootstrapConfigured() {
 		configLoadedFromHome = true
-		ctxHome, cancelHome := context.WithTimeout(context.Background(), 30*time.Second)
-		homeCfg, errHomeCfg := home.ConfigFromJWT(ctxHome, homeJWT)
-		cancelHome()
+		var homeCfg config.HomeConfig
+		errHomeCfg := retryWithBackoff("home enrollment", func() error {
+			ctxHome, cancelHome := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelHome()
+			var errCfg error
+			if strings.TrimSpace(homeJWT) != "" {
+				homeCfg, errCfg = home.ConfigFromJWT(ctxHome, homeJWT)
+			} else {
+				homeCfg, errCfg = home.ConfigFromBootstrap(ctxHome)
+			}
+			return errCfg
+		})
 		if errHomeCfg != nil {
-			log.Errorf("invalid -home-jwt: %v", errHomeCfg)
+			log.Errorf("home enrollment failed: %v", errHomeCfg)
 			return
 		}
 		if homeDisableClusterDiscovery {
@@ -369,9 +378,14 @@ func main() {
 			}
 		}()
 
-		ctxHomeConfig, cancelHomeConfig := context.WithTimeout(context.Background(), 30*time.Second)
-		raw, errGetConfig := homeClient.GetConfig(ctxHomeConfig)
-		cancelHomeConfig()
+		var raw []byte
+		errGetConfig := retryWithBackoff("fetch config from home", func() error {
+			ctxHomeConfig, cancelHomeConfig := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelHomeConfig()
+			var errGet error
+			raw, errGet = homeClient.GetConfig(ctxHomeConfig)
+			return errGet
+		})
 		if errGetConfig != nil {
 			log.Errorf("failed to fetch config from home: %v", errGetConfig)
 			return
@@ -956,4 +970,33 @@ func splitArgvFlag(arg string) (name, value string, hasValue bool) {
 	arg = strings.TrimPrefix(arg, "-")
 	name, value, hasValue = strings.Cut(arg, "=")
 	return name, value, hasValue
+}
+
+// retryWithBackoff retries op with exponential backoff (1s..30s) until it
+// succeeds or HOME_STARTUP_MAX_WAIT (default: unlimited) elapses, so proxies
+// survive Home restarts instead of exiting.
+func retryWithBackoff(what string, op func() error) error {
+	maxWait := time.Duration(0)
+	if raw := strings.TrimSpace(os.Getenv("HOME_STARTUP_MAX_WAIT")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			maxWait = d
+		}
+	}
+	start := time.Now()
+	delay := time.Second
+	for attempt := 1; ; attempt++ {
+		err := op()
+		if err == nil {
+			return nil
+		}
+		if maxWait > 0 && time.Since(start)+delay > maxWait {
+			return err
+		}
+		log.Warnf("%s failed (attempt %d), retrying in %s: %v", what, attempt, delay, err)
+		time.Sleep(delay)
+		delay *= 2
+		if delay > 30*time.Second {
+			delay = 30 * time.Second
+		}
+	}
 }

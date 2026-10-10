@@ -592,6 +592,10 @@ type CertificateRecord struct {
 	IsCA                   bool      `gorm:"column:is_ca;index;index:idx_certificate_ca_order,priority:1"`
 	IsServer               bool      `gorm:"column:is_server;index:idx_certificate_server_ip,priority:1;index:idx_certificate_peer_lookup,priority:3"`
 	IsClient               bool      `gorm:"column:is_client;index;index:idx_certificate_peer_lookup,priority:2"`
+	// Ephemeral marks client certificates issued via bootstrap-token
+	// self-enrollment. They are garbage collected once the node stops
+	// heartbeating.
+	Ephemeral bool `gorm:"column:ephemeral;not null;default:false;index"`
 	SerialNumber           string    `gorm:"column:serial_number"`
 	NotBefore              time.Time `gorm:"column:not_before"`
 	NotAfter               time.Time `gorm:"column:not_after"`

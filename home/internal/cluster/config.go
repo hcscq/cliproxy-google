@@ -129,6 +129,11 @@ func LoadConfigOptional(path string) (*Config, bool, error) {
 			EventPollInterval: time.Duration(raw.Node.EventPollInterval),
 		},
 	}
+	// Deployment-friendly override: each Home replica advertises its own pod IP
+	// (downward API) instead of a per-replica stable DNS name.
+	if override := strings.TrimSpace(os.Getenv("HOME_NODE_EXTERNAL_IP")); override != "" {
+		cfg.Node.ExternalIP = override
+	}
 	cfg.applyDefaults()
 	if errValidate := cfg.Validate(); errValidate != nil {
 		return nil, true, errValidate

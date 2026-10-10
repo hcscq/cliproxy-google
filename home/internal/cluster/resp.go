@@ -130,6 +130,14 @@ func (h *RESPHandler) RequestClientCertificate(ctx context.Context, certificateI
 	return h.repo.SignClientCertificateRequestJSON(ctx, certificateID, enrollmentSecret, csrPEM)
 }
 
+// BootstrapClientCertificate handles bootstrap-token self-enrollment.
+func (h *RESPHandler) BootstrapClientCertificate(ctx context.Context, token string, nodeName string, csrPEM []byte) ([]byte, error) {
+	if h == nil || h.repo == nil {
+		return nil, fmt.Errorf("cluster resp: repository is nil")
+	}
+	return h.repo.BootstrapClientCertificate(ctx, token, nodeName, csrPEM)
+}
+
 // Handle handles handle.
 func (h *RESPHandler) Handle(ctx context.Context, args []string, remoteIP string) ([]byte, error) {
 	// Validate request inputs before mutating persisted state.

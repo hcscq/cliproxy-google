@@ -13,20 +13,21 @@
                   │
           Service cliproxy:8317
         ┌─────────┼─────────┐
-   cliproxy-0  cliproxy-1  cliproxy-2      ← proxy/ （无状态，只读根文件系统）
-        └──── mTLS (RESP, :8327) ─────┐
+   cliproxy-xxxxx × N (Deployment)         ← proxy/ （无状态，只读根文件系统，可任意扩缩）
+        └──── mTLS (RESP, Service cliproxy-home:8327) ─┐
                                       ▼
-              cliproxy-home-0 / cliproxy-home-1   ← home/ （控制面，主备选举）
+              cliproxy-home-xxxxx × 2 (Deployment)       ← home/ （控制面，PG 选主）
                                       │
                                  PostgreSQL       ← 唯一的持久化状态
 ```
 
-- **proxy/**（CLIProxyAPI）：在 Home 模式下运行。启动时用 Home 签发的 JWT 和 mTLS 证书连接 Home，配置、凭据、调度、冷却、配额、Token 刷新全部由 Home 下发和协调。节点本地不写 config 或 auth 文件，日志只输出到 stdout。
+- **proxy/**（CLIProxyAPI）：在 Home 模式下运行。启动时用共享的 bootstrap token 向 Home 自助注册，拿到一个临时的 mTLS 身份（只存在内存盘里，Pod 删除即消失），配置、凭据、调度、冷却、配额、Token 刷新全部由 Home 下发和协调。节点本地不写 config 或 auth 文件，日志只输出到 stdout。
 - **home/**（CLIProxyAPIHome）：凭据管理、调度和分发中心。所有状态都存在 PostgreSQL 中，多副本之间通过数据库做选主和事件同步。Management API 和 OAuth 登录（会话也存在数据库里）都由它提供。
 - 状态分布：
   - PostgreSQL：配置、凭据、刷新结果、冷却和配额、用量。
-  - k8s Secret：数据库密码、管理密钥、每个代理节点的身份。
-  - 代理 Pod：只有内存缓存，可以随时删除重建。
+  - PostgreSQL 还保存：集群 CA、各 Home 副本的服务端证书、代理节点的临时身份、选主租约。
+  - k8s Secret：数据库密码、管理密钥、bootstrap token（不再有每个节点的身份 Secret）。
+  - 代理 Pod 和 Home Pod：只有内存状态，可以随时删除、扩缩。
 
 ## 相对上游的改动
 
@@ -47,12 +48,18 @@
 - 新增 `GET /readyz`：Home 模式下，只有 Home 客户端已连接且心跳正常时才返回 200，否则返回 503。`/healthz` 保持不变，用于存活检查。
 - `HOME_JWT_FILE`：从文件读取 Home JWT（便于挂载 Secret）。
 - `HOME_CERT_DIR`：指定 mTLS 证书目录，默认是 `~/.cli-proxy-api`。证书文件如果已经是私有权限，就不再 chmod，所以目录可以只读挂载。
-- `-home-enroll`：只完成证书注册，然后退出。
+- `-home-enroll`：只完成证书注册，然后退出（旧的 JWT 方式，保留兼容）。
+- **自助注册（无状态）**：设置 `HOME_BOOTSTRAP_TOKEN` + `HOME_ADDRESS`（`host:port`）后，代理每次启动都会生成新的私钥，用 RESP 命令 `CERTIFICATE BOOTSTRAP <token> <节点名> <CSR>` 向 Home 申请证书，证书只写入 `HOME_CERT_DIR`（建议用内存 emptyDir）。`HOME_CA_FINGERPRINT` 用于固定 Home CA，`HOME_NODE_NAME` 为显示名（默认主机名）。
+- **启动重试**：连接 Home、注册、拉取配置失败时按指数退避（1s→30s）重试，不再退出；`HOME_STARTUP_MAX_WAIT` 可以设置上限。
 
 **home 的改动**：
 - 删除上述 provider 的 OAuth 和刷新逻辑。
 - 通过 `replace` 指令直接引用仓库内的 `proxy/` 模块。
 - 修复了一处上游的 vet 告警。
+- `HOME_BOOTSTRAP_TOKEN`：开启 bootstrap 自助注册。每次注册都会生成一个新身份，在证书表中标记为 `ephemeral`。
+- 临时身份回收：主节点在生命周期清理时，吊销超过 `HOME_EPHEMERAL_NODE_TTL`（默认 10m）没有心跳的临时身份（删除证书即吊销）。同时清理已经失联的 Home 副本行，以及它们的服务端证书。
+- `HOME_NODE_EXTERNAL_IP`：覆盖 `cluster.yaml` 里的 `node.external-ip`，在 Deployment 中设置为 Pod IP。
+- `HOME_SERVER_CERT_EXTRA_SANS`：给 Home 服务端证书加上额外的 SAN（Service DNS 名），代理通过 Service 访问任意副本都能通过 TLS 校验。
 
 许可证：两个上游项目都是 MIT 协议，原 LICENSE 保留在 `proxy/LICENSE` 和 `home/LICENSE` 中，来源和上游提交见 `NOTICE`。
 
@@ -110,33 +117,40 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
    kubectl apply -f deploy/k3s/30-home-bootstrap.yaml
    kubectl -n cliproxy wait --for=condition=complete job/home-import --timeout=300s
    ```
-3. 启动 Home（2 副本，StatefulSet）：
+3. 启动 Home（2 副本，Deployment）：
    ```bash
    kubectl apply -f deploy/k3s/40-home.yaml
    ```
-   每个副本的对外地址是 `<pod>.cliproxy-home-headless.cliproxy.svc.cluster.local`，由 init 容器写进 `cluster.yaml`。Home 的服务端证书和它签发的 JWT 都使用这个稳定的 DNS 名。
-4. 为代理节点注册身份。Home 要求每个代理节点使用唯一的 mTLS 身份，而且注册密钥只能用一次：
-   ```bash
-   MANAGEMENT_KEY=<Home 管理密钥> deploy/k3s/scripts/enroll-proxies.sh 3
-   ```
-   这个脚本会做三件事：
-   - 通过 port-forward 调用 `POST /v8/management/certificates/clients`；
-   - 在集群里运行一次性 Pod，执行 `-home-enroll`；
-   - 把每个节点的 `cliproxy-N.{jwt,client-crt.pem,client-key.pem,home-ca-crt.pem}` 写入 Secret `proxy-home-identities`。
-5. 启动代理节点和入口：
+   每个副本以 Pod IP 作为对外地址，服务端证书由 PG 中的集群 CA 签发，SAN 包含 Pod IP 和 `cliproxy-home` Service 的各个 DNS 名。
+4. 启动代理节点和入口（不需要任何注册脚本）：
    ```bash
    kubectl apply -f deploy/k3s/50-proxy.yaml -f deploy/k3s/60-ingress.yaml
+   kubectl -n cliproxy scale deploy/cliproxy --replicas=5   # 随意扩缩
+   kubectl apply -f deploy/k3s/55-proxy-hpa.yaml            # 可选：HPA
    ```
-6. 添加账号和 Key：可以 `kubectl -n cliproxy port-forward svc/cliproxy-home 8327`，也可以走 Home 的 Ingress，然后调用 Home Management API：
+   可选：固定 Home CA。CA 首次启动时生成，可以从任意一个代理的证书目录读取后计算指纹，写进 `home-bootstrap` Secret 的 `ca-fingerprint`：
+   ```bash
+   kubectl -n cliproxy exec deploy/cliproxy -- cat /identity/home-ca-crt.pem \
+     | openssl x509 -outform der | sha256sum
+   ```
+5. 添加账号和 Key：可以 `kubectl -n cliproxy port-forward svc/cliproxy-home 8327`，也可以走 Home 的 Ingress，然后调用 Home Management API：
    - Gemini / Vertex API Key 写入配置；
    - Antigravity 通过 `GET /v8/management/oauth/auth-url?provider=antigravity` 发起 OAuth 登录。
 
    回调会落到 Home，会话存在 PostgreSQL 中，所以由哪个副本处理都可以。
 
-### 扩缩容说明
+### 扩缩容和共享状态
 
-- 代理节点使用 StatefulSet，只是为了得到稳定的序号来对应各自的身份，并没有挂 PVC。扩容到 N 个副本前，先运行 `enroll-proxies.sh N`。
-- 加副本不会增加上游配额（配额按账号计算）。冷却和配额状态由 Home 统一共享，不会因为副本多而重复触发 429。
+- 代理和 Home 都是 Deployment。扩缩容直接用 `kubectl scale` 或 HPA，不需要预先注册。
+- 被删除的代理 Pod 的身份，会在 TTL 到期后被 Home 自动吊销并清理。
+- 共享运行时状态全部放在 PostgreSQL，由 Home 维护：
+  - 凭据状态、冷却（cooldown）、配额信号：以 PG 中的 auth 行为准，多个 Home 通过原子更新同步；
+  - 并发准入：PG 表；
+  - 选主：PG 行锁和心跳。
+- 代理节点不做本地调度：选哪个凭据由 Home 决定，所以副本之间不需要共享轮询状态。
+- 每个 Home 副本内部的轮询游标（round-robin）保存在内存里。只有在两个 Home 同时服务时，分配顺序才可能略有不同，凭据的可用性不受影响。
+- 当前没有引入 Redis：已有的 PG 存储已经覆盖上面的需求。
+- 加副本不会增加上游配额（配额按账号计算）。
 - `/readyz` 失败只会把节点移出 Service，不会重启 Pod。只有 `/healthz` 失败才会重启。
 
 ## 已知限制

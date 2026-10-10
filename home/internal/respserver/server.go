@@ -528,6 +528,22 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 					_ = writer.WriteRedisError("ERR cluster disabled")
 					return
 				}
+				if len(args) == 5 && strings.EqualFold(strings.TrimSpace(args[1]), "BOOTSTRAP") {
+					bootstrapper, ok := s.cluster.(interface {
+						BootstrapClientCertificate(context.Context, string, string, []byte) ([]byte, error)
+					})
+					if !ok {
+						_ = writer.WriteRedisError("ERR bootstrap enrollment unsupported")
+						return
+					}
+					payload, errBootstrap := bootstrapper.BootstrapClientCertificate(connectionCtx, args[2], args[3], []byte(args[4]))
+					if errBootstrap != nil {
+						_ = writer.WriteRedisError("ERR " + errBootstrap.Error())
+						return
+					}
+					_ = writer.WriteRedisBulkString(payload)
+					return
+				}
 				if len(args) != 5 || !strings.EqualFold(strings.TrimSpace(args[1]), "REQUEST") {
 					_ = writer.WriteRedisError("ERR wrong number of arguments for 'certificate request' command")
 					return

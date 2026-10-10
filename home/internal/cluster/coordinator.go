@@ -153,7 +153,19 @@ func (c *Coordinator) runLifecycleCleanup(ctx context.Context) error {
 	if errRecovery := c.runStartupRecovery(ctx, home); errRecovery != nil {
 		return errRecovery
 	}
-	return c.repo.DeleteExpiredCPANodeSnapshots(ctx, cpaNodeSnapshotRetention(c.heartbeatTimeout))
+	if errSnap := c.repo.DeleteExpiredCPANodeSnapshots(ctx, cpaNodeSnapshotRetention(c.heartbeatTimeout)); errSnap != nil {
+		return errSnap
+	}
+	if c.IsMaster() {
+		removed, errGC := c.repo.GarbageCollectEphemeralNodes(ctx, EphemeralNodeTTLFromEnv())
+		if errGC != nil {
+			return errGC
+		}
+		if removed > 0 {
+			log.Infof("garbage collected %d ephemeral proxy identities", removed)
+		}
+	}
+	return nil
 }
 
 func (c *Coordinator) retireFailedInitialization(ctx context.Context, incarnation HomeIncarnationID, initializationErr error) error {

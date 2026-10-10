@@ -1,0 +1,16 @@
+# Optional: CPU-based autoscaling for the stateless proxy Deployment (needs metrics-server,
+# which k3s ships by default). Once applied, the HPA owns the replica count.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cliproxy
+  namespace: cliproxy
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: cliproxy}
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
