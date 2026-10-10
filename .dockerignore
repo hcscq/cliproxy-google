@@ -1,0 +1,8 @@
+.git
+**/.github
+**/logs
+**/auths
+**/*.db
+**/config.yaml
+**/cluster.yaml
+deploy/k3s

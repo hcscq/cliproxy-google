@@ -1,0 +1,67 @@
+# One-off bootstrap: imports config (and optional legacy auth files) into the Home database.
+# Home refuses to start with an empty database ("run with -import first").
+# Import is idempotent. Re-run after editing the ConfigMap:  kubectl -n cliproxy delete job home-import && kubectl apply -f 30-home-bootstrap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: home-import-config
+  namespace: cliproxy
+data:
+  # Minimal V8 config exchanged into the DB. See home/config.example.yaml for every option.
+  # Upstream API keys (Gemini / Vertex) and OAuth accounts (Antigravity) are better managed
+  # afterwards through the Home Management API, which writes straight to PostgreSQL.
+  config.yaml: |
+    config-version: 8
+    server:
+      host: ""
+      port: 8317
+    management:
+      allow-remote: true
+      # Leave empty: the key comes from the MANAGEMENT_PASSWORD env var (Secret home-management).
+      secret-key: ""
+    observability:
+      logs:
+        logging-to-file: false
+        request-log: false
+    oauth:
+      auth-dir: "/import/auths"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: home-import
+  namespace: cliproxy
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      initContainers:
+        - name: render-cluster-yaml
+          image: busybox:1.36
+          command: ["sh", "-c", "sed \"s/__POD_NAME__/cliproxy-home-0/g\" /tmpl/cluster.yaml.tmpl > /work/cluster.yaml"]
+          volumeMounts:
+            - {name: cluster-tmpl, mountPath: /tmpl, readOnly: true}
+            - {name: work, mountPath: /work}
+      containers:
+        - name: import
+          image: ghcr.io/hcscq/cliproxy-google-home:latest
+          workingDir: /work
+          args: ["-import", "-config", "/import/config.yaml", "-auth-dir", "/import/auths"]
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: import-config, mountPath: /import/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: empty-auths, mountPath: /import/auths}
+      volumes:
+        - name: cluster-tmpl
+          secret: {secretName: home-cluster}
+        - name: import-config
+          configMap: {name: home-import-config}
+        - name: work
+          emptyDir: {}
+        - name: empty-auths
+          emptyDir: {}

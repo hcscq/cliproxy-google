@@ -1,0 +1,50 @@
+# Traefik (bundled with k3s). Replace hosts; TLS via cert-manager or a pre-created secret.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cliproxy
+  namespace: cliproxy
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [api.example.com]
+      secretName: cliproxy-tls
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cliproxy
+                port: {number: 8317}
+---
+# Optional: Home Management API / OAuth callback. Restrict access (IP allowlist middleware,
+# VPN, or keep it internal and use `kubectl port-forward svc/cliproxy-home 8327`).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cliproxy-home-management
+  namespace: cliproxy
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [home.example.com]
+      secretName: cliproxy-home-tls
+  rules:
+    - host: home.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cliproxy-home
+                port: {number: 8327}

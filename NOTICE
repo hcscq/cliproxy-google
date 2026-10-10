@@ -1,0 +1,21 @@
+cliproxy-google
+Copyright (c) 2026 hcscq
+
+This repository is a modified derivative of two MIT-licensed upstream projects.
+Their original copyright and license notices are retained in proxy/LICENSE and
+home/LICENSE and apply to the respective directories.
+
+proxy/  <- CLIProxyAPI
+          https://github.com/router-for-me/CLIProxyAPI
+          upstream commit d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5
+          Copyright (c) 2025-2005.9 Luis Pater (MIT License)
+
+home/   <- CLIProxyAPIHome
+          https://github.com/router-for-me/CLIProxyAPIHome
+          upstream commit c098d84d36f57b765e1545dcb53cb6717a673654
+          Copyright (c) 2026.5-present Router-For.ME (MIT License)
+
+Modifications: removal of non-Google providers (Claude, Codex, Devin, Kimi, Meta, xAI),
+stdout-only logging, /readyz endpoint, Home identity loading from mounted files
+(HOME_JWT_FILE, HOME_CERT_DIR, -home-enroll), and Kubernetes (k3s) deployment assets.
+See the git history for details.

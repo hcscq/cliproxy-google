@@ -1,0 +1,122 @@
+# cliproxy-google
+
+基于 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 和 [CLIProxyAPIHome](https://github.com/router-for-me/CLIProxyAPIHome) 的精简版本。这里只保留 **Google 系代理能力**，并把代理节点改造成**无状态**部署，适合在 k3s 上横向扩缩。
+
+- 保留：Antigravity（OAuth）、Gemini API Key、AI Studio、Vertex（服务账号 / API Key），以及 OpenAI 兼容上游。
+- 入站协议不变：OpenAI Chat/Responses、Claude Messages、Gemini 格式的客户端都可以访问 Google 后端（格式转换器全部保留）。
+- 不包含 Gemini CLI OAuth。上游当前版本已经移除了该功能，本项目也不恢复。
+
+## 架构
+
+```
+            Traefik Ingress
+                  │
+          Service cliproxy:8317
+        ┌─────────┼─────────┐
+   cliproxy-0  cliproxy-1  cliproxy-2      ← proxy/ （无状态，只读根文件系统）
+        └──── mTLS (RESP, :8327) ─────┐
+                                      ▼
+              cliproxy-home-0 / cliproxy-home-1   ← home/ （控制面，主备选举）
+                                      │
+                                 PostgreSQL       ← 唯一的持久化状态
+```
+
+- **proxy/**（CLIProxyAPI）：在 Home 模式下运行。启动时用 Home 签发的 JWT 和 mTLS 证书连接 Home，配置、凭据、调度、冷却、配额、Token 刷新全部由 Home 下发和协调。节点本地不写 config 或 auth 文件，日志只输出到 stdout。
+- **home/**（CLIProxyAPIHome）：凭据管理、调度和分发中心。所有状态都存在 PostgreSQL 中，多副本之间通过数据库做选主和事件同步。Management API 和 OAuth 登录（会话也存在数据库里）都由它提供。
+- 状态分布：
+  - PostgreSQL：配置、凭据、刷新结果、冷却和配额、用量。
+  - k8s Secret：数据库密码、管理密钥、每个代理节点的身份。
+  - 代理 Pod：只有内存缓存，可以随时删除重建。
+
+## 相对上游的改动
+
+**删除的部分**（两个目录都删了）：Claude、Codex、Devin、Kimi、Meta、xAI 的以下内容：
+- 执行器
+- OAuth 登录（CLI 参数和 Management 接口）
+- auth 包
+- Token 刷新
+- 回放缓存
+- 相关测试
+
+**保留的部分**：
+- 配置结构里这些 provider 的字段仍然存在，但对应的凭据在绑定执行器时会被忽略。
+- 格式转换器 `proxy/internal/translator/{claude,codex}` 以及相关的 helper 也保留了，因为 Claude/OpenAI 入站请求转到 Gemini 时会用到它们。
+
+**proxy 新增的功能**：
+- 默认只把日志输出到 stdout，不再写本地请求日志或错误日志文件。设置 `CLIPROXY_FILE_LOGS=true` 可以恢复上游行为。
+- 新增 `GET /readyz`：Home 模式下，只有 Home 客户端已连接且心跳正常时才返回 200，否则返回 503。`/healthz` 保持不变，用于存活检查。
+- `HOME_JWT_FILE`：从文件读取 Home JWT（便于挂载 Secret）。
+- `HOME_CERT_DIR`：指定 mTLS 证书目录，默认是 `~/.cli-proxy-api`。证书文件如果已经是私有权限，就不再 chmod，所以目录可以只读挂载。
+- `-home-enroll`：只完成证书注册，然后退出。
+
+**home 的改动**：
+- 删除上述 provider 的 OAuth 和刷新逻辑。
+- 通过 `replace` 指令直接引用仓库内的 `proxy/` 模块。
+- 修复了一处上游的 vet 告警。
+
+许可证：两个上游项目都是 MIT 协议，原 LICENSE 保留在 `proxy/LICENSE` 和 `home/LICENSE` 中，来源和上游提交见 `NOTICE`。
+
+## 构建
+
+需要 Go 1.26 或更高版本。
+
+```bash
+(cd proxy && go build ./... && go test ./...)
+(cd home  && go build ./... && go test ./...)
+
+# 镜像（构建上下文是仓库根目录）
+docker build -f deploy/docker/proxy.Dockerfile -t ghcr.io/hcscq/cliproxy-google-proxy:latest .
+docker build -f deploy/docker/home.Dockerfile  -t ghcr.io/hcscq/cliproxy-google-home:latest  .
+```
+
+Home 的 Web 管理面板是可选的。如果需要，先按 `home/Makefile` 的 `panel-assets-local` 生成静态文件再构建；不生成也不影响 Management API 使用。
+
+## k3s 部署
+
+清单在 `deploy/k3s/` 下，镜像名需要改成你自己的仓库。
+
+1. 创建命名空间和数据库：
+   ```bash
+   kubectl apply -f deploy/k3s/00-namespace.yaml
+   cp deploy/k3s/20-secrets.example.yaml deploy/k3s/secrets.yaml   # 替换所有 CHANGE_ME，不要提交
+   kubectl apply -f deploy/k3s/secrets.yaml
+   kubectl apply -f deploy/k3s/10-postgres.yaml   # 使用外部 PG 时跳过，并修改 postgres_uri
+   ```
+2. 初始化 Home 数据库：Home 在数据库为空时会拒绝启动，所以要先导入一次。
+   ```bash
+   kubectl apply -f deploy/k3s/30-home-bootstrap.yaml
+   kubectl -n cliproxy wait --for=condition=complete job/home-import --timeout=300s
+   ```
+3. 启动 Home（2 副本，StatefulSet）：
+   ```bash
+   kubectl apply -f deploy/k3s/40-home.yaml
+   ```
+   每个副本的对外地址是 `<pod>.cliproxy-home-headless.cliproxy.svc.cluster.local`，由 init 容器写进 `cluster.yaml`。Home 的服务端证书和它签发的 JWT 都使用这个稳定的 DNS 名。
+4. 为代理节点注册身份。Home 要求每个代理节点使用唯一的 mTLS 身份，而且注册密钥只能用一次：
+   ```bash
+   MANAGEMENT_KEY=<Home 管理密钥> deploy/k3s/scripts/enroll-proxies.sh 3
+   ```
+   这个脚本会做三件事：
+   - 通过 port-forward 调用 `POST /v8/management/certificates/clients`；
+   - 在集群里运行一次性 Pod，执行 `-home-enroll`；
+   - 把每个节点的 `cliproxy-N.{jwt,client-crt.pem,client-key.pem,home-ca-crt.pem}` 写入 Secret `proxy-home-identities`。
+5. 启动代理节点和入口：
+   ```bash
+   kubectl apply -f deploy/k3s/50-proxy.yaml -f deploy/k3s/60-ingress.yaml
+   ```
+6. 添加账号和 Key：可以 `kubectl -n cliproxy port-forward svc/cliproxy-home 8327`，也可以走 Home 的 Ingress，然后调用 Home Management API：
+   - Gemini / Vertex API Key 写入配置；
+   - Antigravity 通过 `GET /v8/management/oauth/auth-url?provider=antigravity` 发起 OAuth 登录。
+
+   回调会落到 Home，会话存在 PostgreSQL 中，所以由哪个副本处理都可以。
+
+### 扩缩容说明
+
+- 代理节点使用 StatefulSet，只是为了得到稳定的序号来对应各自的身份，并没有挂 PVC。扩容到 N 个副本前，先运行 `enroll-proxies.sh N`。
+- 加副本不会增加上游配额（配额按账号计算）。冷却和配额状态由 Home 统一共享，不会因为副本多而重复触发 429。
+- `/readyz` 失败只会把节点移出 Service，不会重启 Pod。只有 `/healthz` 失败才会重启。
+
+## 已知限制
+
+- Home 里还保留了部分非 Google 的模型目录逻辑（例如 Devin 和其他 provider 的模型列表刷新），以及 API Key 配置项。这些不影响运行，以后的阶段再清理。
+- 删除的测试只包括明确针对已删除 provider 的用例。
