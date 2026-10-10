@@ -55,6 +55,9 @@ func (r *Repository) EnsureClusterCertificates(ctx context.Context, ip string) (
 		return nil, fmt.Errorf("cluster certificate ip is required")
 	}
 	ctx = contextOrBackground(ctx)
+	if errColumn := ensureEphemeralColumn(ctx, db); errColumn != nil {
+		return nil, errColumn
+	}
 
 	ca, errCA := r.ensureCARecord(ctx, db)
 	if errCA != nil {

@@ -580,27 +580,27 @@ func (OAuthSessionRecord) TableName() string {
 }
 
 type CertificateRecord struct {
-	ID                     string    `gorm:"column:id;primaryKey;index:idx_certificate_ca_order,priority:3"`
-	ClusterID              string    `gorm:"column:cluster_id;index"`
-	CertificatePEM         string    `gorm:"column:certificate_pem;type:text"`
-	CertificateFingerprint string    `gorm:"column:certificate_fingerprint;index;index:idx_certificate_peer_lookup,priority:1"`
-	PrivateKeyPEM          string    `gorm:"column:private_key_pem;type:text"`
-	CSRPEM                 string    `gorm:"column:csr_pem;type:text"`
-	IP                     string    `gorm:"column:ip;index:idx_certificate_server_ip,priority:2"`
-	CAFingerprint          string    `gorm:"column:ca_fingerprint"`
-	EnrollmentSecretHash   string    `gorm:"column:enrollment_secret_hash"`
-	IsCA                   bool      `gorm:"column:is_ca;index;index:idx_certificate_ca_order,priority:1"`
-	IsServer               bool      `gorm:"column:is_server;index:idx_certificate_server_ip,priority:1;index:idx_certificate_peer_lookup,priority:3"`
-	IsClient               bool      `gorm:"column:is_client;index;index:idx_certificate_peer_lookup,priority:2"`
+	ID                     string `gorm:"column:id;primaryKey;index:idx_certificate_ca_order,priority:3"`
+	ClusterID              string `gorm:"column:cluster_id;index"`
+	CertificatePEM         string `gorm:"column:certificate_pem;type:text"`
+	CertificateFingerprint string `gorm:"column:certificate_fingerprint;index;index:idx_certificate_peer_lookup,priority:1"`
+	PrivateKeyPEM          string `gorm:"column:private_key_pem;type:text"`
+	CSRPEM                 string `gorm:"column:csr_pem;type:text"`
+	IP                     string `gorm:"column:ip;index:idx_certificate_server_ip,priority:2"`
+	CAFingerprint          string `gorm:"column:ca_fingerprint"`
+	EnrollmentSecretHash   string `gorm:"column:enrollment_secret_hash"`
+	IsCA                   bool   `gorm:"column:is_ca;index;index:idx_certificate_ca_order,priority:1"`
+	IsServer               bool   `gorm:"column:is_server;index:idx_certificate_server_ip,priority:1;index:idx_certificate_peer_lookup,priority:3"`
+	IsClient               bool   `gorm:"column:is_client;index;index:idx_certificate_peer_lookup,priority:2"`
 	// Ephemeral marks client certificates issued via bootstrap-token
 	// self-enrollment. They are garbage collected once the node stops
 	// heartbeating.
-	Ephemeral bool `gorm:"column:ephemeral;not null;default:false;index"`
-	SerialNumber           string    `gorm:"column:serial_number"`
-	NotBefore              time.Time `gorm:"column:not_before"`
-	NotAfter               time.Time `gorm:"column:not_after"`
-	CreatedAt              time.Time `gorm:"column:created_at;index:idx_certificate_ca_order,priority:2"`
-	UpdatedAt              time.Time `gorm:"column:updated_at"`
+	Ephemeral    bool      `gorm:"column:ephemeral;not null;default:false;index"`
+	SerialNumber string    `gorm:"column:serial_number"`
+	NotBefore    time.Time `gorm:"column:not_before"`
+	NotAfter     time.Time `gorm:"column:not_after"`
+	CreatedAt    time.Time `gorm:"column:created_at;index:idx_certificate_ca_order,priority:2"`
+	UpdatedAt    time.Time `gorm:"column:updated_at"`
 }
 
 // TableName returns the database table name.

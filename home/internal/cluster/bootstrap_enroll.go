@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -161,4 +162,26 @@ func EphemeralNodeTTLFromEnv() time.Duration {
 		}
 	}
 	return DefaultEphemeralNodeTTL
+}
+
+var ephemeralColumnOnce sync.Map // *gorm.DB -> struct{}
+
+// ensureEphemeralColumn adds certificate.ephemeral on PostgreSQL databases whose
+// schema version was already current before the column existed (the versioned
+// migrator skips AutoMigrate in that case). It is idempotent and cheap.
+func ensureEphemeralColumn(ctx context.Context, db *gorm.DB) error {
+	if db == nil || db.Dialector == nil || db.Dialector.Name() != "postgres" {
+		return nil
+	}
+	if _, done := ephemeralColumnOnce.Load(db); done {
+		return nil
+	}
+	if err := db.WithContext(contextOrBackground(ctx)).Exec(`ALTER TABLE certificate ADD COLUMN IF NOT EXISTS ephemeral boolean NOT NULL DEFAULT false`).Error; err != nil {
+		return err
+	}
+	if err := db.WithContext(contextOrBackground(ctx)).Exec(`CREATE INDEX IF NOT EXISTS idx_certificate_ephemeral ON certificate (ephemeral)`).Error; err != nil {
+		return err
+	}
+	ephemeralColumnOnce.Store(db, struct{}{})
+	return nil
 }
