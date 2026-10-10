@@ -141,10 +141,8 @@ func TestManagementV8IndependentContract(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ url, provider string }{
-		{"/v8/management/oauth/auth-url?provider=codex", "codex"},
-		{"/v8/management/oauth/auth-url?provider=%20CLAUDE%20", "anthropic"},
-		{"/v0/management/codex-auth-url", "codex"},
-		{"/v0/management/anthropic-auth-url", "anthropic"},
+		{"/v8/management/oauth/auth-url?provider=antigravity", "antigravity"},
+		{"/v8/management/oauth/auth-url?provider=%20ANTIGRAVITY%20", "antigravity"},
 	} {
 		body := request(http.MethodGet, tc.url, "", http.StatusOK)
 		var login struct{ URL, State string }

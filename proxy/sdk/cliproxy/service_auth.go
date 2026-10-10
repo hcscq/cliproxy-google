@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/wsrelay"
@@ -19,15 +18,7 @@ import (
 func newDefaultAuthManager() *sdkAuth.Manager {
 	return sdkAuth.NewManager(
 		sdkAuth.GetTokenStore(),
-		sdkAuth.NewCodexAuthenticator(),
-		sdkAuth.NewClaudeAuthenticator(),
 		sdkAuth.NewAntigravityAuthenticator(),
-		sdkAuth.NewKimiAuthenticator(),
-		sdkAuth.NewKimiAIAuthenticator(),
-		sdkAuth.NewKimiAIDotAuthenticator(),
-		sdkAuth.NewXAIAuthenticator(),
-		sdkAuth.NewDevinAuthenticator(),
-		sdkAuth.NewMetaAuthenticator(),
 	)
 }
 
@@ -529,22 +520,12 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 		return
 	}
 	id = strings.TrimSpace(id)
-	var provider string
-	if existing, ok := s.coreManager.GetByID(id); ok && existing != nil {
-		provider = strings.TrimSpace(existing.Provider)
-	}
 	// Invalidate the auth before advancing the registry epoch. Otherwise a
 	// refresh can adopt the tombstone epoch while the auth still exists and
 	// republish its cached models after the registry has been cleared.
 	s.coreManager.Remove(ctx, id)
 	GlobalModelRegistry().UnregisterClient(id)
 	s.cancelStaleAntigravityProbes(id)
-	if strings.EqualFold(provider, "codex") {
-		executor.CloseCodexWebsocketSessionsForAuthID(id, "auth_removed")
-	}
-	if strings.EqualFold(provider, "xai") {
-		executor.CloseXAIWebsocketSessionsForAuthID(id, "auth_removed")
-	}
 }
 
 func (s *Service) applyRetryConfig(cfg *config.Config) {
