@@ -127,7 +127,10 @@ func AutoMigrateContext(ctx context.Context, db *gorm.DB) error {
 	}
 	ctx = contextOrBackground(ctx)
 	if db.Dialector.Name() == "postgres" {
-		return autoMigratePostgresContext(ctx, db, false, nil)
+		if err := autoMigratePostgresContext(ctx, db, false, nil); err != nil {
+			return err
+		}
+		return ensureUsageFailBodyColumns(ctx, db)
 	}
 
 	startedAt := time.Now()

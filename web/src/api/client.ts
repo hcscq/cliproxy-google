@@ -456,7 +456,7 @@ export interface RequestEvent {
   event_type?: string;
   credential?: { label?: string; credential_id?: string; provider?: string };
   client?: { client_key_label?: string; client_key_masked?: string; client_ip?: string };
-  error?: { message?: string | null; reason?: string | null; status_code?: number | null; upstream_status_code?: number | null; body_preview?: string | null };
+  error?: { message?: string | null; reason?: string | null; status_code?: number | null; upstream_status_code?: number | null; body_preview?: string | null; body_truncated?: boolean | null; body_size?: number | null };
   tokens?: TokenCounts;
   performance?: { latency_ms?: number | null; ttft_ms?: number | null; tps?: number | null };
   runtime?: { home_id?: string; cpa_node_id?: string; cpa_ip?: string };

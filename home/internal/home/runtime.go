@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -247,6 +248,9 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	accessManager := access.NewManager()
 	configaccess.Register(&cfg.SDKConfig)
 
+	if cfg != nil {
+		errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
+	}
 	runtime := &Runtime{
 		cfg:           cfg,
 		authDir:       cfg.AuthDir,

@@ -201,3 +201,7 @@ Antigravity / Gemini 在模型容量不足时会返回 503 `UNAVAILABLE` / `MODE
 4. **永远不会更换请求的模型**（没有模型降级/回退链）。
 
 配置位置：`routing.retry.capacity-retry`（`enabled` / `max-attempts` / `base-delay` / `max-delay`），保存在 Home 配置中，所有代理共享；面板“设置 → 重试与冷却”中也可以修改。账号额度类 429（`QUOTA_EXHAUSTED` / `RATE_LIMIT_EXCEEDED`）仍走原有的冷却和凭据轮换。
+
+## 请求记录中的错误响应体
+
+Home 会把上游错误响应体完整保存到请求记录（`usage.fail_body`），上限由 `observability.logs.error-body-max-bytes` 控制（默认 65536 字节，面板“设置 → 日志与管理”可改）。超过上限时只保存前面部分，并记录 `fail_body_truncated=true` 和原始大小 `fail_body_size`，面板会显示“已截断（原始 N 字节）”。新列在 Home 启动时自动添加（PostgreSQL 和 SQLite 都支持，可重复执行）。

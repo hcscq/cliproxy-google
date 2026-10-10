@@ -318,6 +318,8 @@ func requestEventErrorResponse(record *cluster.UsageObservabilityRecord) gin.H {
 		"reason":               reason,
 		"message":              message,
 		"body_preview":         bodyPreview,
+		"body_truncated":       record != nil && record.Error != nil && record.Error.BodyTruncated,
+		"body_size":            errorBodySize(record),
 	}
 }
 
@@ -499,4 +501,17 @@ func requestEventFilterOptionsResponse(options cluster.UsageObservabilityFilterO
 		"cpa_nodes":    options.CPANodes,
 		"status_codes": statusCodes,
 	}
+}
+
+func errorBodySize(record *cluster.UsageObservabilityRecord) any {
+	if record == nil || record.Error == nil {
+		return nil
+	}
+	if record.Error.BodySize > 0 {
+		return record.Error.BodySize
+	}
+	if n := len(record.Error.BodyPreview); n > 0 {
+		return n
+	}
+	return nil
 }

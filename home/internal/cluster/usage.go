@@ -59,6 +59,8 @@ type UsageRecord struct {
 	Failed                     bool      `gorm:"column:failed;not null;default:false;index:idx_usage_failed;index:idx_usage_failed_time,priority:1;index:idx_usage_failed_status_time,priority:1"`
 	FailStatusCode             int       `gorm:"column:fail_status_code;not null;default:0;index:idx_usage_failed_status_time,priority:2"`
 	FailBody                   string    `gorm:"column:fail_body;type:text"`
+	FailBodyTruncated          bool      `gorm:"column:fail_body_truncated;not null;default:false"`
+	FailBodySize               int       `gorm:"column:fail_body_size;not null;default:0"`
 	Provider                   string    `gorm:"column:provider;index:idx_usage_provider_model,priority:1;index:idx_usage_provider_model_time,priority:1;index:idx_usage_provider_time,priority:1"`
 	ExecutorType               string    `gorm:"column:executor_type"`
 	Model                      string    `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
@@ -182,7 +184,16 @@ func UsageRecordFromPayloadWithRuntime(payload string, metadata UsageRuntimeMeta
 		}
 	}
 
+	failBody, failTruncated, failSize := capErrorBody(gjson.Get(payload, "fail.body").String())
+	if failTruncated {
+		// Keep the raw payload copy within the cap as well.
+		if capped, errSet := sjson.Set(payload, "fail.body", failBody); errSet == nil {
+			payload = capped
+		}
+	}
 	record := &UsageRecord{
+		FailBodyTruncated:          failTruncated,
+		FailBodySize:               failSize,
 		Timestamp:                  timestamp.UTC(),
 		LatencyMS:                  gjson.Get(payload, "latency_ms").Int(),
 		TTFTMS:                     gjson.Get(payload, "ttft_ms").Int(),
@@ -209,7 +220,7 @@ func UsageRecordFromPayloadWithRuntime(payload string, metadata UsageRuntimeMeta
 		UnclassifiedTokens:         breakdown.UnclassifiedTokens,
 		Failed:                     gjson.Get(payload, "failed").Bool(),
 		FailStatusCode:             int(gjson.Get(payload, "fail.status_code").Int()),
-		FailBody:                   gjson.Get(payload, "fail.body").String(),
+		FailBody:                   failBody,
 		Provider:                   provider,
 		ExecutorType:               executorType,
 		Model:                      strings.TrimSpace(gjson.Get(payload, "model").String()),

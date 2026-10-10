@@ -68,6 +68,7 @@ const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
     en: 'Logging & management',
     fields: [
       { path: 'observability.logs.request-log', type: 'bool', zh: '详细请求日志', en: 'Detailed request logs', hintZh: '会记录请求/响应内容，注意隐私与容量。', hintEn: 'Records request/response bodies; mind privacy and size.' },
+      { path: 'observability.logs.error-body-max-bytes', type: 'number', def: 65536, zh: '错误响应体保存上限（字节）', en: 'Error body cap (bytes)', hintZh: '请求记录里保存的上游错误响应体最大字节数，超出部分截断并标注原始大小。默认 65536（64KB）。', hintEn: 'Max bytes of an upstream error body stored in the request log; larger bodies are truncated and marked. Default 65536 (64KB).' },
       { path: 'observability.logs.debug', type: 'bool', zh: '调试日志', en: 'Debug logging' },
       { path: 'management.allow-remote', type: 'bool', danger: true, zh: '允许远程管理', en: 'Allow remote management', hintZh: '关闭后通过 Ingress 访问的本面板将立即失效（只能 kubectl port-forward 恢复）。', hintEn: 'Turning this off immediately locks this panel out via Ingress (recover with kubectl port-forward).' },
     ],

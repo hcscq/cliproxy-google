@@ -3,6 +3,7 @@ package home
 import (
 	"context"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
 	"os"
 	"strings"
 
@@ -108,6 +109,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 
 	r.cfgMu.Lock()
 	r.cfg = cfg
+	errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
 	r.authDir = cfg.AuthDir
 	r.cfgMu.Unlock()
 

@@ -70,3 +70,17 @@ test('drawer is full screen on mobile', async ({ page }) => {
   await page.getByTestId('event-row').first().click();
   expect((await page.getByTestId('drawer').boundingBox())!.width).toBeGreaterThanOrEqual(389);
 });
+
+test('truncated error body shows a clear note with the original size', async ({ page }) => {
+  const cut = body.slice(0, 1000);
+  const truncated = { ...event, id: 'evt_trunc', error: { ...event.error, body_preview: cut, body_truncated: true, body_size: body.length } };
+  await page.route('**/v8/management/request-events?*', (r) => r.fulfill({ json: { items: [truncated], total: 1, limit: 25, offset: 0 } }));
+  await page.route('**/v8/management/request-events/evt_trunc*', (r) => r.fulfill({ json: { event: truncated, log_excerpt: [] } }));
+  await page.goto('/#/usage');
+  if (await page.getByTestId('login-key').isVisible()) {
+    await page.getByTestId('login-key').fill(KEY);
+    await page.getByTestId('login-submit').click();
+  }
+  await page.getByTestId('event-row').first().click();
+  await expect(page.getByTestId('error-body-truncated')).toContainText(String(body.length));
+});

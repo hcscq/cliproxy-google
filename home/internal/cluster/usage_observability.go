@@ -341,6 +341,10 @@ type UsageObservabilityError struct {
 	Reason             string
 	Message            string
 	BodyPreview        string
+	// BodyTruncated is set when the stored body was cut at error-body-max-bytes;
+	// BodySize is then the original size in bytes.
+	BodyTruncated bool
+	BodySize      int
 }
 
 type UsageObservabilityPayloadSummary struct {
@@ -377,6 +381,8 @@ type usageObservabilityRecordRow struct {
 	Failed                     bool            `gorm:"column:failed"`
 	FailStatusCode             int             `gorm:"column:fail_status_code"`
 	FailBody                   string          `gorm:"column:fail_body"`
+	FailBodyTruncated          bool            `gorm:"column:fail_body_truncated"`
+	FailBodySize               int             `gorm:"column:fail_body_size"`
 	Source                     string          `gorm:"column:source"`
 	Provider                   string          `gorm:"column:provider"`
 	ExecutorType               string          `gorm:"column:executor_type"`
@@ -2125,6 +2131,8 @@ func usageObservabilityRecordSelect() string {
 		"usage"."failed" AS failed,
 		"usage"."fail_status_code" AS fail_status_code,
 		"usage"."fail_body" AS fail_body,
+		"usage"."fail_body_truncated" AS fail_body_truncated,
+		"usage"."fail_body_size" AS fail_body_size,
 		"usage"."source" AS source,
 		"usage"."provider" AS provider,
 		"usage"."executor_type" AS executor_type,
@@ -2764,6 +2772,8 @@ func usageObservabilityRecordFromRow(row *usageObservabilityRecordRow) UsageObse
 			Reason:             firstStringFromPayload(payload, "fail.reason", "error.reason", "error.type", "error.code"),
 			Message:            usageObservabilityErrorMessage(row.FailBody),
 			BodyPreview:        usageObservabilityBodyPreview(row.FailBody),
+			BodyTruncated:      row.FailBodyTruncated,
+			BodySize:           row.FailBodySize,
 		}
 	}
 	return record
@@ -3901,9 +3911,8 @@ func usageObservabilityBodyPreview(body string) string {
 		"cookie", "[redacted]",
 		"Cookie", "[redacted]",
 	).Replace(preview)
-	if len(preview) > 500 {
-		return preview[:500]
-	}
+	// The body was already capped at ingestion (error-body-max-bytes); return it
+	// whole so JSON stays valid.
 	return preview
 }
 

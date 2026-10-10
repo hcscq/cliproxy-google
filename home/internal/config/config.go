@@ -90,6 +90,10 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
+	// ErrorBodyMaxBytes caps how much of an upstream error body is stored in the
+	// request log (0 = default 64 KiB). Larger bodies are truncated and flagged.
+	ErrorBodyMaxBytes int `yaml:"error-body-max-bytes,omitempty" json:"error-body-max-bytes,omitempty"`
+
 	// RedisUsageQueueRetentionSeconds controls how long usage queue items are retained
 	// in memory before database-backed persistence consumes them.
 	// Default: 60. Max: 3600.

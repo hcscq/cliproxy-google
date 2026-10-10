@@ -1097,6 +1097,9 @@ observability:
     # Maximum number of error log files retained when request logging is disabled.
     # When exceeded, the oldest error log files are deleted. Default is 10. Set to 0 to disable cleanup.
     error-logs-max-files: 10
+    # Max bytes of an upstream error body kept in the request log (default 65536).
+    # Larger bodies are truncated and flagged with their original size.
+    error-body-max-bytes: 65536
 
     # Record proxy request/response logs. Management requests are excluded.
     request-log: false

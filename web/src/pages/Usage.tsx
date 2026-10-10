@@ -271,7 +271,16 @@ function ErrorSection({ ev }: { ev: RequestEvent }) {
       </div>
       {ev.error?.body_preview && (
         <div>
-          <h3 style={{ marginBottom: 6 }}>{tr('上游响应体', 'Upstream response body')}</h3>
+          <div className="row" style={{ gap: 8, marginBottom: 6 }}>
+            <h3 style={{ margin: 0 }}>{tr('上游响应体', 'Upstream response body')}</h3>
+            {ev.error.body_truncated ? (
+              <span className="tag" data-testid="error-body-truncated" title={tr('超过“错误响应体保存上限”，只保存了前面部分', 'Exceeded the error body cap; only the beginning was stored')}>
+                {tr(`已截断（原始 ${fmtBytes(ev.error.body_size)}，保存 ${fmtBytes(ev.error.body_preview.length)}）`, `truncated (${fmtBytes(ev.error.body_size)} original, ${fmtBytes(ev.error.body_preview.length)} stored)`)}
+              </span>
+            ) : (
+              ev.error.body_size != null && <span className="small muted">{fmtBytes(ev.error.body_size)}</span>
+            )}
+          </div>
           <CodeBlock text={ev.error.body_preview} title={tr('上游响应体', 'Upstream response body')} testId="error-body" />
         </div>
       )}
@@ -316,4 +325,10 @@ function RequestLogSection({ ev }: { ev: RequestEvent }) {
       {state.text && <CodeBlock text={state.text} title={tr('请求日志', 'Request log')} maxHeight={520} />}
     </div>
   );
+}
+
+function fmtBytes(n?: number | null): string {
+  if (n == null) return '?';
+  if (n < 1024) return `${n} B`;
+  return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB (${n} bytes)`;
 }
