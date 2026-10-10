@@ -262,7 +262,7 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 				if sawToolCall {
 					finishReason = "tool_calls"
 				} else if upstreamFinishReason == "MAX_TOKENS" {
-					finishReason = "max_tokens"
+					finishReason = "length"
 				} else {
 					finishReason = "stop"
 				}
@@ -358,7 +358,7 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 
 			// Set finish reason.
 			if finishReasonResult := candidate.Get("finishReason"); finishReasonResult.Exists() {
-				choiceTemplate, _ = sjson.SetBytes(choiceTemplate, "finish_reason", strings.ToLower(finishReasonResult.String()))
+				choiceTemplate, _ = sjson.SetBytes(choiceTemplate, "finish_reason", openAIFinishReasonFromGemini(finishReasonResult.String()))
 				choiceTemplate, _ = sjson.SetBytes(choiceTemplate, "native_finish_reason", strings.ToLower(finishReasonResult.String()))
 			}
 
@@ -457,4 +457,18 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 	}
 
 	return template
+}
+
+// openAIFinishReasonFromGemini maps a Gemini finishReason to the OpenAI
+// finish_reason vocabulary (stop, length, content_filter); the raw value stays
+// available in native_finish_reason.
+func openAIFinishReasonFromGemini(reason string) string {
+	switch strings.ToUpper(strings.TrimSpace(reason)) {
+	case "MAX_TOKENS":
+		return "length"
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
+		return "content_filter"
+	default:
+		return "stop"
+	}
 }
