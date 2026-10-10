@@ -107,6 +107,13 @@ type Config struct {
 	// capacity-flavoured 429). The requested model is never changed.
 	CapacityRetry CapacityRetryConfig `yaml:"capacity-retry,omitempty" json:"capacity-retry,omitempty"`
 
+	// HonorMaxTokens passes client output limits (OpenAI max_tokens /
+	// max_completion_tokens, Claude max_tokens, Gemini maxOutputTokens) to Gemini
+	// models on Antigravity and AI Studio instead of stripping them. nil = true.
+	// When thinking is enabled with a fixed budget >= the limit, the budget is
+	// lowered so some of the limit remains for the answer.
+	HonorMaxTokens *bool `yaml:"honor-max-tokens,omitempty" json:"honor-max-tokens,omitempty"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 

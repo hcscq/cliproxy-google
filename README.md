@@ -205,3 +205,15 @@ Antigravity / Gemini 在模型容量不足时会返回 503 `UNAVAILABLE` / `MODE
 ## 请求记录中的错误响应体
 
 Home 会把上游错误响应体完整保存到请求记录（`usage.fail_body`），上限由 `observability.logs.error-body-max-bytes` 控制（默认 65536 字节，面板“设置 → 日志与管理”可改）。超过上限时只保存前面部分，并记录 `fail_body_truncated=true` 和原始大小 `fail_body_size`，面板会显示“已截断（原始 N 字节）”。新列在 Home 启动时自动添加（PostgreSQL 和 SQLite 都支持，可重复执行）。
+
+## 输出长度上限（max_tokens）
+
+默认会把客户端设置的输出上限传给上游 Gemini 模型（Antigravity / AI Studio 路径）。支持的参数有：OpenAI 的 `max_tokens` / `max_completion_tokens`、Claude 的 `max_tokens`、Gemini 的 `generationConfig.maxOutputTokens`。旧版本（继承自上游 CLIProxyAPI）会直接删掉这个参数，原因是 Gemini 的思考 token 也计入 maxOutputTokens，上限设得小时，可能整段都花在思考上，最后没有正文输出。
+
+现在的行为：
+- 客户端没设上限，就不传上限。
+- 客户端设了上限，原样传给上游；如果固定的 `thinkingBudget` ≥ 上限，会自动降到上限的一半（不低于模型允许的最小值；模型允许关闭思考时可降到 0）。
+- `thinkingLevel` 和动态预算（-1）不做调整，思考 token 仍然计入上限。
+- 被截断时，各协议返回 `finish_reason: "length"`（OpenAI）、`stop_reason: "max_tokens"`（Claude）、`finishReason: "MAX_TOKENS"`（Gemini）。
+
+开关：`routing.honor-max-tokens`（默认 true，面板“设置”页可改）。设为 false 恢复旧行为。

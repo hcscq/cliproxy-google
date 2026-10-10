@@ -201,6 +201,12 @@ routing:
       base-delay: 1s
       max-delay: 8s
 
+  # Pass client output limits (OpenAI max_tokens/max_completion_tokens, Claude
+  # max_tokens, Gemini maxOutputTokens) to Gemini models on Antigravity/AI Studio.
+  # Thinking tokens count against the limit; a fixed thinking budget >= limit is
+  # lowered to limit/2. false = legacy behaviour (limit stripped). Default true.
+  honor-max-tokens: true
+
   cooldown:
     # When true, disable auth/model cooldown scheduling globally (prevents blackout windows after failure states).
     # A credential/provider disable-cooling value, when present, overrides this global value.

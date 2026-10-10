@@ -379,8 +379,8 @@ func assertNonSchemaRequestPreserved(t *testing.T, body map[string]any) {
 	}
 
 	if generationConfig, ok := request["generationConfig"].(map[string]any); ok {
-		if _, ok := generationConfig["maxOutputTokens"]; ok {
-			t.Fatalf("maxOutputTokens should still be removed for non-Claude requests")
+		if v, ok := generationConfig["maxOutputTokens"]; !ok || v.(float64) != 128 {
+			t.Fatalf("client maxOutputTokens should be honoured by default, got %v", v)
 		}
 	}
 }
