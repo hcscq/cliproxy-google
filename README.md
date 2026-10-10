@@ -153,6 +153,17 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
 - 加副本不会增加上游配额（配额按账号计算）。
 - `/readyz` 失败只会把节点移出 Service，不会重启 Pod。只有 `/healthz` 失败才会重启。
 
+## Antigravity 动态模型列表
+
+上游 Home 只使用静态的 `models.json` 目录，账号实际可用、但不在目录里的模型不会被暴露。本项目的 Home 会用每个 Antigravity 凭据调用上游的 `v1internal:fetchAvailableModels`，每 3 小时刷新一次，失败时 5 分钟后重试。合并规则：
+
+- 静态目录里、且账号可用的模型：保留原有的详细元数据；
+- 只在上游出现的模型：根据上游返回的 displayName 和 token 上限自动生成条目；
+- `HOME_ANTIGRAVITY_EXTRA_MODELS=a,b`（环境变量）或凭据元数据 `home_config_models`：按配置追加模型；
+- `oauth-model-alias`（原有配置）：在以上结果之上添加别名。
+
+设置 `HOME_ANTIGRAVITY_DYNAMIC_MODELS=false` 可以退回只用静态目录。
+
 ## 已知限制
 
 - Home 里还保留了部分非 Google 的模型目录逻辑（例如 Devin 和其他 provider 的模型列表刷新），以及 API Key 配置项。这些不影响运行，以后的阶段再清理。
