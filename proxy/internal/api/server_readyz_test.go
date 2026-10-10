@@ -26,3 +26,13 @@ func TestReadyzHomeModeWithoutClientNotReady(t *testing.T) {
 		t.Fatalf("status = %d, want 503 (body=%s)", rec.Code, rec.Body.String())
 	}
 }
+
+func TestDecodeHomeModelsEmptySectionsReturnsEmptyList(t *testing.T) {
+	entries, err := decodeHomeModels([]byte(`{}`))
+	if err != nil {
+		t.Fatalf("decodeHomeModels({}) error = %v, want nil", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(entries))
+	}
+}

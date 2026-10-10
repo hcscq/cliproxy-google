@@ -1109,7 +1109,9 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 		return nil, fmt.Errorf("parse home models payload: %w", err)
 	}
 	if len(bySection) == 0 {
-		return nil, fmt.Errorf("home models payload has no sections")
+		// No credentials/models are available for this key yet (e.g. a fresh
+		// deployment). Serve an empty model list instead of a 502.
+		return []homeModelEntry{}, nil
 	}
 
 	indexByID := make(map[string]int)
