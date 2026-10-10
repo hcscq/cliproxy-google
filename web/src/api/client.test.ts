@@ -191,3 +191,13 @@ describe('summarizeError', () => {
     expect(summarizeError({ message: 'boom', reason: 'r', body_preview: '{"error": {"cod' })).toEqual({ title: 'r', message: 'boom', reasons: [] });
   });
 });
+
+describe('summarizeError truncated bodies', () => {
+  it('extracts message/status/reason from a truncated JSON preview', () => {
+    const body = '{\n  "error": {\n    "code": 503,\n    "message": "No capacity available for model gemini-3.1-pro-low on the server",\n    "status": "UNAVAILABLE",\n    "details": [\n      {\n        "@type": "type.googleapis.com/google.rpc.ErrorInfo",\n        "reason": "MODEL_CAPACITY_EXHAUSTED",\n        "metad';
+    const s = summarizeError({ message: body });
+    expect(s.message).toBe('No capacity available for model gemini-3.1-pro-low on the server');
+    expect(s.title).toBe('503 UNAVAILABLE');
+    expect(s.reasons).toEqual(['MODEL_CAPACITY_EXHAUSTED']);
+  });
+});

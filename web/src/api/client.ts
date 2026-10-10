@@ -574,7 +574,7 @@ export function normalizeTopology(t: Topology | undefined): { homes: HomeNode[];
 /** Human summary of an upstream error body (Google style {error:{code,message,status,details}}). */
 export function summarizeError(err?: RequestEvent['error']): { title: string; message: string; reasons: string[] } {
   const out = { title: err?.reason || '', message: err?.message || '', reasons: [] as string[] };
-  const body = err?.body_preview?.trim();
+  const body = err?.body_preview?.trim() || (err?.message?.trim().startsWith('{') ? err.message.trim() : undefined);
   if (body) {
     try {
       const j = JSON.parse(body);
@@ -587,7 +587,15 @@ export function summarizeError(err?: RequestEvent['error']): { title: string; me
           for (const d of e.details) if (d && typeof d === 'object' && typeof (d as Record<string, unknown>).reason === 'string') out.reasons.push(String((d as Record<string, unknown>).reason));
       }
     } catch {
-      /* truncated/non-JSON body: keep server message */
+      // Truncated preview: pull the well-known fields out with regexes.
+      const str = (k: string) => body.match(new RegExp(`"${k}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`))?.[1];
+      const msg = str('message');
+      if (msg) out.message = msg.replace(/\\"/g, '"');
+      const code = body.match(/"code"\s*:\s*(\d+)/)?.[1];
+      const status = str('status');
+      const parts = [code, status].filter(Boolean);
+      if (parts.length) out.title = parts.join(' ');
+      for (const m of body.matchAll(/"reason"\s*:\s*"([A-Z0-9_]+)"/g)) out.reasons.push(m[1]);
     }
   }
   return out;
