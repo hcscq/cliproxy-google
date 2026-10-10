@@ -233,6 +233,10 @@ func (r *Runtime) refreshAntigravityCatalog(authID string, snapshot *coreauth.Au
 	if changed && auth != nil {
 		log.Infof("antigravity model catalog for %s: %d upstream models", authID, len(models))
 		r.registerModelsForAuth(auth)
+		if r.coreManager != nil {
+			r.coreManager.ReconcileRegistryModelStates(context.Background(), auth.ID)
+			r.coreManager.RefreshSchedulerEntry(auth.ID)
+		}
 	}
 }
 
