@@ -162,6 +162,7 @@ describe('normalizeTopology', () => {
         { node_id: 'a', node_name: 'pod-a', healthy: false, state: 'draining', last_seen_at: old },
         { node_id: 'a', node_name: 'pod-a', healthy: true, state: 'active', last_seen_at: now },
         { node_id: 'b', node_name: 'pod-b', healthy: true, state: 'active', last_seen_at: now },
+        { node_id: 'b-old', node_name: 'pod-b', healthy: false, health: 'stale', last_seen_at: old },
       ],
     });
     expect(r.homes.map((h) => h.id)).toEqual(['new:1', 'new:2']);

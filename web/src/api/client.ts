@@ -551,8 +551,11 @@ export function normalizeTopology(t: Topology | undefined): { homes: HomeNode[];
   const score = (p: ProxyNode) => (p.healthy ? 4 : 0) + (p.state === 'active' ? 2 : 0) + (p.last_seen_at ? new Date(p.last_seen_at).getTime() / 1e15 : 0);
   const byId = new Map<string, ProxyNode>();
   for (const p of t.cpas ?? []) {
-    const prev = byId.get(p.node_id);
-    if (!prev || score(p) > score(prev)) byId.set(p.node_id, p);
+    // A restarted connection may re-enroll with a new ephemeral identity; the pod
+    // name is the stable key while the old identity waits for garbage collection.
+    const key = p.node_name || p.node_id;
+    const prev = byId.get(key);
+    if (!prev || score(p) > score(prev)) byId.set(key, p);
   }
   const proxies = Array.from(byId.values()).sort((a, b) => (a.node_name ?? a.node_id).localeCompare(b.node_name ?? b.node_id));
   const leader = live.find((h) => h.is_master) ?? (t.master && (t.master.healthy || t.master.health === 'healthy') ? t.master : undefined);
