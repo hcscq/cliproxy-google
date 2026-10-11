@@ -26,22 +26,34 @@ def procs():
     return out
 def psql(q):
     return subprocess.run(["psql","-h","127.0.0.1","-p","56432","-U","postgres","-d","home","-At","-c",q],capture_output=True,text=True).stdout.strip()
+HOME_PORTS=[6060+i for i in range(int(os.environ.get("HOMES","2")))]
+def dispatches():
+    out=[]
+    for p in HOME_PORTS:
+        try:
+            d=json.load(urllib.request.urlopen(f"http://127.0.0.1:{p}/debug/vars",timeout=5)).get("resp_commands",{})
+            out.append(sum(v for k,v in d.items() if k.startswith("RPOP")))
+        except Exception: out.append(-1)
+    return out
+def memavail():
+    return int([l for l in open("/proc/meminfo") if l.startswith("MemAvailable")][0].split()[1])//1024
 def goroutines():
     r=[]
-    for p in (6060,6061):
+    for p in HOME_PORTS:
         try: r.append(int(urllib.request.urlopen(f"http://127.0.0.1:{p}/debug/pprof/goroutine?debug=1",timeout=5).readline().split()[3]))
         except Exception: r.append(-1)
     return r
-peak = {"pgconn":0,"gor":[0,0]}
+peak = {"pgconn":0,"gor":[0]*len(HOME_PORTS),"minavail":10**9}
 stop=False
 def sampler():
     while not stop:
         try:
             peak["pgconn"]=max(peak["pgconn"],int(psql("select count(*) from pg_stat_activity where datname='home'") or 0))
             g=goroutines(); peak["gor"]=[max(a,b) for a,b in zip(peak["gor"],g)]
+            peak["minavail"]=min(peak["minavail"],memavail())
         except Exception: pass
         time.sleep(2)
-p0=procs(); t0=time.time()
+p0=procs(); t0=time.time(); d0=dispatches()
 c0=int(psql("select xact_commit from pg_stat_database where datname='home'")); s0=int(psql("select sessions from pg_stat_database where datname='home'")); w0=psql("select pg_current_wal_lsn()")
 a0=psql("select outcome||'='||count(*) from request_affinity group by outcome order by outcome")
 th=threading.Thread(target=sampler,daemon=True); th.start()
@@ -56,5 +68,6 @@ for pid,(n,t,m) in p1.items():
 try: res=json.loads(r.stdout.strip().splitlines()[-1])
 except Exception: res={"raw":r.stdout[-500:]+r.stderr[-500:]}
 res.update({"cpu_cores":cpu,"rss_mb":rss,"pg_commits_per_s":round((c1-c0)/el),"pg_wal_mb":round(float(w1 or 0)/1e6,1),"pg_peak_conns":peak["pgconn"],"pg_new_sessions_per_s":round((s1-s0)/el,1),"home_peak_goroutines":peak["gor"],"elapsed_s":round(el)})
+d1=dispatches(); res["dispatch_per_home"]=[b-a for a,b in zip(d0,d1)]; res["min_mem_available_mb"]=peak["minavail"]; res["aborted"]=os.path.exists("/workspace/cap/run/ABORTED")
 res["affinity_before"]=a0; res["affinity_after"]=psql("select outcome||'='||count(*) from request_affinity group by outcome order by outcome")
 print(json.dumps(res)); open("/workspace/cap/results.jsonl","a").write(json.dumps(res)+"\n")

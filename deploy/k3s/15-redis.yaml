@@ -1,0 +1,164 @@
+# Redis 7 + Sentinel for Home's shared hot state (sticky bindings, RPM windows,
+# cluster-event wake-ups). Not a source of truth: no PVCs; if all pods are lost
+# Home falls back to PostgreSQL/in-memory paths and repopulates on its own.
+# 3 pods, each running redis (1 primary + 2 replicas) and a sentinel (quorum 2).
+# Requires Secret redis-auth (key: password), see 20-secrets.example.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  namespace: cliproxy
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: cliproxy-redis}
+  ports:
+    - {name: redis, port: 6379}
+    - {name: sentinel, port: 26379}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-scripts
+  namespace: cliproxy
+data:
+  init.sh: |
+    #!/bin/sh
+    # Writes redis.conf/sentinel.conf. Joins the primary the other sentinels
+    # report; on a cold start (no sentinel answers) pod 0 becomes primary.
+    set -eu
+    SVC="redis-headless.${POD_NAMESPACE}.svc.cluster.local"
+    ME="${HOSTNAME}.${SVC}"
+    MASTER=""
+    for i in 0 1 2; do
+      S="redis-${i}.${SVC}"
+      [ "$S" = "$ME" ] && continue
+      M=$(timeout 3 redis-cli -h "$S" -p 26379 -a "$REDIS_PASSWORD" --no-auth-warning \
+          sentinel get-master-addr-by-name cpg 2>/dev/null | head -n1 || true)
+      if [ -n "$M" ]; then MASTER="$M"; break; fi
+    done
+    if [ -z "$MASTER" ]; then
+      if [ "${HOSTNAME##*-}" = "0" ]; then MASTER="$ME"; else MASTER="redis-0.${SVC}"; fi
+    fi
+    echo "pod=$ME primary=$MASTER"
+    cat > /conf/redis.conf <<CONF
+    port 6379
+    bind 0.0.0.0
+    protected-mode no
+    requirepass ${REDIS_PASSWORD}
+    masterauth ${REDIS_PASSWORD}
+    replica-announce-ip ${ME}
+    save ""
+    appendonly no
+    maxmemory 256mb
+    maxmemory-policy volatile-lru
+    CONF
+    if [ "$MASTER" != "$ME" ]; then echo "replicaof ${MASTER} 6379" >> /conf/redis.conf; fi
+    cat > /conf/sentinel.conf <<CONF
+    port 26379
+    bind 0.0.0.0
+    protected-mode no
+    requirepass ${REDIS_PASSWORD}
+    sentinel resolve-hostnames yes
+    sentinel announce-hostnames yes
+    sentinel announce-ip ${ME}
+    sentinel monitor cpg ${MASTER} 6379 2
+    sentinel auth-pass cpg ${REDIS_PASSWORD}
+    sentinel sentinel-pass ${REDIS_PASSWORD}
+    sentinel down-after-milliseconds cpg 5000
+    sentinel failover-timeout cpg 60000
+    sentinel parallel-syncs cpg 1
+    CONF
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: cliproxy
+spec:
+  serviceName: redis-headless
+  replicas: 3
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels: {app: cliproxy-redis}
+  template:
+    metadata:
+      labels: {app: cliproxy-redis}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: cliproxy-redis}
+      initContainers:
+        - name: config
+          image: redis:7.4-alpine
+          command: ["sh", "/scripts/init.sh"]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-auth, key: password}}
+          securityContext: &sc {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            - {name: conf, mountPath: /conf}
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          command: ["redis-server", "/conf/redis.conf"]
+          ports: [{name: redis, containerPort: 6379}]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-auth, key: password}}
+          readinessProbe:
+            exec: {command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]}
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]}
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 384Mi}
+          securityContext: *sc
+          volumeMounts:
+            - {name: conf, mountPath: /conf}
+            - {name: data, mountPath: /data}
+        - name: sentinel
+          image: redis:7.4-alpine
+          command: ["redis-sentinel", "/conf/sentinel.conf"]
+          ports: [{name: sentinel, containerPort: 26379}]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-auth, key: password}}
+          readinessProbe:
+            exec: {command: ["sh", "-c", "redis-cli -p 26379 -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          securityContext: *sc
+          volumeMounts:
+            - {name: conf, mountPath: /conf}
+      volumes:
+        - name: scripts
+          configMap: {name: redis-scripts}
+        - name: conf
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis
+  namespace: cliproxy
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: cliproxy-redis}
