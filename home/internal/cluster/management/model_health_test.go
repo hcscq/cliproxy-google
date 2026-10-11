@@ -34,3 +34,13 @@ func TestModelCapabilityNotesAndExcluded(t *testing.T) {
 		t.Fatalf("switch target: %v", m)
 	}
 }
+
+func TestRetiredUpstreamMessage(t *testing.T) {
+	raw := `{"error":{"code":404,"details":[{"metadata":{"model":"m","upstream_message":"Gemini 3.5 Flash is no longer available."}}],"message":"model m has been retired"}}`
+	if got := retiredUpstreamMessage(raw); got != "Gemini 3.5 Flash is no longer available." {
+		t.Fatalf("got %q", got)
+	}
+	if got := retiredUpstreamMessage("plain text"); got != "plain text" {
+		t.Fatalf("got %q", got)
+	}
+}

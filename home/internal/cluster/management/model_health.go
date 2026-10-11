@@ -306,7 +306,7 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 						e.LastErrorAt, e.LastError = &t, st.StatusMessage
 					}
 					if strings.Contains(st.StatusMessage, "MODEL_RETIRED") {
-						retiredMsg = st.StatusMessage
+						retiredMsg = retiredUpstreamMessage(st.StatusMessage)
 					}
 				} else if st.UpdatedAt.After(lastSuccess) {
 					lastSuccess = st.UpdatedAt
@@ -327,6 +327,14 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 			e.LastCheck = checkFromRecord(rec)
 		} else if rec, ok := checks[key]; ok {
 			e.LastCheck = checkFromRecord(rec)
+		}
+		// Persist a retirement seen only in this replica's memory so every
+		// replica (and later restarts) shows it.
+		if retiredMsg != "" && e.LastErrorAt != nil && (e.LastCheck == nil || e.LastCheck.CheckedAt.Before(*e.LastErrorAt)) {
+			rec := cluster.ModelHealthCheckRecord{Model: id, Outcome: home.ProbeRetired, HTTPStatus: http.StatusNotFound, Message: retiredMsg, CheckedAt: e.LastErrorAt.UTC()}
+			if h.repo.UpsertModelHealthCheck(ctx, rec) == nil {
+				e.LastCheck = checkFromRecord(rec)
+			}
 		}
 		// A probe failure older than a later successful request is stale.
 		check := e.LastCheck
@@ -378,7 +386,9 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 				}
 			}
 		}
-		e.Notes = append(e.Notes, modelCapabilityNotes(e)...)
+		if e.Status != modelStatusRetired {
+			e.Notes = append(e.Notes, modelCapabilityNotes(e)...)
+		}
 		if e.Credentials == nil {
 			e.Credentials = []modelHealthCredential{}
 		}
@@ -454,3 +464,28 @@ func shanghai() *time.Location {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// retiredUpstreamMessage extracts the upstream notice from a stored
+// MODEL_RETIRED error body; falls back to the raw text.
+func retiredUpstreamMessage(raw string) string {
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+			Details []struct {
+				Metadata map[string]string `json:"metadata"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(raw)), &body) != nil {
+		return raw
+	}
+	for _, d := range body.Error.Details {
+		if m := strings.TrimSpace(d.Metadata["upstream_message"]); m != "" {
+			return m
+		}
+	}
+	if m := strings.TrimSpace(body.Error.Message); m != "" {
+		return m
+	}
+	return raw
+}
