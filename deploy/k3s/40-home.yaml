@@ -86,7 +86,7 @@ spec:
             - {name: HOME_REDIS_ENABLED, value: "true"}
             # Request logs through a Redis stream (batch flush to PG; falls back to the
             # in-memory queue when Redis is down). "" / "0" = off.
-            - {name: HOME_USAGE_STREAM, value: "0"}
+            - {name: HOME_USAGE_STREAM, value: "1"}
             # Main PG pool through pgbouncer (12-pgbouncer.yaml); the lease pool stays
             # direct. "" = direct connections.
             - {name: HOME_PG_POOLER_ADDR, value: "pgbouncer.cliproxy.svc.cluster.local:6432"}
