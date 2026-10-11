@@ -409,6 +409,7 @@ func run() int {
 	}
 	if clusterRepo != nil {
 		clusterRepo.StartScopeCache(runCtx)
+		clusterRepo.StartAffinityJanitor(runCtx)
 	}
 	userMailService := usermail.NewService(repo, func() *config.Config { return rt.Config() })
 	userMailService.Start(runCtx)

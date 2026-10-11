@@ -890,7 +890,83 @@ func (r *Runtime) DispatchForAPIKeyWithConcurrency(ctx context.Context, reqModel
 	return r.dispatchForAPIKey(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, pinnedAuthID, concurrencyCtx)
 }
 
+type stickyAffinityStore interface {
+	LookupAffinity(ctx context.Context, bindingKey string) (string, bool)
+	BindAffinity(ctx context.Context, bindingKey, authID, model, source string, ttl time.Duration) error
+	RecordRequestAffinity(requestID, source, outcome, authID, prevAuth string)
+}
+
+// Sticky-session headers set by the proxy (see proxy internal/affinity).
+const (
+	affinityKeyHeader       = "X-Cpg-Affinity-Key"
+	affinitySourceHeader    = "X-Cpg-Affinity-Source"
+	affinityRequestIDHeader = "X-Cpg-Request-Id"
+)
+
+// dispatchForAPIKey applies sticky sessions: when the proxy sent an affinity
+// key and a live binding exists, the bound credential is tried first (still
+// subject to the key's credential/model groups, cooldowns and availability via
+// the normal pinned dispatch). Otherwise, or if it cannot serve, normal routing
+// picks a credential and the binding is (re)pinned to it.
 func (r *Runtime) dispatchForAPIKey(ctx context.Context, reqModel string, headers http.Header, apiKey string, credentialPolicy string, excludedAuthIDs []string, pinnedAuthID string, concurrencyCtx DispatchConcurrencyContext) (*DispatchResult, error) {
+	store, _ := r.clusterAdapter.(stickyAffinityStore)
+	cfg := r.Config()
+	if store == nil || cfg == nil || !cfg.StickySessions.StickyEnabled() || strings.TrimSpace(pinnedAuthID) != "" || headers == nil {
+		return r.dispatchForAPIKeyOnce(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, pinnedAuthID, concurrencyCtx)
+	}
+	requestID := strings.TrimSpace(headers.Get(affinityRequestIDHeader))
+	affKey := strings.TrimSpace(headers.Get(affinityKeyHeader))
+	source := strings.TrimSpace(headers.Get(affinitySourceHeader))
+	if affKey == "" {
+		res, err := r.dispatchForAPIKeyOnce(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, pinnedAuthID, concurrencyCtx)
+		if err == nil && res != nil && len(excludedAuthIDs) == 0 {
+			store.RecordRequestAffinity(requestID, "", "none", res.AuthID, "")
+		}
+		return res, err
+	}
+	bindingKey := affinityBindingKey(apiKey, affKey)
+	ttl := cfg.StickySessions.StickyTTL()
+	bound, hasBinding := store.LookupAffinity(ctx, bindingKey)
+	if hasBinding && !containsTrimmed(excludedAuthIDs, bound) {
+		res, err := r.dispatchForAPIKeyOnce(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, bound, concurrencyCtx)
+		if err == nil && res != nil {
+			_ = store.BindAffinity(ctx, bindingKey, res.AuthID, reqModel, source, ttl)
+			store.RecordRequestAffinity(requestID, source, "hit", res.AuthID, "")
+			return res, nil
+		}
+	}
+	res, err := r.dispatchForAPIKeyOnce(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, "", concurrencyCtx)
+	if err != nil || res == nil {
+		return res, err
+	}
+	_ = store.BindAffinity(ctx, bindingKey, res.AuthID, reqModel, source, ttl)
+	outcome, prev := "new", ""
+	if hasBinding {
+		outcome, prev = "repin", bound
+		if bound == res.AuthID {
+			outcome, prev = "hit", ""
+		}
+	}
+	store.RecordRequestAffinity(requestID, source, outcome, res.AuthID, prev)
+	return res, nil
+}
+
+// affinityBindingKey scopes a proxy affinity key to the caller's API key.
+func affinityBindingKey(apiKey, affinityKey string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(apiKey) + "\x00" + strings.TrimSpace(affinityKey)))
+	return hex.EncodeToString(sum[:])
+}
+
+func containsTrimmed(list []string, v string) bool {
+	for _, x := range list {
+		if strings.TrimSpace(x) == v {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) dispatchForAPIKeyOnce(ctx context.Context, reqModel string, headers http.Header, apiKey string, credentialPolicy string, excludedAuthIDs []string, pinnedAuthID string, concurrencyCtx DispatchConcurrencyContext) (*DispatchResult, error) {
 	opts := coreauth.Options{}
 	if headers != nil {
 		opts.Headers = headers.Clone()

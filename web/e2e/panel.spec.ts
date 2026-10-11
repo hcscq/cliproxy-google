@@ -46,9 +46,13 @@ test('dashboard, nodes, logs and settings load', async ({ page }) => {
   await expect(page.getByTestId('log-view')).toBeVisible();
   await page.getByTestId('nav-settings').click();
   await expect(page.getByText('routing.strategy')).toBeVisible();
+  await expect(page.getByText('routing.sticky-sessions.enabled')).toBeVisible();
+  await expect(page.getByText('routing.sticky-sessions.key-sources')).toBeVisible();
   await shot(page, '09-settings');
   await page.getByTestId('nav-usage').click();
   await expect(page.getByRole('heading', { name: /请求记录|Request log/ })).toBeVisible();
+  await expect(page.getByTestId('cache-stats')).toContainText(/粘性命中率|Sticky hit rate/);
+  await expect(page.getByTestId('cache-stats')).toContainText(/缓存命中率|Cache hit rate/);
   await shot(page, '07-usage');
 });
 

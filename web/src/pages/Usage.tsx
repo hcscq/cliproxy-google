@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAction, useApi, useAsync } from '../app-context';
-import { ApiError, summarizeError, type RequestEvent } from '../api/client';
+import { ApiError, affinitySourceLabel, summarizeError, type RequestAffinity, type RequestEvent } from '../api/client';
 import { downloadBlob, fmtCompact, fmtMs, fmtNum, fmtPct, fmtTime } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, CodeBlock, Drawer, Empty, ErrorBox, Loading, Pager, Spinner, Stat } from '../components/ui';
@@ -23,6 +23,8 @@ export function UsagePage() {
   const overview = useAsync(() => api.usageOverview({ from, interval: r.interval, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }), [from, r.interval]);
   const tot = overview.data?.totals;
   const top = overview.data?.top;
+  const aff = useAsync(() => api.affinityStats(r.hours), [r.hours]);
+  const st = aff.data?.stats;
 
   return (
     <div className="stack">
@@ -52,6 +54,28 @@ export function UsagePage() {
         <Stat label={t('successRate')} value={tot ? fmtPct(tot.request_count ? tot.success_count / tot.request_count : undefined) : '…'} sub={overview.data?.live ? `RPM ${fmtNum(overview.data.live.rpm, 1)} · TPM ${fmtCompact(overview.data.live.tpm)}` : undefined} />
         <Stat label={t('tokens')} value={tot ? fmtCompact(tot.total_tokens) : '…'} sub={tot ? `${tr('输入', 'in')} ${fmtCompact(tot.input_tokens)} · ${tr('输出', 'out')} ${fmtCompact(tot.output_tokens)} · ${tr('思考', 'reasoning')} ${fmtCompact(tot.reasoning_tokens)} · ${tr('缓存命中', 'cached')} ${fmtCompact(tot.cached_tokens)}${tot.input_tokens ? ` (${fmtPct((tot.cached_tokens ?? 0) / tot.input_tokens)})` : ''}` : undefined} />
         <Stat label={t('latency')} value={tot ? fmtMs(tot.avg_latency_ms) : '…'} sub={tot ? `P95 ${fmtMs(tot.p95_latency_ms)}` : undefined} />
+      </div>
+      <div className="grid grid-4" data-testid="cache-stats">
+        <Stat
+          label={tr('粘性命中率', 'Sticky hit rate')}
+          value={st ? (st.with_key ? fmtPct(st.hit_rate) : '—') : '…'}
+          sub={st ? `${tr('命中', 'hit')} ${fmtNum(st.hits)} · ${tr('新绑定', 'new')} ${fmtNum(st.new)} · ${tr('改绑', 're-pinned')} ${fmtNum(st.repins)}` : undefined}
+        />
+        <Stat
+          label={tr('亲和键覆盖', 'Affinity coverage')}
+          value={st ? (st.total ? fmtPct(st.with_key / st.total) : '—') : '…'}
+          sub={st ? `${tr('无键请求', 'no key')} ${fmtNum(st.none)} · ${tr('活跃绑定', 'active bindings')} ${fmtNum(st.active_bindings)}` : undefined}
+        />
+        <Stat
+          label={tr('缓存命中率（token）', 'Cache hit rate (tokens)')}
+          value={tot ? (tot.input_tokens ? fmtPct((tot.cached_tokens ?? 0) / tot.input_tokens) : '—') : '…'}
+          sub={tot ? `${tr('缓存', 'cached')} ${fmtCompact(tot.cached_tokens)} / ${tr('输入', 'input')} ${fmtCompact(tot.input_tokens)}` : undefined}
+        />
+        <Stat
+          label={tr('键来源', 'Key sources')}
+          value={st ? fmtNum(Object.keys(st.by_source).length) : '…'}
+          sub={st ? Object.entries(st.by_source).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${affinitySourceLabel(k, tr)} ${fmtNum(v)}`).join(' · ') || '—' : undefined}
+        />
       </div>
 
       <Card title={tr('请求趋势', 'Request trend')}>{overview.data ? <TrendChart buckets={overview.data.trend} /> : <Loading />}</Card>
@@ -231,6 +255,10 @@ function EventDrawer({ ev, onClose }: { ev: RequestEvent; onClose: () => void })
           <dd>
             {tr('输入', 'in')} {fmtNum(e.tokens?.input_tokens)} · {tr('输出', 'out')} {fmtNum(e.tokens?.output_tokens)} · {tr('思考', 'reasoning')} {fmtNum(e.tokens?.reasoning_tokens)} · {tr('缓存', 'cached')} {fmtNum(e.tokens?.cached_tokens)}
           </dd>
+          <dt>{tr('粘性会话', 'Sticky session')}</dt>
+          <dd data-testid="affinity-detail">
+            <AffinityInfo requestId={e.request_id} />
+          </dd>
           <dt>{tr('性能', 'Performance')}</dt>
           <dd>
             {tr('总耗时', 'latency')} {fmtMs(e.performance?.latency_ms)} · TTFT {fmtMs(e.performance?.ttft_ms)} · {fmtNum(e.performance?.tps, 1)} tok/s
@@ -334,4 +362,27 @@ function fmtBytes(n?: number | null): string {
   if (n == null) return '?';
   if (n < 1024) return `${n} B`;
   return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB (${n} bytes)`;
+}
+
+function AffinityInfo({ requestId }: { requestId?: string }) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const res = useAsync(() => (requestId ? api.requestAffinity(requestId) : Promise.resolve<RequestAffinity>({ found: false })), [requestId]);
+  if (res.loading) return <Spinner />;
+  const a = res.data;
+  if (!a?.found) return <span className="faint">{tr('无记录（旧请求或未启用）', 'not recorded (older request or disabled)')}</span>;
+  const kind = a.outcome === 'hit' ? 'ok' : a.outcome === 'repin' ? 'warn' : undefined;
+  const label =
+    a.outcome === 'hit'
+      ? tr('命中绑定凭据', 'sticky hit')
+      : a.outcome === 'new'
+        ? tr('新建绑定', 'new binding')
+        : a.outcome === 'repin'
+          ? tr('绑定凭据不可用，已改绑', 'bound credential unavailable, re-pinned')
+          : tr('未绑定', 'not sticky');
+  return (
+    <>
+      <Badge kind={kind}>{label}</Badge> <span className="faint">· {tr('键来源', 'key source')}: {affinitySourceLabel(a.source, tr)}</span>
+    </>
+  );
 }

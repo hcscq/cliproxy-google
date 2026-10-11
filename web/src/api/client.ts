@@ -389,6 +389,12 @@ export class ApiClient {
   }
 
   // ---- Usage / logs ----------------------------------------------------------
+  affinityStats(hours: number) {
+    return this.get<{ hours: number; stats: AffinityStats }>('/usage/affinity', { hours });
+  }
+  requestAffinity(requestId: string) {
+    return this.get<RequestAffinity>('/usage/request-affinity', { request_id: requestId });
+  }
   usageOverview(query?: Query) {
     return this.get<UsageOverview>('/usage/overview', query);
   }
@@ -1028,4 +1034,44 @@ export function describeRule(r: GroupRule | null | undefined, tr: (zh: string, e
   if (r.max_priority !== undefined) parts.push(tr(`优先级 ≤ ${r.max_priority}`, `priority ≤ ${r.max_priority}`));
   if (!parts.length) return r.match_all ? tr('全部凭据', 'all credentials') : tr('（空规则，不匹配任何凭据）', '(empty rule matches nothing)');
   return parts.join(tr(' 且 ', ' AND '));
+}
+
+export interface AffinityStats {
+  total: number;
+  with_key: number;
+  hits: number;
+  new: number;
+  repins: number;
+  none: number;
+  hit_rate: number;
+  by_source: Record<string, number>;
+  active_bindings: number;
+}
+
+export interface RequestAffinity {
+  found: boolean;
+  source?: string;
+  outcome?: 'hit' | 'new' | 'repin' | 'none';
+  auth_id?: string;
+  prev_auth_id?: string;
+}
+
+/** Chinese / English label of a sticky-session key source. */
+export function affinitySourceLabel(src: string | undefined, tr: (zh: string, en: string) => string): string {
+  switch (src) {
+    case 'header':
+      return tr('会话请求头', 'session header');
+    case 'prompt-cache-key':
+      return 'prompt_cache_key';
+    case 'openai-user':
+      return tr('OpenAI user 字段', 'OpenAI user');
+    case 'claude-metadata':
+      return 'Claude metadata.user_id';
+    case 'gemini-cached-content':
+      return 'Gemini cachedContent';
+    case 'prefix':
+      return tr('提示前缀哈希', 'prompt prefix hash');
+    default:
+      return tr('无（提示过短 / 未提供会话）', 'none (short prompt / no session)');
+  }
 }

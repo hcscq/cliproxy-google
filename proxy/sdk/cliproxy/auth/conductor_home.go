@@ -10,12 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/affinity"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executionregistry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -1016,6 +1018,7 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 		}
 	}
 	dispatchHeaders := homeDispatchHeaders(ctx, opts.Headers)
+	dispatchHeaders = withAffinityHeaders(ctx, m.runtimeConfigSnapshot(), dispatchHeaders, opts, requestedModel)
 	if opts.Metadata != nil {
 		if nodeKind, ok := opts.Metadata[cliproxyexecutor.NodeKindMetadataKey].(string); ok && strings.TrimSpace(nodeKind) != "" {
 			if dispatchHeaders == nil {
@@ -1494,4 +1497,32 @@ func antigravityCreditsKVUnavailableError(cause error) error {
 		return &Error{Code: "home_kv_unavailable", Message: "home kv store unavailable", HTTPStatus: http.StatusServiceUnavailable}
 	}
 	return &Error{Code: "home_kv_unavailable", Message: "home kv store unavailable: " + cause.Error(), HTTPStatus: http.StatusServiceUnavailable}
+}
+
+// withAffinityHeaders attaches the sticky-session key (computed statelessly
+// from the original client request) and the request id so Home can prefer the
+// credential that served this conversation before.
+func withAffinityHeaders(ctx context.Context, cfg *internalconfig.Config, headers http.Header, opts cliproxyexecutor.Options, model string) http.Header {
+	out := headers.Clone()
+	if out == nil {
+		out = http.Header{}
+	}
+	out.Del(affinity.HeaderKey)
+	out.Del(affinity.HeaderSource)
+	out.Del(affinity.HeaderRequestID)
+	// The request log's request_id is the execution request id; fall back to
+	// the trace id when dispatch happens outside an execution context.
+	if reqID := coreusage.ExecutionRequestIDFromContext(ctx); reqID != "" {
+		out.Set(affinity.HeaderRequestID, reqID)
+	} else if reqID := logging.GetRequestID(ctx); reqID != "" {
+		out.Set(affinity.HeaderRequestID, reqID)
+	}
+	if cfg == nil {
+		return out
+	}
+	if key, source := affinity.Compute(cfg.StickySessions, opts.Headers, opts.OriginalRequest, model); key != "" {
+		out.Set(affinity.HeaderKey, key)
+		out.Set(affinity.HeaderSource, source)
+	}
+	return out
 }

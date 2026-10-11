@@ -3,7 +3,7 @@ import { useAction, useApi, useAsync, useUi } from '../app-context';
 import { useI18n } from '../i18n';
 import { Card, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
 
-type FieldType = 'bool' | 'number' | 'text' | 'select';
+type FieldType = 'bool' | 'number' | 'text' | 'select' | 'list';
 interface FieldDef {
   path: string;
   type: FieldType;
@@ -38,6 +38,12 @@ const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
       { path: 'routing.retry.max-retry-interval', type: 'number', zh: '最长等待冷却（秒）', en: 'Max cooldown wait (s)' },
       { path: 'routing.honor-max-tokens', type: 'bool', def: true, zh: '遵守客户端输出上限（max_tokens）', en: 'Honor client max_tokens', hintZh: '把 max_tokens / maxOutputTokens 传给 Antigravity/AI Studio 的 Gemini 模型。思考 token 也计入上限；固定思考预算 ≥ 上限时自动降为上限的一半。关闭则恢复旧行为（忽略上限）。', hintEn: 'Pass max_tokens / maxOutputTokens to Gemini models on Antigravity/AI Studio. Thinking tokens count toward the limit; a fixed thinking budget >= limit is lowered to half. Off = legacy (limit ignored).' },
       { path: 'routing.stream-thinking-emulation', type: 'bool', def: false, zh: '流式思考模拟（Gemini 3.x）', en: 'Stream thinking emulation (Gemini 3.x)', hintZh: '上游 Gemini 3.x 流式只在思考较长时才返回思考摘要，签名在正文之后到达。开启后，请求思考内容（includeThoughts / reasoning_effort / Claude thinking）的流式请求改走上游非流式接口，拿到完整结果后一次性按流式格式返回：思考文本和签名完整，但首字延迟等于整段生成时间。默认关闭。', hintEn: 'Upstream Gemini 3.x streams only include thought summaries for longer reasoning and send the signature after the text. When on, streaming requests that ask for thoughts use the non-stream upstream endpoint and are replayed as one SSE event: complete thinking and signature, but time-to-first-token equals full generation time. Default off.' },
+      { path: 'routing.sticky-sessions.enabled', type: 'bool', def: true, zh: '粘性会话（凭据亲和）', en: 'Sticky sessions (credential affinity)', hintZh: '重复 / 续写的请求优先落到上次服务它的凭据，以命中该凭据上的上游隐式缓存。亲和键优先取客户端显式会话（X-Session-Id 头、OpenAI prompt_cache_key / user、Claude metadata.user_id、Gemini cachedContent），否则取“访问密钥 + 模型 + 稳定提示前缀”的哈希。绑定存于 PostgreSQL，所有 Home 副本共享；绑定凭据冷却 / 不可用 / 不在密钥分组内时按常规路由选择并改绑。', hintEn: 'Repeated / continued requests prefer the credential that served them before so upstream implicit caching on that credential hits. Key: explicit client session (X-Session-Id header, OpenAI prompt_cache_key / user, Claude metadata.user_id, Gemini cachedContent), else a hash of access key + model + stable prompt prefix. Bindings live in PostgreSQL (shared by all Home replicas); if the bound credential is cooling / unavailable / outside the key groups, normal routing picks another and re-pins.' },
+      { path: 'routing.sticky-sessions.ttl', type: 'text', def: '45m', zh: '粘性绑定有效期', en: 'Sticky binding TTL', hintZh: '空闲多久后解除绑定（Go 时长，如 30m、1h；范围 1m–24h）', hintEn: 'Idle time before a binding expires (Go duration, 1m–24h)' },
+      { path: 'routing.sticky-sessions.key-sources', type: 'list', zh: '亲和键来源（按优先级）', en: 'Affinity key sources (priority order)', hintZh: '可选：header, prompt-cache-key, openai-user, claude-metadata, gemini-cached-content, prefix；逗号分隔，留空 = 全部', hintEn: 'Any of: header, prompt-cache-key, openai-user, claude-metadata, gemini-cached-content, prefix; comma separated, empty = all' },
+      { path: 'routing.sticky-sessions.prefix-messages', type: 'number', def: 1, zh: '前缀包含的消息数', en: 'Prefix messages', hintZh: '系统提示 + 前 N 条非系统消息参与哈希；默认 1，使续写对话保持同一个键', hintEn: 'System prompt + first N non-system messages are hashed; default 1 so a continued conversation keeps its key' },
+      { path: 'routing.sticky-sessions.prefix-chars', type: 'number', def: 8000, zh: '前缀最大字符数', en: 'Prefix max chars', hintZh: '约 2k token；超出部分不参与哈希', hintEn: '≈2k tokens; the rest is ignored' },
+      { path: 'routing.sticky-sessions.min-prefix-chars', type: 'number', def: 2000, zh: '前缀最小字符数', en: 'Prefix min chars', hintZh: '更短的提示不按前缀绑定，避免大量相同短提示全部压到同一凭据', hintEn: 'Shorter prompts get no prefix binding, so many identical short prompts are not all pinned to one credential' },
       { path: 'routing.retry.capacity-retry.enabled', type: 'bool', def: true, zh: '上游容量不足时重试', en: 'Retry on upstream capacity errors', hintZh: '503 UNAVAILABLE / MODEL_CAPACITY_EXHAUSTED 等容量错误：先换其他凭据，再退避后用同一模型重试。不会更换模型。', hintEn: '503 UNAVAILABLE / MODEL_CAPACITY_EXHAUSTED: try other credentials first, then back off and retry the same model. The model is never changed.' },
       { path: 'routing.retry.capacity-retry.max-attempts', type: 'number', def: 3, zh: '容量重试次数', en: 'Capacity retry attempts', hintZh: '首次失败后的最多重试轮数（默认 3，最大 10）', hintEn: 'Extra rounds after the first failure (default 3, max 10)' },
       { path: 'routing.retry.capacity-retry.base-delay', type: 'text', def: '1s', zh: '容量重试初始退避', en: 'Capacity retry base delay', hintZh: '每次翻倍并加 ±20% 抖动，例如 1s', hintEn: 'Doubles per attempt with ±20% jitter, e.g. 1s' },
@@ -125,7 +131,12 @@ function SettingsForm() {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const initial = useMemo(() => {
     const out: Record<string, unknown> = {};
-    for (const s of SECTIONS) for (const f of s.fields) out[f.path] = getPath(cfg.data, f.path) ?? f.def;
+    for (const s of SECTIONS)
+      for (const f of s.fields) {
+        const raw = getPath(cfg.data, f.path) ?? f.def;
+        // list fields are edited as comma-separated text
+        out[f.path] = f.type === 'list' ? (Array.isArray(raw) ? raw.join(', ') : (raw ?? '')) : raw;
+      }
     return out;
   }, [cfg.data]);
   useEffect(() => setValues(initial), [initial]);
@@ -134,7 +145,9 @@ function SettingsForm() {
 
   const save = async () => {
     const patch: Record<string, unknown> = {};
-    for (const k of changed) setPath(patch, k, values[k]);
+    const listPaths = new Set(SECTIONS.flatMap((s) => s.fields.filter((f) => f.type === 'list').map((f) => f.path)));
+    for (const k of changed)
+      setPath(patch, k, listPaths.has(k) ? String(values[k] ?? '').split(',').map((x) => x.trim()).filter(Boolean) : values[k]);
     if (changed.includes('management.allow-remote') && values['management.allow-remote'] === false) {
       const ok = await confirm({ title: tr('关闭远程管理？', 'Disable remote management?'), body: tr('保存后本面板将无法通过 Ingress 访问。', 'This panel will be unreachable via Ingress after saving.'), danger: true, typeToConfirm: 'LOCK' });
       if (!ok) return;

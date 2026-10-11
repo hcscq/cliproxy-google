@@ -297,3 +297,18 @@ describe('group rules helpers', () => {
     ]);
   });
 });
+
+describe('sticky session client', () => {
+  it('affinity endpoints and labels', async () => {
+    const { ApiClient, affinitySourceLabel } = await import('./client');
+    const calls: string[] = [];
+    const api = new ApiClient('k', { fetch: async (url) => (calls.push(String(url)), new Response('{"found":false,"hours":24,"stats":{}}')) });
+    await api.affinityStats(168);
+    await api.requestAffinity('req-1');
+    expect(calls).toEqual(['/v8/management/usage/affinity?hours=168', '/v8/management/usage/request-affinity?request_id=req-1']);
+    const tr = (zh: string) => zh;
+    expect(affinitySourceLabel('prefix', tr)).toBe('提示前缀哈希');
+    expect(affinitySourceLabel('prompt-cache-key', tr)).toBe('prompt_cache_key');
+    expect(affinitySourceLabel(undefined, tr)).toContain('无');
+  });
+});

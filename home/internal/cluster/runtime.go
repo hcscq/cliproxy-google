@@ -860,3 +860,27 @@ func cloneStringMap(in map[string]string) map[string]string {
 	}
 	return out
 }
+
+// LookupAffinity returns the credential bound to a sticky-session key.
+func (a *RuntimeAdapter) LookupAffinity(ctx context.Context, bindingKey string) (string, bool) {
+	if !a.Enabled() {
+		return "", false
+	}
+	return a.repo.LookupAffinity(ctx, bindingKey)
+}
+
+// BindAffinity stores / refreshes a sticky-session binding.
+func (a *RuntimeAdapter) BindAffinity(ctx context.Context, bindingKey, authID, model, source string, ttl time.Duration) error {
+	if !a.Enabled() {
+		return nil
+	}
+	return a.repo.BindAffinity(ctx, bindingKey, authID, model, source, ttl)
+}
+
+// RecordRequestAffinity logs a request's sticky outcome.
+func (a *RuntimeAdapter) RecordRequestAffinity(requestID, source, outcome, authID, prevAuth string) {
+	if !a.Enabled() {
+		return
+	}
+	a.repo.RecordRequestAffinity(requestID, source, outcome, authID, prevAuth)
+}

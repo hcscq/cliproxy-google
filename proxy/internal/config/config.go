@@ -122,6 +122,10 @@ type Config struct {
 	// reasoning text. Default off.
 	StreamThinkingEmulation bool `yaml:"stream-thinking-emulation,omitempty" json:"stream-thinking-emulation,omitempty"`
 
+	// StickySessions pins repeated / continued requests to the credential that
+	// served them before, so per-credential implicit prompt caching hits.
+	StickySessions StickySessionsConfig `yaml:"sticky-sessions,omitempty" json:"sticky-sessions,omitempty"`
+
 	// AntigravityCatalogRefresh is how often Home re-fetches each Antigravity
 	// credential's upstream model catalog (Go duration, default 15m; "0" or
 	// "off" disables the timer, event-driven and manual refreshes still work).
