@@ -60,6 +60,8 @@ func retiredModelErr(model, upstreamText string) statusErr {
 			"code":    http.StatusNotFound,
 			"message": "model " + model + " has been retired upstream (model_not_supported): " + upstreamText,
 			"status":  "NOT_FOUND",
+			"type":    "invalid_request_error",
+			"param":   "model",
 			"details": []map[string]any{{
 				"@type":  "type.googleapis.com/google.rpc.ErrorInfo",
 				"reason": "MODEL_RETIRED",

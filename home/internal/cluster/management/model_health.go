@@ -184,6 +184,16 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 		}
 	}
 	sort.Slice(agAuths, func(i, j int) bool { return credLabel(agAuths[i]) < credLabel(agAuths[j]) })
+	// Some transitions (e.g. model_not_supported suspensions) live only in the
+	// dispatching runtime's memory; merge them with the stored state.
+	memStates := map[string]map[string]*coreauth.ModelState{}
+	if h.runtime != nil && h.runtime.CoreManager() != nil {
+		for _, a := range h.runtime.CoreManager().List() {
+			if a != nil && len(a.ModelStates) > 0 {
+				memStates[a.ID] = a.ModelStates
+			}
+		}
+	}
 
 	ids := map[string]string{} // lower -> canonical
 	addID := func(id string) {
@@ -268,7 +278,11 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 					}
 				}
 			}
-			if st := a.ModelStates[id]; st != nil {
+			st := a.ModelStates[id]
+			if mem := memStates[a.ID][id]; mem != nil && (st == nil || mem.UpdatedAt.After(st.UpdatedAt)) {
+				st = mem
+			}
+			if st != nil {
 				if !st.UpdatedAt.IsZero() {
 					t := st.UpdatedAt
 					cred.UpdatedAt = &t

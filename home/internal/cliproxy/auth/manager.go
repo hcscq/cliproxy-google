@@ -1622,6 +1622,9 @@ func (m *Manager) finalizeDispatchUnavailableError(errDispatch error, providers 
 	if m == nil || errDispatch == nil {
 		return errDispatch
 	}
+	if retired := m.retiredModelError(providers, routeModel); retired != nil {
+		return retired
+	}
 
 	var summary dispatchAvailabilitySummary
 	hasSummary := false
@@ -3027,4 +3030,62 @@ func logEntryWithRequestID(ctx context.Context) *log.Entry {
 		return log.WithField("request_id", reqID)
 	}
 	return log.NewEntry(log.StandardLogger())
+}
+
+// retiredModelError returns a non-retryable 404 when every credential of the
+// providers that knows routeModel last failed it with an upstream "model
+// retired" error (MODEL_RETIRED / model_not_supported, HTTP 404). Without this,
+// the model-scoped block that follows such an error would surface as a
+// misleading 503 auth_unavailable instead of the real reason.
+func (m *Manager) retiredModelError(providers []string, routeModel string) error {
+	routeKey := canonicalModelKey(routeModel)
+	if m == nil || routeKey == "" {
+		return nil
+	}
+	normalized := normalizeProviderKeys(providers)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var last *Error
+	var lastAt time.Time
+	seen := 0
+	for _, a := range m.auths {
+		if a == nil || a.Disabled || !containsProvider(normalized, strings.ToLower(strings.TrimSpace(a.Provider))) {
+			continue
+		}
+		var st *ModelState
+		for name, state := range a.ModelStates {
+			if canonicalModelKey(name) == routeKey {
+				st = state
+				break
+			}
+		}
+		if st == nil {
+			continue
+		}
+		seen++
+		if st.Status != StatusError || st.LastError == nil || st.LastError.HTTPStatus != http.StatusNotFound || !isRetiredModelMessage(st.LastError.Message) {
+			return nil
+		}
+		if last == nil || st.UpdatedAt.After(lastAt) {
+			last, lastAt = st.LastError, st.UpdatedAt
+		}
+	}
+	if seen == 0 || last == nil {
+		return nil
+	}
+	msg := last.Message
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(msg), &parsed) == nil && strings.TrimSpace(parsed.Error.Message) != "" {
+		msg = strings.TrimSpace(parsed.Error.Message)
+	}
+	return &Error{Code: "model_not_found", Message: msg, Retryable: false, HTTPStatus: http.StatusNotFound}
+}
+
+func isRetiredModelMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "model_retired") || strings.Contains(lower, "retired upstream")
 }
