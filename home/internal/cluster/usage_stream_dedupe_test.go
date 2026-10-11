@@ -39,3 +39,16 @@ func TestAppendUsageBatchSkipsRedeliveredStreamEntries(t *testing.T) {
 		t.Fatalf("stream_id=%q", sid)
 	}
 }
+
+// With the database gone, a batch must report an error (not "0 stored, ok"),
+// otherwise the stream consumer acknowledges and deletes unwritten entries.
+func TestAppendUsageBatchReportsUnreachableDatabase(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	closeRepo()
+	payload := `{"timestamp":"2026-06-10T01:02:03Z","provider":"openai","model":"m","request_id":"r1","tokens":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	n, err := repo.AppendUsageBatch(ctx, []UsagePayloadItem{{Payload: payload, Metadata: UsageRuntimeMetadata{ReceivedAt: time.Now().UTC(), StreamID: "1-0"}}})
+	if err == nil || n != 0 {
+		t.Fatalf("n=%d err=%v, want 0 and an error", n, err)
+	}
+}

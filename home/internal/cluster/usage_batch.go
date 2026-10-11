@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -98,11 +99,21 @@ func (r *Repository) AppendUsageBatch(ctx context.Context, items []UsagePayloadI
 	})
 	stored := len(rows)
 	if errTx != nil {
+		// PostgreSQL unreachable: report the failure so a stream consumer does
+		// not acknowledge (and delete) entries that were never written.
+		if !databaseReachable(ctx, db) {
+			return 0, fmt.Errorf("usage batch not stored, database unreachable: %w", errTx)
+		}
 		log.WithError(errTx).WithField("rows", len(rows)).Warn("usage batch failed; retrying rows individually")
 		stored = 0
 		for _, b := range rows {
 			b.record.ID = 0
 			if _, err := r.AppendUsageWithRuntime(ctx, b.payload, b.metadata); err != nil {
+				if !databaseReachable(ctx, db) {
+					// Rows stored so far are redelivered and skipped by stream id.
+					return stored, fmt.Errorf("usage batch partly stored, database unreachable: %w", err)
+				}
+				// A row PostgreSQL rejects on its own: skip it, do not block the rest.
 				log.WithError(err).Error("usage row write failed")
 				continue
 			}
@@ -146,4 +157,11 @@ func usageStreamEntryStored(ctx context.Context, db *gorm.DB, record *UsageRecor
 		return false
 	}
 	return n > 0
+}
+
+// databaseReachable reports whether a trivial query succeeds.
+func databaseReachable(ctx context.Context, db *gorm.DB) bool {
+	pctx, cancel := context.WithTimeout(contextOrBackground(ctx), 3*time.Second)
+	defer cancel()
+	return db.WithContext(pctx).Exec("SELECT 1").Error == nil
 }

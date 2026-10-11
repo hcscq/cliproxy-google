@@ -5,7 +5,7 @@
 L=$1; RPS=$2; DUR=$3; AT=$4; ACT=$5
 Q() { psql -h 127.0.0.1 -p 56432 -U postgres -d home -At -c "$1"; }
 c0=$(Q "select count(*) from usage"); m0=$(Q "select coalesce(max(id),0) from usage")
-HOMES=3 python3 $(dirname $0)/step.py $RPS $DUR $L > /workspace/cap/run/drill-$L.json 2>&1 &
+HOMES=${HOMES:-3} python3 $(dirname $0)/step.py $RPS $DUR $L > /workspace/cap/run/drill-$L.json 2>&1 &
 SP=$!
 if [ -n "$ACT" ]; then sleep $AT; echo "[$(date +%T)] action: $ACT"; bash -c "$ACT"; fi
 wait $SP
@@ -20,5 +20,6 @@ for t in $(seq 1 90); do
 done
 sleep 5
 c1=$(Q "select count(*) from usage")
+dupreq=$(Q "select count(*) from (select request_id from usage where id > $m0 and request_id <> '' group by request_id having count(*)>1) d")
 dup=$(Q "select count(*) from (select stream_id from usage where id > $m0 and stream_id <> '' group by stream_id having count(*)>1) d")
-jq -c --arg rows $((c1-c0)) --arg dup "$dup" --arg backlog "$b" '{label, codes, sent, rps_achieved, p50_ms, p99_ms, rows: ($rows|tonumber), dup_stream_ids: ($dup|tonumber), final_backlog: ($backlog|tonumber), min_mem_available_mb, pg_peak_conns, aborted}' /workspace/cap/run/drill-$L.json 2>/dev/null || tail -c 600 /workspace/cap/run/drill-$L.json
+jq -c --arg rows $((c1-c0)) --arg dup "$dup" --arg dupreq "$dupreq" --arg backlog "$b" '{label, codes, sent, rps_achieved, p50_ms, p99_ms, rows: ($rows|tonumber), dup_stream_ids: ($dup|tonumber), dup_request_ids: ($dupreq|tonumber), final_backlog: ($backlog|tonumber), min_mem_available_mb, pg_peak_conns, aborted}' /workspace/cap/run/drill-$L.json 2>/dev/null || tail -c 600 /workspace/cap/run/drill-$L.json

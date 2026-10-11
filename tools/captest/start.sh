@@ -8,7 +8,9 @@ cd $R
 bash -c "ulimit -n 500000; GOMEMLIMIT=200MiB exec $B/mock $* > $R/mock.log 2>&1" &
 for i in $(seq 1 $H); do
   d=$R/home$i; mkdir -p $d; sed "s/10.201.0.11/10.201.0.1/; s/port: 8327/port: $((8317+10*i))/" $R/cluster.yaml > $d/cluster.yaml
-  bash -c "cd $d; ulimit -n 500000; GOMAXPROCS=${HOME_PROCS:-2} GOMEMLIMIT=${HOME_MEM:-450MiB} HOME_PPROF_ADDR=127.0.0.1:$((6059+i)) HOME_REDIS_ENABLED=${REDIS:-0} HOME_REDIS_SENTINELS=127.0.0.1:56390,127.0.0.1:56391,127.0.0.1:56392 HOME_REDIS_MASTER=cpg HOME_USAGE_STREAM=${STREAM:-0} HOME_PG_POOLER_ADDR=${POOLER:-} MANAGEMENT_PASSWORD=capmk HOME_BOOTSTRAP_TOKEN=capboot HOME_EPHEMERAL_NODE_TTL=10m exec $B/home > $d/home.log 2>&1" &
+  # SUPERVISE=1: restart a Home that exits (like the k8s kubelet does)
+  LOOP_A=""; LOOP_B=""; [ -n "$SUPERVISE" ] && LOOP_A="while true; do" && LOOP_B="; sleep 2; done"
+  bash -c "cd $d; ulimit -n 500000; $LOOP_A GOMAXPROCS=${HOME_PROCS:-2} GOMEMLIMIT=${HOME_MEM:-450MiB} HOME_PPROF_ADDR=127.0.0.1:$((6059+i)) HOME_REDIS_ENABLED=${REDIS:-0} HOME_REDIS_SENTINELS=127.0.0.1:56390,127.0.0.1:56391,127.0.0.1:56392 HOME_REDIS_MASTER=cpg HOME_USAGE_STREAM=${STREAM:-0} HOME_PG_POOLER_ADDR=${POOLER:-} MANAGEMENT_PASSWORD=capmk HOME_BOOTSTRAP_TOKEN=capboot HOME_EPHEMERAL_NODE_TTL=10m HOME_DRAIN_TIMEOUT=${DRAIN:-25s} $([ -n "$SUPERVISE" ] || echo exec) $B/home >> $d/home.log 2>&1 $LOOP_B" &
 done
 for t in $(seq 1 60); do (echo > /dev/tcp/127.0.0.1/8327) 2>/dev/null && break; sleep 1; done
 for j in $(seq 1 $P); do
