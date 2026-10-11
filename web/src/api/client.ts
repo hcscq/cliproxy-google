@@ -275,6 +275,59 @@ export class ApiClient {
   renameAccessKey(id: number, displayName: string) {
     return this.patch<{ api_key: AccessKey }>('/access/api-keys', { id, display_name: displayName || null });
   }
+  // ---- Scale: server-side search, bulk, rules, summaries, import/export ----
+  searchCredentials(q: CredentialQuery & { page?: number; page_size?: number }) {
+    return this.get<CredentialSearch>('/credentials/search', q as Query);
+  }
+  credentialIds(q: CredentialQuery) {
+    return this.get<{ ids: string[]; total: number }>('/credentials/search', { ...(q as Query), ids_only: '1' });
+  }
+  bulkCredentials(body: { ids: string[]; action: BulkCredentialAction; tags?: string[]; group_id?: number }) {
+    return this.post<{ status: string; updated?: number; unchanged?: number; failed?: string[]; result?: BulkResult }>('/credentials/bulk', body);
+  }
+  groupsSummary() {
+    return this.get<GroupsSummary>('/groups/summary');
+  }
+  credentialGroupMembersPaged(id: number, q: { q?: string; source?: string; page?: number; page_size?: number }) {
+    return this.get<MemberPage>(`/channel-groups/${id}/members`, q as Query);
+  }
+  credentialGroupMemberIds(id: number, q: { q?: string; source?: string }) {
+    return this.get<{ ids: string[]; total: number }>(`/channel-groups/${id}/members`, { ...(q as Query), ids_only: '1' });
+  }
+  bulkCredentialGroupMembers(id: number, change: { add?: string[]; remove?: string[] }) {
+    return this.post<{ status: string; result: BulkResult }>(`/channel-groups/${id}/members/bulk`, change);
+  }
+  groupRule(id: number) {
+    return this.get<{ rule: GroupRule | null; enabled: boolean; matched: number; updated_at?: string }>(`/channel-groups/${id}/rule`);
+  }
+  saveGroupRule(id: number, rule: GroupRule, enabled: boolean) {
+    return this.put<{ status: string; matched: number }>(`/channel-groups/${id}/rule`, { rule, enabled });
+  }
+  deleteGroupRule(id: number) {
+    return this.del<{ status: string }>(`/channel-groups/${id}/rule`);
+  }
+  previewGroupRule(rule: GroupRule) {
+    return this.post<{ matched: number; sample: { id: string; label: string; provider: string }[]; empty: boolean }>('/group-rules/preview', { rule });
+  }
+  bulkModelGroupMembers(id: number, change: { add?: string[]; remove?: string[]; channels?: number[] }) {
+    return this.post<{ status: string; result: BulkResult }>(`/model-groups/${id}/members/bulk`, change);
+  }
+  searchAccessKeys(q: KeyQuery & { page?: number; page_size?: number }) {
+    return this.get<{ items: AccessKey[]; total: number; all: number; page: number; page_size: number }>('/access/api-keys/search', q as Query);
+  }
+  accessKeyIds(q: KeyQuery) {
+    return this.get<{ ids: number[]; total: number }>('/access/api-keys/search', { ...(q as Query), ids_only: '1' });
+  }
+  bulkAccessKeys(change: KeyScopeChange) {
+    return this.post<{ status: string; updated: number; unchanged: number }>('/access/api-keys/bulk', change);
+  }
+  exportGroups(format: 'json' | 'csv') {
+    return this.request<Blob>('GET', '/groups/export', { query: { format }, responseType: 'blob' });
+  }
+  importGroups(body: { format: 'json' | 'csv'; data: string; mode: 'merge' | 'replace'; dry_run?: boolean }) {
+    return this.post<{ status: string; report: ImportReport }>('/groups/import', body);
+  }
+
   /** Binds a key to credential groups / model groups (empty arrays = unrestricted). */
   setAccessKeyScope(id: number, scope: { channels?: number[]; model_groups?: number[] }) {
     return this.patch<{ api_key: AccessKey }>('/access/api-keys', { id, ...scope });
@@ -318,6 +371,9 @@ export class ApiClient {
   }
   modelGroupMembers() {
     return this.get<{ model_group_details: ModelGroupMember[] }>('/model-group-details');
+  }
+  modelGroupMembersOf(groupId: number) {
+    return this.get<{ model_group_details: ModelGroupMember[] }>('/model-group-details', { model_group_id: groupId });
   }
   addModelGroupMember(groupId: number, modelId: string, channels: number[] = []) {
     return this.post<{ model_group_detail: ModelGroupMember }>('/model-group-details', { model_group_id: groupId, model_id: modelId, channels });
@@ -829,4 +885,147 @@ export function keyScopeSummary(
     credentials: ch.length ? ch.map((id) => cgNames.get(id) ?? `#${id}`) : null,
     models: mg.length ? mg.map((id) => mgNames.get(id) ?? `#${id}`) : null,
   };
+}
+
+// ---- scale types ----
+export interface CredentialQuery {
+  q?: string;
+  provider?: string;
+  status?: string;
+  domain?: string;
+  tag?: string;
+  /** group id, or "none" for credentials in no group */
+  group?: string;
+  /** hide current members of this credential group */
+  exclude_group?: number;
+}
+export type CredentialState = 'ok' | 'cooling' | 'error' | 'disabled';
+export type CredentialSearchItem = Credential & { tags?: string[]; group_ids?: number[]; state?: CredentialState };
+export interface CredentialSearch {
+  items: CredentialSearchItem[];
+  total: number;
+  all: number;
+  page: number;
+  page_size: number;
+  facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>>;
+}
+export type BulkCredentialAction = 'enable' | 'disable' | 'add_tags' | 'remove_tags' | 'set_tags' | 'add_to_group' | 'remove_from_group';
+export interface BulkResult {
+  added: number;
+  removed: number;
+  unchanged: number;
+}
+export interface CredentialGroupSummary {
+  id: number;
+  channel_name: string;
+  enabled: boolean;
+  static_count: number;
+  rule_count: number;
+  total: number;
+  usable: number;
+  ok: number;
+  cooling: number;
+  error: number;
+  disabled: number;
+  missing: number;
+  has_rule: boolean;
+  keys: number;
+}
+export interface ModelGroupSummary {
+  id: number;
+  group_name: string;
+  enabled: boolean;
+  models: number;
+  keys: number;
+}
+export interface GroupsSummary {
+  credential_groups: CredentialGroupSummary[];
+  model_groups: ModelGroupSummary[];
+  credentials: number;
+  ungrouped_credentials: number;
+  keys: number;
+  unrestricted_keys: number;
+  snapshot?: { built_at: string; build_ms: number };
+}
+export interface MemberRow {
+  id: string;
+  label: string;
+  email: string;
+  provider: string;
+  state: CredentialState | 'missing';
+  source: 'static' | 'rule' | 'both';
+  missing: boolean;
+}
+export interface MemberPage {
+  items: MemberRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  static_count: number;
+  rule_count: number;
+}
+export interface GroupRule {
+  providers?: string[];
+  email_pattern?: string;
+  label_pattern?: string;
+  tags_any?: string[];
+  tags_all?: string[];
+  min_priority?: number;
+  max_priority?: number;
+  match_all?: boolean;
+}
+export interface KeyQuery {
+  q?: string;
+  channel?: number;
+  model_group?: number;
+  scope?: '' | 'restricted' | 'unrestricted';
+}
+export interface KeyScopeChange {
+  ids: number[];
+  add_channels?: number[];
+  remove_channels?: number[];
+  add_model_groups?: number[];
+  remove_model_groups?: number[];
+  clear_channels?: boolean;
+  clear_model_groups?: boolean;
+}
+export interface ImportReport {
+  groups_created: number;
+  members_added: number;
+  members_removed: number;
+  models_added: number;
+  models_removed: number;
+  rules_set: number;
+  unresolved: string[];
+  dry_run: boolean;
+}
+
+/** Drops empty fields so a rule round-trips cleanly. */
+export function cleanRule(r: GroupRule): GroupRule {
+  const out: GroupRule = {};
+  const list = (v?: string[]) => (v ?? []).map((x) => x.trim()).filter(Boolean);
+  if (list(r.providers).length) out.providers = list(r.providers);
+  if (r.email_pattern?.trim()) out.email_pattern = r.email_pattern.trim();
+  if (r.label_pattern?.trim()) out.label_pattern = r.label_pattern.trim();
+  if (list(r.tags_any).length) out.tags_any = list(r.tags_any).map((t) => t.toLowerCase());
+  if (list(r.tags_all).length) out.tags_all = list(r.tags_all).map((t) => t.toLowerCase());
+  if (typeof r.min_priority === 'number' && !Number.isNaN(r.min_priority)) out.min_priority = r.min_priority;
+  if (typeof r.max_priority === 'number' && !Number.isNaN(r.max_priority)) out.max_priority = r.max_priority;
+  if (r.match_all) out.match_all = true;
+  return out;
+}
+
+/** Human summary of a rule (Chinese / English). */
+export function describeRule(r: GroupRule | null | undefined, tr: (zh: string, en: string) => string): string {
+  if (!r) return '';
+  const parts: string[] = [];
+  if (r.providers?.length) parts.push(tr(`提供方 ∈ {${r.providers.join(', ')}}`, `provider in {${r.providers.join(', ')}}`));
+  if (r.email_pattern) parts.push(tr(`邮箱匹配 ${r.email_pattern}`, `email ~ ${r.email_pattern}`));
+  if (r.label_pattern) parts.push(tr(`名称匹配 ${r.label_pattern}`, `label ~ ${r.label_pattern}`));
+  if (r.tags_any?.length) parts.push(tr(`含任一标签 ${r.tags_any.join('/')}`, `any tag ${r.tags_any.join('/')}`));
+  if (r.tags_all?.length) parts.push(tr(`含全部标签 ${r.tags_all.join('+')}`, `all tags ${r.tags_all.join('+')}`));
+  if (r.min_priority !== undefined) parts.push(tr(`优先级 ≥ ${r.min_priority}`, `priority ≥ ${r.min_priority}`));
+  if (r.max_priority !== undefined) parts.push(tr(`优先级 ≤ ${r.max_priority}`, `priority ≤ ${r.max_priority}`));
+  if (!parts.length) return r.match_all ? tr('全部凭据', 'all credentials') : tr('（空规则，不匹配任何凭据）', '(empty rule matches nothing)');
+  return parts.join(tr(' 且 ', ' AND '));
 }

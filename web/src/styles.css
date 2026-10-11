@@ -328,3 +328,21 @@ tr.row-muted td { opacity: .62; }
 .scope-chips .tag { margin: 0; font-family: inherit; }
 .catalog-table td { vertical-align: middle; }
 .mini-bar.removed > span { background: var(--err); }
+
+/* ---- scale: filters, selection, bulk ---- */
+.filter-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.filter-bar .select, .filter-bar .input { width: auto; min-width: 120px; max-width: 220px; }
+.selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); min-height: 40px; }
+.selection-bar.active { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.modal-body .selection-bar, .drawer .selection-bar { border: 1px solid var(--border); border-radius: 8px; }
+.bulk-actions { flex-wrap: wrap; }
+tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transparent); }
+.tag.tag-soft { background: transparent; border: 1px dashed var(--border); color: var(--text-2); }
+.modal .grid-2, .drawer .grid-2 { gap: 12px 16px; }
+.table.compact td, .table.compact th { padding-top: 6px; padding-bottom: 6px; }
+.scroll-list { max-height: 240px; overflow: auto; }
+.card .pager { padding: 8px 12px; }
+.card-head .filter-bar { flex: 1; min-width: 0; }
+@media (max-width: 720px) {
+  .filter-bar .select, .filter-bar .input { max-width: none; flex: 1 1 140px; }
+}

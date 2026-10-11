@@ -264,7 +264,7 @@ func (a *RuntimeAdapter) AllowedAuthIDsForAPIKey(ctx context.Context, apiKey str
 	if !a.Enabled() {
 		return nil, fmt.Errorf("cluster runtime adapter is disabled")
 	}
-	return a.repo.AllowedAuthIDsForAPIKey(ctx, apiKey)
+	return a.repo.CachedAllowedAuthIDsForAPIKey(ctx, apiKey)
 }
 
 // AllowedDispatchIDsForAPIKey returns auth and model IDs allowed by API-key bindings.
@@ -272,7 +272,7 @@ func (a *RuntimeAdapter) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey
 	if !a.Enabled() {
 		return nil, nil, fmt.Errorf("cluster runtime adapter is disabled")
 	}
-	return a.repo.AllowedDispatchIDsForAPIKey(ctx, apiKey)
+	return a.repo.CachedAllowedDispatchIDsForAPIKeyModel(ctx, apiKey, "")
 }
 
 // AllowedDispatchIDsForAPIKeyModel returns auth and model IDs after applying model-specific channel bindings.
@@ -280,7 +280,7 @@ func (a *RuntimeAdapter) AllowedDispatchIDsForAPIKeyModel(ctx context.Context, a
 	if !a.Enabled() {
 		return nil, nil, fmt.Errorf("cluster runtime adapter is disabled")
 	}
-	return a.repo.AllowedDispatchIDsForAPIKeyModel(ctx, apiKey, modelID)
+	return a.repo.CachedAllowedDispatchIDsForAPIKeyModel(ctx, apiKey, modelID)
 }
 
 // AllowedModelIDsForAPIKey returns model IDs allowed by API-key model group bindings.
@@ -288,7 +288,7 @@ func (a *RuntimeAdapter) AllowedModelIDsForAPIKey(ctx context.Context, apiKey st
 	if !a.Enabled() {
 		return nil, fmt.Errorf("cluster runtime adapter is disabled")
 	}
-	return a.repo.AllowedModelIDsForAPIKey(ctx, apiKey)
+	return a.repo.CachedAllowedModelIDsForAPIKey(ctx, apiKey)
 }
 
 // ValidateAPIKey reports whether an API key is active in the cluster database.

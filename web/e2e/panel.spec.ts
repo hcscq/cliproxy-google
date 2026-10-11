@@ -120,9 +120,14 @@ test('credential/model groups bind to an access key and are cleaned up', async (
   await page.getByTestId('group-name-input').fill(mg);
   await page.getByTestId('group-name-save').click();
   const mgRow = page.locator('[data-testid^="mg-"]', { hasText: mg }).first();
-  await mgRow.locator('[data-testid^="mg-add-input-"]').fill('gemini-3.8-flash-tiered');
-  await mgRow.locator('[data-testid^="mg-add-"]').last().click();
-  await expect(mgRow).toContainText('gemini-3.8-flash-tiered');
+  await mgRow.locator('[data-testid^="mg-models-"]').click();
+  await page.getByTestId('mg-tab-add').click();
+  await page.getByTestId('mg-manual-input').fill('gemini-3.8-flash-tiered');
+  await page.getByTestId('mg-manual-add').click();
+  await page.getByTestId('mg-tab-members').click();
+  await expect(page.getByTestId('mg-table')).toContainText('gemini-3.8-flash-tiered');
+  await page.keyboard.press('Escape');
+  await expect(mgRow).toContainText(/1 个模型|1 models/);
   await shot(page, '18-model-groups');
 
   await page.getByTestId('nav-accessKeys').click();
@@ -144,7 +149,7 @@ test('credential/model groups bind to an access key and are cleaned up', async (
   // deleting the groups unbinds the key (no silent lock-out)
   await page.getByTestId('nav-groups').click();
   await page.locator('[data-testid^="cg-"]', { hasText: cg }).first().locator('[data-testid^="cg-delete-"]').click();
-  await expect(page.getByText(keyName).first()).toBeVisible();
+  await expect(page.getByText(/有 1 个访问密钥绑定了该分组|1 keys are bound/).first()).toBeVisible();
   await page.getByTestId('confirm-ok').click();
   await expect(page.locator('[data-testid^="cg-"]', { hasText: cg })).toHaveCount(0);
   await page.getByTestId('tab-model-groups').click();
@@ -164,4 +169,73 @@ test('model catalog panel shows refresh controls', async ({ page }) => {
   await page.getByTestId('nav-models').click();
   await expect(page.getByTestId('catalog-panel')).toBeVisible();
   await expect(page.getByTestId('catalog-refresh-all')).toBeVisible();
+});
+
+test('bulk key binding, group rule preview and membership import', async ({ page }) => {
+  await login(page);
+  const ts = Date.now();
+  const cg = `e2e-bulk-cg-${ts}`;
+  const imp = `e2e-imp-${ts}`;
+  await page.getByTestId('nav-groups').click();
+  await page.getByTestId('create-credential-group').click();
+  await page.getByTestId('group-name-input').fill(cg);
+  await page.getByTestId('group-name-save').click();
+  const cgRow = page.locator('[data-testid^="cg-"]', { hasText: cg }).first();
+  await cgRow.locator('[data-testid^="cg-members-"]').click();
+  await page.getByTestId('open-rule').click();
+  await page.getByTestId('rule-email').fill('*@no-such-domain.invalid');
+  await expect(page.getByTestId('rule-preview')).toContainText(/匹配 0 个凭据|0 credentials match/);
+  await page.getByTestId('rule-save').click();
+  await expect(page.getByTestId('open-rule')).toContainText(/编辑规则|Edit rule/);
+  await page.getByTestId('open-picker').click();
+  await expect(page.getByTestId('cred-filter-bar')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(cgRow).toContainText(/规则|rule/);
+
+  // import (dry run first, then apply) creates a model group by name
+  await page.getByTestId('open-import-export').click();
+  await page.getByTestId('import-data').fill(JSON.stringify({ model_groups: [{ name: imp, enabled: true, models: [{ model: 'gemini-3-flash', credential_groups: [cg] }] }] }));
+  await page.getByTestId('import-dry').click();
+  await expect(page.getByTestId('import-report')).toContainText(/预检|Dry run/);
+  await page.getByTestId('import-apply').click();
+  await expect(page.getByTestId('import-report')).toContainText(/已导入|Imported/);
+  await page.keyboard.press('Escape');
+  await page.getByTestId('tab-model-groups').click();
+  await expect(page.locator('[data-testid^="mg-"]', { hasText: imp }).first()).toContainText(/1 个模型|1 models/);
+
+  // two keys -> bulk bind to the credential group
+  await page.getByTestId('nav-accessKeys').click();
+  for (const n of ['a', 'b']) {
+    await page.getByTestId('create-access-key').click();
+    await page.getByTestId('access-key-name').fill(`e2e-bulk-${ts}-${n}`);
+    await page.getByTestId('create-access-key-submit').click();
+    await page.getByRole('button', { name: /关闭|Close/ }).last().click();
+  }
+  await page.getByTestId('key-q').fill(`e2e-bulk-${ts}`);
+  await expect(page.locator('[data-testid^="access-key-"]', { hasText: `e2e-bulk-${ts}` })).toHaveCount(2);
+  await page.getByTestId('select-all-filtered').click();
+  await page.getByTestId('bulk-bind-keys').click();
+  await page.getByRole('dialog').locator('.field').first().getByText(cg).click();
+  await page.getByTestId('bulk-keys-apply').click();
+  await expect(page.locator('[data-testid^="access-key-"]', { hasText: `e2e-bulk-${ts}` }).first()).toContainText(cg);
+
+  // cleanup: deleting the group unbinds both keys
+  await page.getByTestId('nav-groups').click();
+  await page.locator('[data-testid^="cg-"]', { hasText: cg }).first().locator('[data-testid^="cg-delete-"]').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.locator('[data-testid^="cg-"]', { hasText: cg })).toHaveCount(0);
+  await page.getByTestId('tab-model-groups').click();
+  await page.locator('[data-testid^="mg-"]', { hasText: imp }).first().locator('[data-testid^="mg-delete-"]').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.locator('[data-testid^="mg-"]', { hasText: imp })).toHaveCount(0);
+  await page.getByTestId('nav-accessKeys').click();
+  await page.getByTestId('key-q').fill(`e2e-bulk-${ts}`);
+  for (let i = 0; i < 2; i++) {
+    const row = page.locator('[data-testid^="access-key-"]', { hasText: `e2e-bulk-${ts}` }).first();
+    await expect(row).toContainText(/全部凭据 · 全部模型|All credentials · all models/);
+    await row.locator('[data-testid^="delete-access-key-"]').click();
+    await page.getByTestId('confirm-ok').click();
+  }
+  await expect(page.locator('[data-testid^="access-key-"]', { hasText: `e2e-bulk-${ts}` })).toHaveCount(0);
 });

@@ -1023,5 +1023,8 @@ func ensureExtraTables(ctx context.Context, db *gorm.DB) error {
 	if err := ensureModelHealthTable(ctx, db); err != nil {
 		return err
 	}
-	return ensureAntigravityCatalogTable(ctx, db)
+	if err := ensureAntigravityCatalogTable(ctx, db); err != nil {
+		return err
+	}
+	return ensureChannelGroupRuleTable(ctx, db)
 }

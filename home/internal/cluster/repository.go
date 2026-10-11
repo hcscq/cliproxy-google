@@ -25,6 +25,8 @@ type Repository struct {
 	cpaSnapshotMu      sync.Mutex
 	sessionRootCacheMu sync.RWMutex
 	sessionRootCache   map[string]string
+	scopeOnce          sync.Once
+	scope              *scopeCache
 }
 
 type UpsertResult string

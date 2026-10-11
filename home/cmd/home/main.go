@@ -407,6 +407,9 @@ func run() int {
 		log.Errorf("failed to start runtime: %v", errStart)
 		return 1
 	}
+	if clusterRepo != nil {
+		clusterRepo.StartScopeCache(runCtx)
+	}
 	userMailService := usermail.NewService(repo, func() *config.Config { return rt.Config() })
 	userMailService.Start(runCtx)
 	quotaHomeID := net.JoinHostPort(clusterClientAddr, strconv.Itoa(clusterAdvertisedPort))

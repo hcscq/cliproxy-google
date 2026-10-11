@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAction, useApi, useAsync, useUi } from '../app-context';
-import { coolingModels, credentialUsable, isSupportedProvider, type Credential, type ModelInfo, type QuotaItem } from '../api/client';
+import { coolingModels, credentialUsable, isSupportedProvider, type Credential, type CredentialGroupSummary, type CredentialQuery, type CredentialSearchItem, type ModelInfo, type QuotaItem } from '../api/client';
+import { CredentialFilterBar, PageNav, SelectionBar, useSelection } from '../components/picker';
 import { downloadBlob, fmtRelative, fmtTime } from '../format';
 import { useI18n } from '../i18n';
-import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
+import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Modal, Spinner, Switch } from '../components/ui';
 import { QuotaStatusBadge, QuotaWindows } from '../components/quota';
 import { IconDownload, IconPlus, IconRefresh, IconTrash } from '../components/icons';
 import { AddCredentialModal } from './AddCredential';
@@ -32,26 +33,25 @@ export function CredentialsPage() {
   const { t, tr, lang } = useI18n();
   const { toast } = useUi();
   const { busy, run } = useAction();
-  const creds = useAsync(() => api.credentials(), [], 20000);
+  const [filter, setFilter] = useState<CredentialQuery>({});
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(50);
+  useEffect(() => setPage(1), [filter]);
+  const creds = useAsync(() => api.searchCredentials({ ...filter, page, page_size: size }), [filter, page, size], 20000);
   const groups = useGroupLookup();
-  const groupsOf = (id: string) =>
-    (groups.data?.credentialMembers ?? []).filter((m) => m.auth_id === id).map((m) => groups.cgNames.get(m.channel_group_id) ?? `#${m.channel_group_id}`);
-  const quota = useAsync(() => api.quotaCredentials({ limit: 200 }), [], 60000);
+  const quota = useAsync(() => api.quotaCredentials({ limit: 500 }), [], 60000);
+  const sel = useSelection<string>();
   const [adding, setAdding] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [filter, setFilter] = useState('');
-  const [provider, setProvider] = useState('');
+  const [selected, setSelected] = useState<CredentialSearchItem | null>(null);
+  const [bulk, setBulk] = useState<null | 'add_to_group' | 'remove_from_group' | 'add_tags' | 'remove_tags'>(null);
 
-  const all = useMemo(() => (creds.data?.files ?? []).filter((c) => isSupportedProvider(c.provider)), [creds.data]);
-  const hidden = (creds.data?.files.length ?? 0) - all.length;
-  const providers = useMemo(() => Array.from(new Set(all.map((c) => c.provider))).sort(), [all]);
+  const items = useMemo(() => (creds.data?.items ?? []).filter((c) => isSupportedProvider(c.provider)), [creds.data]);
   const quotaById = useMemo(() => new Map<string, QuotaItem>((quota.data?.items ?? []).map((q) => [q.credential_id, q])), [quota.data]);
-  const list = all.filter(
-    (c) =>
-      (!provider || c.provider === provider) &&
-      (!filter || [c.label, c.email, c.name, c.note, c.prefix].some((v) => v?.toLowerCase().includes(filter.toLowerCase()))),
-  );
-  const current = all.find((c) => c.id === selected);
+  const current = selected ? (items.find((c) => c.id === selected.id) ?? selected) : undefined;
+  const reloadAll = async () => {
+    await creds.reload();
+    await groups.reload();
+  };
 
   const toggle = (c: Credential, enabled: boolean) =>
     run(`toggle-${c.id}`, async () => {
@@ -59,18 +59,24 @@ export function CredentialsPage() {
       toast(enabled ? tr('已启用', 'Enabled') : tr('已禁用', 'Disabled'));
       await creds.reload();
     });
+  const bulkToggle = (action: 'enable' | 'disable') =>
+    run(`bulk-${action}`, async () => {
+      const r = await api.bulkCredentials({ ids: sel.list(), action });
+      toast(tr(`已${action === 'enable' ? '启用' : '禁用'} ${r.updated ?? 0} 个${r.unchanged ? `（${r.unchanged} 个无需变更）` : ''}`, `${action}d ${r.updated ?? 0}${r.unchanged ? ` (${r.unchanged} unchanged)` : ''}`), r.failed?.length ? 'err' : 'ok');
+      await reloadAll();
+    });
 
   return (
     <div className="stack">
       <div className="page-head">
         <div>
           <h1>{t('credentials')}</h1>
-          <p>{tr('Antigravity OAuth、AI Studio 与 Vertex 服务账号凭据。点击一行查看详情、额度和模型。', 'Antigravity OAuth, AI Studio and Vertex service-account credentials. Click a row for details, quota and models.')}</p>
+          <p>{tr('Antigravity OAuth、AI Studio 与 Vertex 服务账号凭据。支持服务端筛选、跨页多选与批量操作；点击一行查看详情。', 'Antigravity OAuth, AI Studio and Vertex credentials. Server-side filters, cross-page multi-select and bulk actions; click a row for details.')}</p>
         </div>
         <div className="toolbar">
           <button
             className="btn"
-            disabled={busy === 'refresh-all' || !all.length}
+            disabled={busy === 'refresh-all' || !creds.data?.all}
             onClick={() =>
               run('refresh-all', async () => {
                 const res = await api.refreshAllCredentials();
@@ -92,36 +98,48 @@ export function CredentialsPage() {
 
       <Card
         bodyClass="table-wrap"
-        title={
-          <div className="row">
-            <input className="input input-sm" style={{ width: 220 }} placeholder={t('search')} value={filter} onChange={(e) => setFilter(e.target.value)} />
-            <select className="select input-sm" style={{ width: 150 }} value={provider} onChange={(e) => setProvider(e.target.value)}>
-              <option value="">{tr('全部提供方', 'All providers')}</option>
-              {providers.map((p) => (
-                <option key={p}>{p}</option>
-              ))}
-            </select>
-          </div>
-        }
-        extra={
-          <span className="faint small">
-            {tr(`${list.length} 个`, `${list.length} shown`)}
-            {hidden > 0 && tr(`（隐藏 ${hidden} 个已移除提供方的凭据）`, ` (${hidden} of removed providers hidden)`)}
-          </span>
-        }
+        title={<CredentialFilterBar value={filter} onChange={setFilter} facets={creds.data?.facets} groups={groups.data?.credential_groups} />}
+        extra={<span className="faint small nowrap">{tr(`${creds.data?.total ?? 0} / ${creds.data?.all ?? 0} 个`, `${creds.data?.total ?? 0} / ${creds.data?.all ?? 0}`)}</span>}
       >
+        <SelectionBar selected={sel.size} total={creds.data?.total ?? 0} pageIds={items.map((c) => c.id)} sel={sel} loadAllIds={async () => (await api.credentialIds(filter)).ids}>
+          {sel.size > 0 && (
+            <div className="row bulk-actions" style={{ gap: 6 }} data-testid="bulk-actions">
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('add_to_group')} data-testid="bulk-add-group">
+                {tr('加入分组', 'Add to group')}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('remove_from_group')}>
+                {tr('移出分组', 'Remove from group')}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('add_tags')} data-testid="bulk-add-tags">
+                {tr('加标签', 'Add tags')}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('remove_tags')}>
+                {tr('去标签', 'Remove tags')}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkToggle('enable')}>
+                {busy === 'bulk-enable' && <Spinner />}
+                {tr('启用', 'Enable')}
+              </button>
+              <button className="btn btn-sm btn-danger" disabled={!!busy} onClick={() => void bulkToggle('disable')}>
+                {busy === 'bulk-disable' && <Spinner />}
+                {tr('禁用', 'Disable')}
+              </button>
+            </div>
+          )}
+        </SelectionBar>
         {creds.error ? (
           <div className="card-body">
             <ErrorBox error={creds.error} onRetry={creds.reload} />
           </div>
         ) : !creds.data ? (
           <Loading />
-        ) : list.length === 0 ? (
-          <Empty>{all.length ? tr('没有匹配的凭据', 'No matching credentials') : tr('还没有凭据，点击右上角“添加凭据”。', 'No credentials yet — click "Add credential".')}</Empty>
+        ) : items.length === 0 ? (
+          <Empty>{creds.data.all ? tr('没有匹配的凭据', 'No matching credentials') : tr('还没有凭据，点击右上角“添加凭据”。', 'No credentials yet — click "Add credential".')}</Empty>
         ) : (
           <table className="table" data-testid="credentials-table">
             <thead>
               <tr>
+                <th style={{ width: 28 }} />
                 <th>{tr('账号', 'Account')}</th>
                 <th>{t('provider')}</th>
                 <th>{t('status')}</th>
@@ -132,8 +150,11 @@ export function CredentialsPage() {
               </tr>
             </thead>
             <tbody>
-              {list.map((c) => (
-                <tr key={c.id} className="clickable" onClick={() => setSelected(c.id)}>
+              {items.map((c) => (
+                <tr key={c.id} className={`clickable ${sel.has(c.id) ? 'row-selected' : ''}`} onClick={() => setSelected(c)}>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={sel.has(c.id)} onChange={() => sel.toggle(c.id)} aria-label="select" />
+                  </td>
                   <td>
                     <div className="ellipsis" style={{ maxWidth: 320 }} title={c.label || c.email || c.name}>
                       {c.label || c.email || c.name}
@@ -141,10 +162,18 @@ export function CredentialsPage() {
                     <div className="faint small mono ellipsis" style={{ maxWidth: 320 }}>
                       {c.note ? `📝 ${c.note}` : c.id}
                     </div>
-                    {groupsOf(c.id).length > 0 && (
-                      <div className="scope-chips small" style={{ marginTop: 3 }} title={tr('所属凭据分组', 'Credential groups')}>
-                        {groupsOf(c.id).map((n) => (
-                          <span key={n} className="tag">🔑 {n}</span>
+                    {((c.group_ids?.length ?? 0) > 0 || (c.tags?.length ?? 0) > 0) && (
+                      <div className="scope-chips small" style={{ marginTop: 3 }}>
+                        {(c.group_ids ?? []).slice(0, 4).map((id) => (
+                          <span key={`g${id}`} className="tag" title={tr('所属凭据分组', 'Credential group')}>
+                            🔑 {groups.cgNames.get(id) ?? `#${id}`}
+                          </span>
+                        ))}
+                        {(c.group_ids?.length ?? 0) > 4 && <span className="faint">+{(c.group_ids?.length ?? 0) - 4}</span>}
+                        {(c.tags ?? []).map((tg) => (
+                          <span key={`t${tg}`} className="tag tag-soft" title={tr('标签', 'Tag')}>
+                            #{tg}
+                          </span>
                         ))}
                       </div>
                     )}
@@ -177,8 +206,22 @@ export function CredentialsPage() {
             </tbody>
           </table>
         )}
+        <PageNav page={page} pageSize={size} total={creds.data?.total ?? 0} onPage={setPage} onPageSize={(n) => (setSize(n), setPage(1))} />
       </Card>
 
+      {bulk && (
+        <BulkCredentialModal
+          action={bulk}
+          ids={sel.list()}
+          groups={groups.data?.credential_groups ?? []}
+          tagFacets={Object.keys(creds.data?.facets.tag ?? {})}
+          onClose={() => setBulk(null)}
+          onDone={async () => {
+            setBulk(null);
+            await reloadAll();
+          }}
+        />
+      )}
       {adding && (
         <AddCredentialModal
           onClose={() => setAdding(false)}
@@ -194,13 +237,12 @@ export function CredentialsPage() {
           quota={quotaById.get(current.id)}
           onClose={() => setSelected(null)}
           onChanged={async () => {
-            await creds.reload();
+            await reloadAll();
             await quota.reload();
-            await groups.reload();
           }}
           onDeleted={async () => {
             setSelected(null);
-            await creds.reload();
+            await reloadAll();
           }}
         />
       )}
@@ -208,7 +250,101 @@ export function CredentialsPage() {
   );
 }
 
-function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred: Credential; quota?: QuotaItem; onClose: () => void; onChanged: () => Promise<void>; onDeleted: () => Promise<void> }) {
+function BulkCredentialModal({
+  action,
+  ids,
+  groups,
+  tagFacets,
+  onClose,
+  onDone,
+}: {
+  action: 'add_to_group' | 'remove_from_group' | 'add_tags' | 'remove_tags';
+  ids: string[];
+  groups: CredentialGroupSummary[];
+  tagFacets: string[];
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast } = useUi();
+  const { busy, run } = useAction();
+  const [groupId, setGroupId] = useState(0);
+  const [tags, setTags] = useState('');
+  const isGroup = action.endsWith('group');
+  const titles: Record<typeof action, [string, string]> = {
+    add_to_group: [`将 ${ids.length} 个凭据加入分组`, `Add ${ids.length} credentials to a group`],
+    remove_from_group: [`将 ${ids.length} 个凭据移出分组`, `Remove ${ids.length} credentials from a group`],
+    add_tags: [`为 ${ids.length} 个凭据添加标签`, `Tag ${ids.length} credentials`],
+    remove_tags: [`从 ${ids.length} 个凭据移除标签`, `Untag ${ids.length} credentials`],
+  };
+  const tagList = tags.split(/[,，\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const valid = isGroup ? groupId > 0 : tagList.length > 0;
+  const apply = () =>
+    run('apply', async () => {
+      const r = await api.bulkCredentials(isGroup ? { ids, action, group_id: groupId } : { ids, action, tags: tagList });
+      if (r.result) {
+        toast(
+          action === 'add_to_group'
+            ? tr(`已加入 ${r.result.added} 个${r.result.unchanged ? `（${r.result.unchanged} 个原本就在组内）` : ''}`, `Added ${r.result.added}${r.result.unchanged ? ` (${r.result.unchanged} already in)` : ''}`)
+            : tr(`已移出 ${r.result.removed} 个（规则匹配的成员需修改规则）`, `Removed ${r.result.removed} (rule members follow the rule)`),
+        );
+      } else {
+        toast(tr(`已更新 ${r.updated ?? 0} 个`, `Updated ${r.updated ?? 0}`), r.failed?.length ? 'err' : 'ok');
+      }
+      await onDone();
+    });
+  const target = groups.find((g) => g.id === groupId);
+  return (
+    <Modal
+      title={tr(...titles[action])}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {tr('取消', 'Cancel')}
+          </button>
+          <button className="btn btn-primary" disabled={!valid || !!busy} onClick={() => void apply()} data-testid="bulk-apply">
+            {busy && <Spinner />}
+            {tr('应用', 'Apply')}
+          </button>
+        </>
+      }
+    >
+      {isGroup ? (
+        <div className="stack">
+          <select className="select" value={groupId} onChange={(e) => setGroupId(Number(e.target.value))} data-testid="bulk-group">
+            <option value={0}>{tr('选择凭据分组…', 'Choose a credential group…')}</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.channel_name} · {tr(`${g.total} 个成员`, `${g.total} members`)}
+              </option>
+            ))}
+          </select>
+          {target && target.keys > 0 && (
+            <div className="alert warn small">
+              {tr(`有 ${target.keys} 个访问密钥绑定此分组，变更会立即影响它们可使用的凭据（无回退）。`, `${target.keys} keys are bound to this group; the change affects them immediately (no fallback).`)}
+            </div>
+          )}
+          <p className="hint">{tr('在一个事务中完成；已在组内的凭据会被跳过。', 'Runs in one transaction; existing members are skipped.')}</p>
+        </div>
+      ) : (
+        <div className="field">
+          <label>{tr('标签（逗号分隔，小写）', 'Tags (comma separated)')}</label>
+          <input className="input" list="bulk-tags" value={tags} autoFocus onChange={(e) => setTags(e.target.value)} placeholder="vip, eu" data-testid="bulk-tags" />
+          <datalist id="bulk-tags">
+            {tagFacets.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
+          <span className="hint">{tr('标签可用于筛选，以及凭据分组的自动加入规则。', 'Tags drive filters and credential-group auto-join rules.')}</span>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred: CredentialSearchItem; quota?: QuotaItem; onClose: () => void; onChanged: () => Promise<void>; onDeleted: () => Promise<void> }) {
   const api = useApi();
   const { t, tr } = useI18n();
   const { toast, confirm } = useUi();
@@ -313,7 +449,7 @@ function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred
           <QuotaWindows item={quota} />
         </div>
 
-        <CredentialGroupsEditor credId={cred.id} onChanged={onChanged} />
+        <CredentialGroupsEditor cred={cred} onChanged={onChanged} />
 
         <div>
           <h3 style={{ marginBottom: 8 }}>{tr('路由设置', 'Routing settings')}</h3>
@@ -438,19 +574,26 @@ function ModelCooldownList({ cred }: { cred: Credential }) {
   );
 }
 
-function CredentialGroupsEditor({ credId, onChanged }: { credId: string; onChanged: () => Promise<void> }) {
+function CredentialGroupsEditor({ cred, onChanged }: { cred: CredentialSearchItem; onChanged: () => Promise<void> }) {
   const api = useApi();
   const { tr } = useI18n();
+  const { toast } = useUi();
   const { busy, run } = useAction();
   const groups = useGroupLookup();
   const d = groups.data;
+  const [value, setValue] = useState<number[]>(cred.group_ids ?? []);
+  useEffect(() => setValue(cred.group_ids ?? []), [cred.group_ids]);
   if (!d) return null;
-  const mine = d.credentialMembers.filter((m) => m.auth_id === credId);
-  const value = mine.map((m) => m.channel_group_id);
   const change = (next: number[]) =>
     run('groups', async () => {
-      for (const id of next.filter((x) => !value.includes(x))) await api.addCredentialGroupMember(id, credId);
-      for (const m of mine.filter((x) => !next.includes(x.channel_group_id))) await api.removeCredentialGroupMember(m.id);
+      let ruleKept = 0;
+      for (const id of next.filter((x) => !value.includes(x))) await api.bulkCredentialGroupMembers(id, { add: [cred.id] });
+      for (const id of value.filter((x) => !next.includes(x))) {
+        const r = await api.bulkCredentialGroupMembers(id, { remove: [cred.id] });
+        if (r.result.removed === 0) ruleKept++;
+      }
+      if (ruleKept) toast(tr('该凭据由分组规则自动加入，需修改规则才能移出。', 'This credential joined via a group rule; change the rule to remove it.'), 'err');
+      setValue(next);
       await groups.reload();
       await onChanged();
     });
@@ -459,10 +602,50 @@ function CredentialGroupsEditor({ credId, onChanged }: { credId: string; onChang
       <h3 style={{ marginBottom: 8 }}>
         {tr('凭据分组', 'Credential groups')} {busy === 'groups' && <Spinner />}
       </h3>
-      <GroupChecklist groups={d.credentialGroups.map((g) => ({ id: g.id, name: g.channel_name, enabled: g.enabled }))} value={value} onChange={(v) => void change(v)} />
+      <GroupChecklist
+        groups={d.credential_groups.map((g) => ({ id: g.id, name: g.channel_name, enabled: g.enabled, extra: g.has_rule ? tr('含规则', 'has rule') : undefined }))}
+        value={value}
+        onChange={(v) => void change(v)}
+      />
       <p className="hint" style={{ marginTop: 6 }}>
         {tr('绑定了凭据分组的访问密钥只会使用分组内的凭据。凭据可同时属于多个分组；不属于任何分组的凭据只服务未绑定分组的密钥。', 'Keys bound to credential groups only use members. A credential may be in several groups; ungrouped credentials only serve keys without groups.')}
       </p>
+      <TagsEditor cred={cred} onChanged={onChanged} />
+    </div>
+  );
+}
+
+function TagsEditor({ cred, onChanged }: { cred: CredentialSearchItem; onChanged: () => Promise<void> }) {
+  const api = useApi();
+  const { t, tr } = useI18n();
+  const { toast } = useUi();
+  const { busy, run } = useAction();
+  const [text, setText] = useState((cred.tags ?? []).join(', '));
+  useEffect(() => setText((cred.tags ?? []).join(', ')), [cred.tags]);
+  const tags = Array.from(new Set(text.split(/[,，\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))).sort();
+  const dirty = tags.join(',') !== (cred.tags ?? []).join(',');
+  return (
+    <div className="field" style={{ marginTop: 12 }} data-testid="cred-tags-editor">
+      <label>{tr('标签（逗号分隔）', 'Tags (comma separated)')}</label>
+      <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+        <input className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="vip, eu" data-testid="cred-tags-input" />
+        <button
+          className="btn"
+          disabled={!dirty || !!busy}
+          data-testid="cred-tags-save"
+          onClick={() =>
+            void run('tags', async () => {
+              await api.bulkCredentials({ ids: [cred.id], action: 'set_tags', tags });
+              toast(t('saved'));
+              await onChanged();
+            })
+          }
+        >
+          {busy === 'tags' && <Spinner />}
+          {t('save')}
+        </button>
+      </div>
+      <span className="hint">{tr('用于筛选与分组自动加入规则。', 'Used by filters and group auto-join rules.')}</span>
     </div>
   );
 }

@@ -266,3 +266,34 @@ describe('credential groups', () => {
     expect(keyScopeSummary({ channels: [7, 99], model_groups: [3] }, cg, mg)).toEqual({ credentials: ['svc-a', '#99'], models: ['flash-only'] });
   });
 });
+
+describe('group rules helpers', () => {
+  it('cleanRule drops empty fields and lower-cases tags', async () => {
+    const { cleanRule } = await import('./client');
+    expect(cleanRule({ providers: [' ', 'antigravity'], email_pattern: ' *@corp.com ', tags_any: ['VIP', ''], min_priority: Number.NaN })).toEqual({
+      providers: ['antigravity'],
+      email_pattern: '*@corp.com',
+      tags_any: ['vip'],
+    });
+    expect(cleanRule({})).toEqual({});
+  });
+  it('describeRule explains conditions', async () => {
+    const { describeRule } = await import('./client');
+    const tr = (zh: string) => zh;
+    expect(describeRule({ email_pattern: '*@corp.com', min_priority: 2 }, tr)).toBe('邮箱匹配 *@corp.com 且 优先级 ≥ 2');
+    expect(describeRule({}, tr)).toContain('空规则');
+  });
+  it('search/bulk endpoints hit the right paths', async () => {
+    const { ApiClient } = await import('./client');
+    const calls: string[] = [];
+    const api = new ApiClient('k', { fetch: async (url, init) => (calls.push(`${init?.method} ${String(url)}`), new Response('{"ids":[],"total":0}')) });
+    await api.credentialIds({ domain: 'corp.com', group: 'none' });
+    await api.bulkCredentialGroupMembers(3, { add: ['a'] });
+    await api.bulkAccessKeys({ ids: [1], add_channels: [2] });
+    expect(calls).toEqual([
+      'GET /v8/management/credentials/search?domain=corp.com&group=none&ids_only=1',
+      'POST /v8/management/channel-groups/3/members/bulk',
+      'POST /v8/management/access/api-keys/bulk',
+    ]);
+  });
+});

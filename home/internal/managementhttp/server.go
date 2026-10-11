@@ -60,6 +60,16 @@ func (r *RouteRegistry) Set(method, path string, handler gin.HandlerFunc) {
 	if method == "" || path == "" {
 		return
 	}
+	if method != http.MethodGet && method != http.MethodHead {
+		inner := handler
+		handler = func(c *gin.Context) {
+			inner(c)
+			// Group / key / rule / credential writes change dispatch scopes.
+			if c.Writer.Status() < http.StatusBadRequest {
+				cluster.InvalidateScopeCaches()
+			}
+		}
+	}
 	r.routes[RouteKey{Method: method, Path: path}] = handler
 }
 
@@ -267,6 +277,20 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodDelete, "/users/:id", handler.DeleteUser)
 	r.Set(http.MethodGet, "/users/:id/period-limits", handler.GetUserPeriodLimits)
 	r.Set(http.MethodPost, "/users/:id/period-limits/reset", handler.ResetUserPeriodLimits)
+	r.Set(http.MethodGet, "/credentials/search", handler.SearchCredentials)
+	r.Set(http.MethodPost, "/credentials/bulk", handler.BulkCredentials)
+	r.Set(http.MethodGet, "/groups/summary", handler.GroupsSummary)
+	r.Set(http.MethodGet, "/groups/export", handler.ExportGroups)
+	r.Set(http.MethodPost, "/groups/import", handler.ImportGroups)
+	r.Set(http.MethodPost, "/group-rules/preview", handler.PreviewGroupRule)
+	r.Set(http.MethodGet, "/channel-groups/:id/members", handler.ChannelGroupMembers)
+	r.Set(http.MethodPost, "/channel-groups/:id/members/bulk", handler.BulkChannelGroupMembers)
+	r.Set(http.MethodGet, "/channel-groups/:id/rule", handler.GetChannelGroupRule)
+	r.Set(http.MethodPut, "/channel-groups/:id/rule", handler.PutChannelGroupRule)
+	r.Set(http.MethodDelete, "/channel-groups/:id/rule", handler.PutChannelGroupRule)
+	r.Set(http.MethodPost, "/model-groups/:id/members/bulk", handler.BulkModelGroupMembers)
+	r.Set(http.MethodGet, "/api-keys/search", handler.SearchAPIKeys)
+	r.Set(http.MethodPost, "/api-keys/bulk", handler.BulkAPIKeys)
 	r.Set(http.MethodGet, "/channel-groups", handler.ListChannelGroups)
 	r.Set(http.MethodPost, "/channel-groups", handler.CreateChannelGroup)
 	r.Set(http.MethodGet, "/channel-groups/:id", handler.GetChannelGroup)
