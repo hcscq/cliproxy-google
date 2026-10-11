@@ -1045,7 +1045,18 @@ func (c *Client) switchToNextNodeLocked() (bool, string) {
 	if strings.TrimSpace(c.seedHost) != "" && c.seedPort > 0 {
 		candidates = append(candidates, clusterNode{IP: c.seedHost, Port: c.seedPort})
 	}
-	for _, node := range candidates {
+	// Round-robin from the node after the current one. Always taking the
+	// first non-current candidate made two dead entries at the head of the
+	// list ping-pong forever, never reaching live Homes or the seed address.
+	start := 0
+	for i, node := range candidates {
+		if strings.TrimSpace(node.IP) == currentHost && node.Port == currentPort {
+			start = i + 1
+			break
+		}
+	}
+	for k := 0; k < len(candidates); k++ {
+		node := candidates[(start+k)%len(candidates)]
 		host := strings.TrimSpace(node.IP)
 		if host == "" || node.Port <= 0 {
 			continue

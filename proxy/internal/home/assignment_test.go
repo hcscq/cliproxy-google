@@ -67,3 +67,24 @@ func TestClusterPushTriggersMoveOnlyWhenNeeded(t *testing.T) {
 		t.Fatal("no assignment must never move")
 	}
 }
+
+// Regression (rollout 2026-10-11): two dead Homes at the head of the list made
+// failover alternate between them forever.
+func TestFailoverWalksAllNodesThenSeed(t *testing.T) {
+	c := New(config.HomeConfig{Host: "seed.svc", Port: 8327})
+	c.clusterNodes = []clusterNode{{IP: "dead1", Port: 8327}, {IP: "dead2", Port: 8327}, {IP: "live1", Port: 8327}}
+	c.homeCfg.Host, c.homeCfg.Port = "dead1", 8327
+	var visited []string
+	for i := 0; i < 4; i++ {
+		c.mu.Lock()
+		_, addr := c.switchToNextNodeLocked()
+		c.mu.Unlock()
+		visited = append(visited, addr)
+	}
+	want := []string{"dead2:8327", "live1:8327", "seed.svc:8327", "dead1:8327"}
+	for i := range want {
+		if visited[i] != want[i] {
+			t.Fatalf("failover order %v, want %v", visited, want)
+		}
+	}
+}
