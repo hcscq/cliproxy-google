@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -12,6 +13,9 @@ import (
 type UsagePayloadItem struct {
 	Payload  string
 	Metadata UsageRuntimeMetadata
+	// Redelivered marks a Redis stream entry that may already be stored (it was
+	// read before but not acknowledged); it is skipped when its stream id exists.
+	Redelivered bool
 }
 
 // AppendUsageBatch stores many usage payloads with one transaction for the
@@ -68,6 +72,9 @@ func (r *Repository) AppendUsageBatch(ctx context.Context, items []UsagePayloadI
 		if q.found {
 			record.QuotaCredentialID, record.QuotaIdentityVersion, record.QuotaIdentityKey = q.uuid, q.version, q.key
 		}
+		if it.Redelivered && record.StreamID != "" && usageStreamEntryStored(ctx, db, record) {
+			continue
+		}
 		rows = append(rows, built{record: record, payload: it.Payload, metadata: it.Metadata})
 	}
 	if len(rows) == 0 {
@@ -121,4 +128,21 @@ func (r *Repository) AppendUsageBatch(ctx context.Context, items []UsagePayloadI
 		}
 	}
 	return stored, nil
+}
+
+// usageStreamEntryStored reports whether a row for this stream entry already
+// exists. The lookup is bounded to the record's own timestamp so it prunes to
+// one partition and uses the timestamp index (no index on stream_id needed).
+// On a lookup error it reports false: a rare duplicate beats a lost row.
+func usageStreamEntryStored(ctx context.Context, db *gorm.DB, record *UsageRecord) bool {
+	var n int64
+	err := db.WithContext(ctx).Model(&UsageRecord{}).
+		Where("timestamp >= ? AND timestamp <= ? AND stream_id = ?",
+			record.Timestamp.Add(-time.Millisecond), record.Timestamp.Add(time.Millisecond), record.StreamID).
+		Limit(1).Count(&n).Error
+	if err != nil {
+		log.WithError(err).Warn("usage stream dedupe lookup failed")
+		return false
+	}
+	return n > 0
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/redisx"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -161,6 +162,44 @@ func (r *Runtime) startClusterUsageWriter(ctx context.Context) {
 		defer close(done)
 		r.runClusterUsageWriter(ctx, store, queue)
 	}()
+	r.startUsageStream(ctx)
+}
+
+// startUsageStream enables Redis-stream ingestion of usage (HOME_USAGE_STREAM=1)
+// when Redis is configured; otherwise usage keeps the in-memory queue path.
+func (r *Runtime) startUsageStream(ctx context.Context) {
+	if !usageStreamEnabled() {
+		return
+	}
+	rc := redisx.Default()
+	itemsStore, ok := r.clusterAdapter.(usageItemsStore)
+	if rc == nil || !ok {
+		log.Warn("usage stream requested but Redis or the batch store is unavailable; using the in-memory queue")
+		return
+	}
+	st := newUsageStream(rc, itemsStore, "")
+	r.clusterUsageQueueMu.Lock()
+	r.usageStream = st
+	r.clusterUsageQueueMu.Unlock()
+	go st.Run(ctx)
+	log.Infof("usage stream enabled (consumer %s, maxlen %d)", st.consumer, st.maxLen)
+}
+
+func (r *Runtime) getUsageStream() *usageStream {
+	if r == nil {
+		return nil
+	}
+	r.clusterUsageQueueMu.Lock()
+	defer r.clusterUsageQueueMu.Unlock()
+	return r.usageStream
+}
+
+// UsageStreamStatus reports the usage stream for the panel (Enabled=false when off).
+func (r *Runtime) UsageStreamStatus(ctx context.Context) UsageStreamStatus {
+	if st := r.getUsageStream(); st != nil {
+		return st.Status(ctx)
+	}
+	return UsageStreamStatus{}
 }
 
 func (r *Runtime) stopClusterUsageWriter() {
@@ -173,6 +212,7 @@ func (r *Runtime) stopClusterUsageWriter() {
 	done := r.clusterUsageDone
 	r.clusterUsageQueue = nil
 	r.clusterUsageDone = nil
+	r.usageStream = nil
 	r.clusterUsageQueueMu.Unlock()
 	if queue != nil {
 		queue.Close()

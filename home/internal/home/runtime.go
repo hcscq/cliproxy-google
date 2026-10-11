@@ -65,6 +65,7 @@ type Runtime struct {
 
 	clusterUsageQueueMu sync.Mutex
 	clusterUsageQueue   *usagePayloadQueue
+	usageStream         *usageStream
 	clusterUsageDone    chan struct{}
 
 	cancel context.CancelFunc
@@ -538,6 +539,9 @@ func (r *Runtime) RefreshClusterAuthIndex(ctx context.Context, uuid string) erro
 func (r *Runtime) PersistClusterUsagePayload(ctx context.Context, payload string, receivedAt time.Time) (bool, error) {
 	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
 		return false, nil
+	}
+	if st := r.getUsageStream(); st != nil && st.Append(ctx, payload, receivedAt) {
+		return true, nil
 	}
 	queue := r.getClusterUsageQueue()
 	if queue == nil {

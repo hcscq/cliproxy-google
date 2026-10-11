@@ -161,6 +161,23 @@ func (a *RuntimeAdapter) StoreUsagePayloads(ctx context.Context, payloads []stri
 	return a.repo.AppendUsageBatch(ctx, items)
 }
 
+// StoreUsageStreamItems stores usage items that carry their own receive time and
+// stream id; this Home's address is filled in.
+func (a *RuntimeAdapter) StoreUsageStreamItems(ctx context.Context, payloads []string, receivedAt []time.Time, streamIDs []string, redelivered bool) (int, error) {
+	if !a.Enabled() {
+		return 0, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	a.mu.RLock()
+	homeIP, homePort := a.homeIP, a.homePort
+	a.mu.RUnlock()
+	items := make([]UsagePayloadItem, len(payloads))
+	for i := range payloads {
+		items[i] = UsagePayloadItem{Payload: payloads[i], Redelivered: redelivered, Metadata: UsageRuntimeMetadata{
+			HomeIP: homeIP, HomePort: homePort, ReceivedAt: receivedAt[i], StreamID: streamIDs[i]}}
+	}
+	return a.repo.AppendUsageBatch(ctx, items)
+}
+
 // StoreAppLogPayload stores a CPA app log payload.
 func (a *RuntimeAdapter) StoreAppLogPayload(ctx context.Context, clientIP string, payload string) error {
 	if !a.Enabled() {
