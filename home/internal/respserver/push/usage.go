@@ -28,9 +28,11 @@ var (
 	usageLogSanitizedStates = make(map[string]usageLogFileState)
 )
 
-// handleUsage handles an usage.
+// handleUsage handles LPUSH usage <payload> [<payload> ...]. Proxies batch
+// usage records; in a batch an invalid payload is skipped (logged) so it
+// cannot make the proxy resend the whole batch forever.
 func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
-	if len(args) != 3 {
+	if len(args) < 3 {
 		return dispatch.Err("wrong number of arguments for 'lprush' command")
 	}
 
@@ -38,19 +40,36 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 		return dispatch.Err("unsupported key")
 	}
 	receivedAt := time.Now().UTC()
+	single := len(args) == 3
+	for _, raw := range args[2:] {
+		if errReply, failed := handleUsagePayload(ctx, env, raw, receivedAt); failed {
+			if single {
+				return errReply
+			}
+			log.Warnf("usage batch: skipped one payload: %v", errReply)
+		}
+	}
 
-	payload := strings.TrimSpace(args[2])
+	// Redis' LPUSH returns the length of the list after the push (integer reply).
+	// CPA forwards usage via go-redis LPush which expects an integer, not "+OK".
+	// This server doesn't maintain a real list, so always return a stable
+	// integer reply and avoid client retries.
+	return dispatch.Integer(int64(len(args) - 2))
+}
+
+func handleUsagePayload(ctx context.Context, env dispatch.Env, raw string, receivedAt time.Time) (dispatch.Reply, bool) {
+	payload := strings.TrimSpace(raw)
 	if payload == "" || !gjson.Valid(payload) {
-		return dispatch.Err("invalid usage json")
+		return dispatch.Err("invalid usage json"), true
 	}
 	sanitizedPayload, errSanitize := cluster.SanitizeUsagePayloadSecrets(payload)
 	if errSanitize != nil {
-		return dispatch.Err("invalid usage json")
+		return dispatch.Err("invalid usage json"), true
 	}
 	payload = sanitizedPayload
 	enrichedPayload, errEnrich := usagePayloadWithCPAIdentity(payload, env)
 	if errEnrich != nil {
-		return dispatch.Err("invalid usage json")
+		return dispatch.Err("invalid usage json"), true
 	}
 	payload = enrichedPayload
 
@@ -62,20 +81,15 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 			log.Errorf("usage database write error: %v", errPersist)
 		}
 		if persisted {
-			return dispatch.Integer(1)
+			return dispatch.Reply{}, false
 		}
 	}
 
 	if errAppend := appendUsageLog(payload); errAppend != nil {
 		log.Errorf("usage log write error: %v", errAppend)
-		return dispatch.Err("usage log write failed")
+		return dispatch.Err("usage log write failed"), true
 	}
-
-	// Redis' LPUSH returns the length of the list after the push (integer reply).
-	// CPA forwards usage via go-redis LPush which expects an integer, not "+OK".
-	// This server doesn't maintain a real list, so always return 1 as a stable
-	// integer reply and avoid client retries.
-	return dispatch.Integer(1)
+	return dispatch.Reply{}, false
 }
 
 func usagePayloadWithCPAIdentity(payload string, env dispatch.Env) (string, error) {

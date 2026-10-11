@@ -324,6 +324,9 @@ func logHomeConfigChanges(oldCfg, newCfg *config.Config) {
 	}
 }
 
+// usageForwardBatch is how many usage records go in one LPUSH to Home.
+const usageForwardBatch = 128
+
 func (s *Service) startHomeUsageForwarder(ctx context.Context, client *home.Client) {
 	if s == nil || client == nil {
 		return
@@ -347,6 +350,7 @@ func (s *Service) startHomeUsageForwarder(ctx context.Context, client *home.Clie
 	}
 
 	go func() {
+		batchUnsupported := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -361,23 +365,41 @@ func (s *Service) startHomeUsageForwarder(ctx context.Context, client *home.Clie
 				continue
 			}
 
-			items := redisqueue.PopOldest(64)
+			items := redisqueue.PopOldest(usageForwardBatch)
 			if len(items) == 0 {
-				if !sleep(500 * time.Millisecond) {
+				if !sleep(200 * time.Millisecond) {
 					return
 				}
 				continue
 			}
 
-			for i := range items {
-				if errPush := client.LPushUsage(ctx, items[i]); errPush != nil {
-					for j := i; j < len(items); j++ {
-						redisqueue.Enqueue(items[j])
+			sent := 0
+			var errPush error
+			if !batchUnsupported {
+				pushCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				errPush = client.LPushUsageBatch(pushCtx, items)
+				cancel()
+				if errPush == nil {
+					sent = len(items)
+				} else if home.IsUsageBatchUnsupported(errPush) {
+					batchUnsupported = true // older Home: one value per LPUSH
+					errPush = nil
+				}
+			}
+			if batchUnsupported {
+				for sent < len(items) {
+					if errPush = client.LPushUsage(ctx, items[sent]); errPush != nil {
+						break
 					}
-					if !sleep(time.Second) {
-						return
-					}
-					break
+					sent++
+				}
+			}
+			if sent < len(items) {
+				// Undelivered (or unknown: the reply was lost) - resend first.
+				// A record Home did store is dropped there by its usage_id.
+				redisqueue.RequeueFront(items[sent:])
+				if !sleep(time.Second) {
+					return
 				}
 			}
 		}

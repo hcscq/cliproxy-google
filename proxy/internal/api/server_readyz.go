@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -37,12 +38,12 @@ func (s *Server) readyzHandler(c *gin.Context) {
 			c.Status(http.StatusServiceUnavailable)
 			return
 		}
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "reason": reason})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "reason": reason, "usage_queue": redisqueue.UsageStats(), "held_requests": homeHoldWaiting.Load()})
 		return
 	}
 	if c.Request.Method == http.MethodHead {
 		c.Status(http.StatusOK)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	c.JSON(http.StatusOK, gin.H{"status": "ready", "usage_queue": redisqueue.UsageStats(), "held_requests": homeHoldWaiting.Load()})
 }

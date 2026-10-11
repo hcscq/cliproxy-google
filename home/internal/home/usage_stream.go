@@ -34,6 +34,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/redisx"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -70,6 +71,7 @@ type UsageStreamStatus struct {
 	Flushed     int64     `json:"flushed"`       // rows written by this Home
 	Fallback    int64     `json:"fallback"`      // payloads sent to the in-memory path
 	Redelivered int64     `json:"redelivered"`   // entries re-read or claimed
+	Deduped     int64     `json:"deduped"`       // resent payloads dropped as duplicates (usage_id seen)
 	LastFlushAt time.Time `json:"last_flush_at"` // zero: never
 	LastError   string    `json:"last_error,omitempty"`
 	MaxLen      int64     `json:"max_len"`
@@ -90,10 +92,10 @@ type usageStream struct {
 	closed       bool
 	appenderDone chan struct{}
 
-	appended, flushed, fallback, redelivered atomic.Int64
-	lastFlush                                atomic.Int64
-	mu                                       sync.Mutex
-	lastErr                                  string
+	appended, flushed, fallback, redelivered, deduped atomic.Int64
+	lastFlush                                         atomic.Int64
+	mu                                                sync.Mutex
+	lastErr                                           string
 }
 
 func usageStreamEnabled() bool {
@@ -186,23 +188,56 @@ func (s *usageStream) runAppender() {
 	}
 }
 
+// usageStreamAddOnce adds an entry unless its usage id was already seen:
+// proxies resend a batch whose LPUSH reply was lost, so the "seen" marker and
+// the XADD must be atomic (a marker without the entry would lose the resend).
+const usageStreamAddOnce = `
+if redis.call('SET', KEYS[2], '1', 'NX', 'EX', ARGV[4]) then
+  redis.call('XADD', KEYS[1], 'MAXLEN', '~', ARGV[1], '*', 'p', ARGV[2], 't', ARGV[3])
+  return 1
+end
+return 0`
+
+func usageDedupeTTL() time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv("HOME_USAGE_DEDUPE_TTL"))); err == nil && d > 0 {
+		return d
+	}
+	return 15 * time.Minute
+}
+
 func (s *usageStream) xaddBatch(batch []streamItem) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	ttl := strconv.FormatInt(int64(usageDedupeTTL()/time.Second), 10)
+	maxLen := strconv.FormatInt(s.maxLen, 10)
 	pipe := s.rc.Bulk().Pipeline()
-	cmds := make([]*redis.StringCmd, len(batch))
+	cmds := make([]redis.Cmder, len(batch))
 	for i, it := range batch {
+		t := strconv.FormatInt(it.receivedAt.UnixNano(), 10)
+		if id := gjson.Get(it.payload, "usage_id").String(); id != "" {
+			cmds[i] = pipe.Eval(ctx, usageStreamAddOnce, []string{s.key(), s.key() + ":seen:" + id}, maxLen, it.payload, t, ttl)
+			continue
+		}
 		cmds[i] = pipe.XAdd(ctx, &redis.XAddArgs{
 			Stream: s.key(),
 			MaxLen: s.maxLen,
 			Approx: true,
-			Values: []any{"p", it.payload, "t", strconv.FormatInt(it.receivedAt.UnixNano(), 10)},
+			Values: []any{"p", it.payload, "t", t},
 		})
 	}
 	_, err := pipe.Exec(ctx)
+	if err != nil && errors.Is(err, redis.Nil) {
+		err = nil
+	}
 	s.rc.Observe(err)
 	for i, c := range cmds {
 		if c.Err() == nil {
+			if ic, ok := c.(*redis.Cmd); ok {
+				if n, _ := ic.Int64(); n == 0 {
+					s.deduped.Add(1)
+					continue
+				}
+			}
 			s.appended.Add(1)
 			continue
 		}
@@ -444,7 +479,7 @@ func (s *usageStream) flush(ctx context.Context, msgs []redis.XMessage, redelive
 func (s *usageStream) Status(ctx context.Context) UsageStreamStatus {
 	st := UsageStreamStatus{Enabled: true, Consumer: s.consumer, MaxLen: s.maxLen,
 		Appended: s.appended.Load(), Flushed: s.flushed.Load(), Fallback: s.fallback.Load(),
-		Redelivered: s.redelivered.Load()}
+		Redelivered: s.redelivered.Load(), Deduped: s.deduped.Load()}
 	if ns := s.lastFlush.Load(); ns > 0 {
 		st.LastFlushAt = time.Unix(0, ns).UTC()
 	}

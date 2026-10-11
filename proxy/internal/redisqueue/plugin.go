@@ -145,6 +145,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		APIKey:              apiKey,
 		RequestID:           requestID,
 		ExecutionID:         executionID,
+		UsageID:             uuid.NewString(),
 		TraceID:             traceID,
 		SessionID:           sessionID,
 		ParentSessionID:     parentSessionID,
@@ -177,6 +178,7 @@ type queuedUsageDetail struct {
 	APIKey              string                   `json:"api_key"`
 	RequestID           string                   `json:"request_id"`
 	ExecutionID         string                   `json:"execution_id,omitempty"`
+	UsageID             string                   `json:"usage_id,omitempty"` // unique per record: Home dedupes resends
 	TraceID             string                   `json:"trace_id,omitempty"`
 	SessionID           string                   `json:"session_id,omitempty"`
 	ParentSessionID     string                   `json:"parent_session_id,omitempty"`

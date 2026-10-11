@@ -1,13 +1,18 @@
 package redisqueue
 
 import (
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const (
-	defaultRetentionSeconds int64 = 60
+	defaultRetentionSeconds int64 = 600 // keep unsent usage through a long Home/PG outage
 	maxRetentionSeconds     int64 = 3600
 	usageSubscriberBuffer         = 256
 	errorSubscriberBuffer         = 256
@@ -25,6 +30,7 @@ type queue struct {
 	mu               sync.Mutex
 	items            []queueItem
 	head             int
+	bytes            int64 // payload bytes in items[head:]
 	subscribers      map[uint64]chan []byte
 	nextSubscriberID uint64
 }
@@ -36,8 +42,65 @@ var (
 	errorGlobal      queue
 )
 
+// Bounds on unsent usage (oldest dropped first, counted in Dropped):
+// PROXY_USAGE_QUEUE_MAX entries, PROXY_USAGE_QUEUE_MAX_BYTES payload bytes.
+var (
+	maxQueueItems = envInt64("PROXY_USAGE_QUEUE_MAX", 100000)
+	maxQueueBytes = envInt64("PROXY_USAGE_QUEUE_MAX_BYTES", 128<<20)
+	droppedAge    atomic.Int64
+	droppedFull   atomic.Int64
+	lastDropLogNS atomic.Int64
+)
+
+func envInt64(name string, def int64) int64 {
+	if v, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(name)), 10, 64); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
+// Stats is the unsent usage queue state.
+type Stats struct {
+	Queued      int   `json:"queued"`
+	Bytes       int64 `json:"bytes"`
+	DroppedAge  int64 `json:"dropped_age"`  // older than the retention window
+	DroppedFull int64 `json:"dropped_full"` // count / byte bound reached
+}
+
+// UsageStats reports the unsent usage queue.
+func UsageStats() Stats {
+	global.mu.Lock()
+	defer global.mu.Unlock()
+	return Stats{Queued: len(global.items) - global.head, Bytes: global.bytes,
+		DroppedAge: droppedAge.Load(), DroppedFull: droppedFull.Load()}
+}
+
+func noteDropped(counter *atomic.Int64, n int, why string) {
+	if n <= 0 {
+		return
+	}
+	total := counter.Add(int64(n))
+	now := time.Now().UnixNano()
+	if last := lastDropLogNS.Load(); now-last > int64(10*time.Second) && lastDropLogNS.CompareAndSwap(last, now) {
+		log.Warnf("usage queue: dropped %d unsent usage records (%s; total %d)", n, why, total)
+	}
+}
+
 func init() {
-	retentionSeconds.Store(defaultRetentionSeconds)
+	if v := envInt64("PROXY_USAGE_RETENTION_SECONDS", 0); v > 0 {
+		retentionSeconds.Store(min(v, maxRetentionSeconds))
+	} else {
+		retentionSeconds.Store(defaultRetentionSeconds)
+	}
+}
+
+// RequeueFront puts payloads that could not be delivered back at the head of
+// the queue in their original order, so they are resent first.
+func RequeueFront(payloads [][]byte) {
+	if !Enabled() || len(payloads) == 0 {
+		return
+	}
+	global.requeueFront(payloads)
 }
 
 func SetEnabled(value bool) {
@@ -58,6 +121,9 @@ func SetRetentionSeconds(value int) {
 		normalized = defaultRetentionSeconds
 	} else if normalized > maxRetentionSeconds {
 		normalized = maxRetentionSeconds
+	}
+	if env := envInt64("PROXY_USAGE_RETENTION_SECONDS", 0); env > normalized {
+		normalized = min(env, maxRetentionSeconds)
 	}
 	retentionSeconds.Store(normalized)
 }
@@ -116,6 +182,7 @@ func (q *queue) clear() {
 	}
 	q.items = nil
 	q.head = 0
+	q.bytes = 0
 	q.subscribers = nil
 	q.mu.Unlock()
 
@@ -135,7 +202,36 @@ func (q *queue) enqueue(payload []byte) {
 		enqueuedAt: now,
 		payload:    append([]byte(nil), payload...),
 	})
+	q.bytes += int64(len(payload))
+	q.enforceBoundsLocked()
 	q.maybeCompactLocked()
+}
+
+// requeueFront re-inserts undelivered payloads at the head. Their age restarts
+// (the original enqueue time is not tracked past PopOldest); bounds still apply.
+func (q *queue) requeueFront(payloads [][]byte) {
+	now := time.Now()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	front := make([]queueItem, len(payloads))
+	for i, p := range payloads {
+		front[i] = queueItem{enqueuedAt: now, payload: p}
+		q.bytes += int64(len(p))
+	}
+	q.items = append(front, q.items[q.head:]...)
+	q.head = 0
+	q.enforceBoundsLocked()
+}
+
+func (q *queue) enforceBoundsLocked() {
+	dropped := 0
+	for q.head < len(q.items) && (int64(len(q.items)-q.head) > maxQueueItems || q.bytes > maxQueueBytes) {
+		q.bytes -= int64(len(q.items[q.head].payload))
+		q.items[q.head] = queueItem{}
+		q.head++
+		dropped++
+	}
+	noteDropped(&droppedFull, dropped, "queue bound reached")
 }
 
 func (q *queue) publishToSubscribers(payload []byte) bool {
@@ -217,6 +313,8 @@ func (q *queue) popOldest(count int) [][]byte {
 	for i := 0; i < count; i++ {
 		item := q.items[q.head+i]
 		out = append(out, item.payload)
+		q.bytes -= int64(len(item.payload))
+		q.items[q.head+i] = queueItem{}
 	}
 	q.head += count
 	q.maybeCompactLocked()
@@ -227,6 +325,7 @@ func (q *queue) pruneLocked(now time.Time) {
 	if q.head >= len(q.items) {
 		q.items = nil
 		q.head = 0
+		q.bytes = 0
 		return
 	}
 
@@ -235,9 +334,14 @@ func (q *queue) pruneLocked(now time.Time) {
 		windowSeconds = defaultRetentionSeconds
 	}
 	cutoff := now.Add(-time.Duration(windowSeconds) * time.Second)
+	dropped := 0
 	for q.head < len(q.items) && q.items[q.head].enqueuedAt.Before(cutoff) {
+		q.bytes -= int64(len(q.items[q.head].payload))
+		q.items[q.head] = queueItem{}
 		q.head++
+		dropped++
 	}
+	noteDropped(&droppedAge, dropped, "older than retention")
 }
 
 func (q *queue) maybeCompactLocked() {

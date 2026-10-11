@@ -1617,6 +1617,28 @@ func (c *Client) LPushUsage(ctx context.Context, payload []byte) error {
 	return cmd.LPush(ctx, redisKeyUsage, payload).Err()
 }
 
+// LPushUsageBatch sends several usage payloads in one LPUSH. Homes before
+// batching reject more than one value; IsUsageBatchUnsupported detects that.
+func (c *Client) LPushUsageBatch(ctx context.Context, payloads [][]byte) error {
+	cmd, errClient := c.commandClient()
+	if errClient != nil {
+		return errClient
+	}
+	if len(payloads) == 0 {
+		return nil
+	}
+	values := make([]any, len(payloads))
+	for i, p := range payloads {
+		values[i] = p
+	}
+	return cmd.LPush(ctx, redisKeyUsage, values...).Err()
+}
+
+// IsUsageBatchUnsupported reports an old Home's reply to a multi-value LPUSH.
+func IsUsageBatchUnsupported(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "wrong number of arguments")
+}
+
 // LPushInFlightSnapshot publishes a bounded in-flight observation frame.
 func (c *Client) LPushInFlightSnapshot(ctx context.Context, payload []byte) error {
 	cmd, errClient := c.commandClient()
