@@ -59,13 +59,21 @@ func (r *Repository) EnsureClusterCertificates(ctx context.Context, ip string) (
 		return nil, errColumn
 	}
 
-	ca, errCA := r.ensureCARecord(ctx, db)
-	if errCA != nil {
-		return nil, errCA
-	}
-	server, errServer := r.ensureServerCertificateRecord(ctx, db, ca, ip)
-	if errServer != nil {
-		return nil, errServer
+	var ca, server *CertificateRecord
+	// Homes that start together on an empty database must agree on one CA (and
+	// one server certificate per IP); otherwise enrolled proxies only trust some
+	// of them. Serialise bootstrap with a transaction-scoped advisory lock.
+	errBootstrap := withCertificateBootstrapLock(ctx, db, func(tx *gorm.DB) error {
+		var errCA error
+		if ca, errCA = r.ensureCARecord(ctx, tx); errCA != nil {
+			return errCA
+		}
+		var errServer error
+		server, errServer = r.ensureServerCertificateRecord(ctx, tx, ca, ip)
+		return errServer
+	})
+	if errBootstrap != nil {
+		return nil, errBootstrap
 	}
 	tlsConfig, errTLS := tlsConfigFromCertificateRecords(ca, server)
 	if errTLS != nil {
@@ -93,7 +101,12 @@ func (r *Repository) CreatePendingClientCertificate(ctx context.Context, nodeNam
 		return "", "", errNodeName
 	}
 	ctx = contextOrBackground(ctx)
-	ca, errCA := r.ensureCARecord(ctx, db)
+	var ca *CertificateRecord
+	errCA := withCertificateBootstrapLock(ctx, db, func(tx *gorm.DB) error {
+		var errEnsure error
+		ca, errEnsure = r.ensureCARecord(ctx, tx)
+		return errEnsure
+	})
 	if errCA != nil {
 		return "", "", errCA
 	}
@@ -523,6 +536,21 @@ func hasExtKeyUsage(cert *x509.Certificate, usage x509.ExtKeyUsage) bool {
 		}
 	}
 	return false
+}
+
+// certificateBootstrapLockKey is an arbitrary constant advisory-lock key.
+const certificateBootstrapLockKey int64 = 0x63706163 // "cpac"
+
+func withCertificateBootstrapLock(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) error) error {
+	if db.Dialector == nil || db.Dialector.Name() != "postgres" {
+		return fn(db)
+	}
+	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", certificateBootstrapLockKey).Error; err != nil {
+			return err
+		}
+		return fn(tx)
+	})
 }
 
 func firstCARecord(ctx context.Context, db *gorm.DB) (*CertificateRecord, error) {
