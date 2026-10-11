@@ -273,3 +273,33 @@ a.list-row { text-decoration: none; color: inherit; }
 .btn-link { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-align: left; }
 .btn-link:hover { text-decoration: underline; }
 tr.row-muted td { opacity: .62; }
+/* model health: compact rows */
+.mh-table td { vertical-align: middle; height: 44px; padding-top: 6px; padding-bottom: 6px; }
+.mh-table .mh-model { max-width: 300px; white-space: nowrap; }
+.mh-table .mh-model > .btn-link { display: inline-block; max-width: 220px; vertical-align: middle; }
+.mh-table .mh-status { max-width: 320px; white-space: nowrap; }
+.mh-table .mh-status .ellipsis { display: inline-block; max-width: 230px; vertical-align: middle; margin-left: 6px; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.right { text-align: right; }
+.chips { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
+.chip { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; font-size: 11px; font-weight: 600; cursor: help; background: var(--bg-sunken); color: var(--text-2); border: 1px solid var(--border); }
+.chip-stream { background: var(--info-soft); color: var(--primary); }
+.chip-leaving { background: var(--warn-soft); color: var(--warn); }
+.chip-switch { background: var(--err-soft); color: var(--err); }
+.chip-hidden { background: var(--bg-sunken); color: var(--text-3); }
+.ok-text { color: var(--ok); } .warn-text { color: var(--warn); } .err-text { color: var(--err); }
+.cred-sum { display: inline-flex; align-items: center; gap: 8px; cursor: help; font-variant-numeric: tabular-nums; }
+.mini-bars { display: inline-flex; flex-direction: column; gap: 2px; }
+.mini-bar { display: inline-block; width: 46px; height: 4px; border-radius: 2px; background: var(--bg-sunken); overflow: hidden; vertical-align: middle; }
+.mini-bar > span { display: block; height: 100%; background: var(--ok); }
+.mini-bar.cooling > span { background: var(--warn); } .mini-bar.error > span { background: var(--err); }
+.info-bar { background: var(--info-soft); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+.info-bar .info-body { margin-top: 8px; color: var(--text-2); }
+.info-bar .info-body p { margin: 0 0 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 720px) {
+  .mh-table .mh-model > .btn-link { max-width: 150px; }
+  .mh-table .mh-status .ellipsis { display: none; }
+  .mh-table .mh-model { max-width: 190px; }
+}

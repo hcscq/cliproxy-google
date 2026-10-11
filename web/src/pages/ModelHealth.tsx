@@ -35,6 +35,82 @@ const OUTCOME_ZH: Record<string, string> = {
   error: '错误',
 };
 
+/** One short Chinese reason for the status column (full text goes to the tooltip / drawer). */
+export function shortReason(m: ModelHealth, tr: (zh: string, en: string) => string): string {
+  const ok = m.credentials.filter((c) => c.state !== 'cooling').length;
+  switch (m.status) {
+    case 'retired':
+      return tr('上游已下线，请改用其他模型', 'Retired upstream');
+    case 'rejected':
+      if (m.deprecated_to && m.deprecated_to !== '-') return tr(`已弃用 → ${m.deprecated_to}`, `Deprecated → ${m.deprecated_to}`);
+      return tr(`上游拒绝${m.last_check?.http_status ? ` (${m.last_check.http_status})` : ''}`, 'Rejected upstream');
+    case 'cooling': {
+      const t = m.credentials.map((c) => c.next_retry_after).filter(Boolean).sort()[0];
+      return t ? tr(`冷却至 ${fmtTime(t)}`, `Cooling until ${fmtTime(t)}`) : tr('全部凭据冷却中', 'All credentials cooling');
+    }
+    case 'partial':
+      return tr(`${ok}/${m.credentials.length} 凭据可用`, `${ok}/${m.credentials.length} usable`);
+    case 'unknown':
+      return tr('不在当前账号目录中', 'Not in catalog');
+    default:
+      if (m.last_check?.outcome === 'capacity') return tr('最近测试：容量不足', 'Last check: no capacity');
+      if (m.last_check?.outcome === 'quota') return tr('最近测试：限流', 'Last check: rate limited');
+      return '';
+  }
+}
+
+export type ChipKind = 'stream' | 'leaving' | 'switch' | 'text';
+/** Shared notes become small chips; the legend explains them once. */
+export function noteChips(m: ModelHealth): { kind: ChipKind; title: string }[] {
+  const out: { kind: ChipKind; title: string }[] = [];
+  for (const n of m.notes ?? []) {
+    if (n.startsWith('流式思考')) out.push({ kind: 'stream', title: n });
+    else if (n.includes('即将下线')) out.push({ kind: 'leaving', title: n });
+    else if (n.startsWith('上游提示切换')) out.push({ kind: 'switch', title: n });
+    else if (n.includes('仅支持文本')) out.push({ kind: 'text', title: n });
+  }
+  return out;
+}
+
+const CHIP: Record<ChipKind, [string, string, string]> = {
+  stream: ['思', '流式思考受限', 'Streaming thinking limited'],
+  leaving: ['降', '即将下线', 'Leaving soon'],
+  switch: ['?', '建议的替代模型不在目录中', 'Suggested replacement not in catalog'],
+  text: ['T', '仅文本', 'Text only'],
+};
+
+function Chip({ kind, title }: { kind: ChipKind; title: string }) {
+  const { tr } = useI18n();
+  return (
+    <span className={`chip chip-${kind}`} title={title} aria-label={tr(CHIP[kind][1], CHIP[kind][2])}>
+      {CHIP[kind][0]}
+    </span>
+  );
+}
+
+function CredSummary({ m }: { m: ModelHealth }) {
+  const { tr } = useI18n();
+  const ok = m.credentials.filter((c) => c.state === 'ok').length;
+  const total = m.credentials.length;
+  const tip = m.credentials
+    .map((c) => `${c.label}: ${c.state}${c.http_status ? ` ${c.http_status}` : ''}${c.quota_remaining !== undefined ? ` · ${tr('额度', 'quota')} ${Math.round(c.quota_remaining * 100)}%` : ''}`)
+    .join('\n');
+  return (
+    <span className="cred-sum" title={tip}>
+      <span className={ok === total ? 'ok-text' : ok === 0 ? 'err-text' : 'warn-text'}>
+        {ok}/{total}
+      </span>
+      <span className="mini-bars">
+        {m.credentials.map((c) => (
+          <span key={c.label} className={`mini-bar ${c.state}`}>
+            <span style={{ width: `${Math.round((c.quota_remaining ?? (c.state === 'ok' ? 1 : 0)) * 100)}%` }} />
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
 export function ModelHealthTab() {
   const api = useApi();
   const { tr, lang } = useI18n();
@@ -44,6 +120,11 @@ export function ModelHealthTab() {
   const [filter, setFilter] = useState<'all' | 'problem' | 'hidden'>('all');
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<string | null>(null);
+  const [infoOpen, setInfoOpen] = useState(() => localStorage.getItem('panel.mhInfo') !== 'closed');
+  const toggleInfo = () => {
+    localStorage.setItem('panel.mhInfo', infoOpen ? 'closed' : 'open');
+    setInfoOpen(!infoOpen);
+  };
 
   const rows = useMemo(() => {
     const list = (res.data?.models ?? []).filter((m) => {
@@ -54,12 +135,6 @@ export function ModelHealthTab() {
     });
     return list.sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.id.localeCompare(b.id));
   }, [res.data, filter, q]);
-
-  const counts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const m of res.data?.models ?? []) c[m.status] = (c[m.status] ?? 0) + 1;
-    return c;
-  }, [res.data]);
 
   const retest = (model: string) =>
     run(`retest:${model}`, async () => {
@@ -78,39 +153,48 @@ export function ModelHealthTab() {
 
   if (res.error) return <ErrorBox error={res.error} onRetry={res.reload} />;
   if (!res.data) return <Loading />;
-  const detail = open ? res.data.models.find((m) => m.id === open) : undefined;
+  const data = res.data;
+  const detail = open ? data.models.find((m) => m.id === open) : undefined;
+  const missing = data.missing_switch_targets ?? [];
+  const problems = data.models.filter((m) => m.status !== 'available').length;
 
   return (
     <div className="stack" data-testid="model-health">
-      <div className="alert small">
-        {tr(
-          '按模型汇总真实状态：上游模型目录（弃用/即将下线/额度）、各凭据的冷却与最近错误、手动“重新测试”的结果（保存在数据库，所有 Home 副本共享）。不会自动隐藏任何模型；“隐藏”会写入 oauth-excluded-models，下游 /v1/models 不再列出，可随时取消。',
-          'Per-model real state: upstream catalog (deprecated / leaving soon / quota), per-credential cooldowns and last errors, and manual retest results (stored in the database, shared by all Home replicas). Nothing is hidden automatically; "Hide" writes oauth-excluded-models and can be undone.',
-        )}
-        {res.data.catalog_fetched_at && (
-          <span className="faint">
-            {' '}
-            {tr('目录更新于', 'Catalog fetched')} {fmtRelative(res.data.catalog_fetched_at, lang)}
-          </span>
+      <div className="info-bar small" data-testid="mh-info">
+        <button className="btn-link" onClick={toggleInfo} aria-expanded={infoOpen}>
+          {infoOpen ? '▾' : '▸'} {tr('说明与图例', 'About & legend')}
+        </button>
+        <span className="faint">
+          {data.catalog_fetched_at && <> · {tr('目录更新于', 'Catalog')} {fmtRelative(data.catalog_fetched_at, lang)}</>}
+          {missing.length > 0 && <> · <span className="warn-text">{tr(`上游建议的 ${missing.join('、')} 不在账号目录中`, `${missing.join(', ')} not in catalog`)}</span></>}
+        </span>
+        {infoOpen && (
+          <div className="info-body">
+            <p>
+              {tr(
+                '状态综合上游目录（弃用 / 即将下线 / 额度）、各凭据冷却与最近错误、手动“重新测试”结果（存于数据库，所有 Home 副本共享）。不会自动隐藏模型；“显示”开关写入 oauth-excluded-models，可随时恢复。点击模型名查看上游原文、各凭据详情与错误。',
+                'Status combines the upstream catalog, per-credential cooldowns/errors and manual retests (stored in the DB). Nothing is hidden automatically; the "shown" toggle writes oauth-excluded-models. Click a model for upstream messages and per-credential details.',
+              )}
+            </p>
+            <div className="legend">
+              <span><Chip kind="stream" title="" /> {tr('流式思考受限：上游流式只在思考较长时返回思考摘要、签名在正文后；可在设置开启“流式思考模拟”（默认关闭）', 'Streaming thinking limited upstream; see Settings → stream thinking emulation')}</span>
+              <span><Chip kind="leaving" title="" /> {tr('上游标记即将下线', 'Marked "Leaving soon" upstream')}</span>
+              <span><Chip kind="switch" title="" /> {tr('上游建议的替代模型不在当前账号目录中', 'Suggested replacement not in this account\'s catalog')}</span>
+              <span><Chip kind="text" title="" /> {tr('仅支持文本输入', 'Text input only')}</span>
+              <span><span className="mini-bar ok"><span style={{ width: '70%' }} /></span> {tr('凭据列：可用数 / 总数，条形为各凭据剩余额度', 'Credentials: usable/total, bars = remaining quota')}</span>
+            </div>
+          </div>
         )}
       </div>
-      {(res.data.missing_switch_targets ?? []).length > 0 && (
-        <div className="alert warn small" data-testid="missing-switch-targets">
-          {tr(
-            `上游提示把已下线模型切换到 ${res.data.missing_switch_targets!.join('、')}，但当前账号的模型目录中没有这些模型（可能尚未对该账号开放）。`,
-            `Upstream suggests switching to ${res.data.missing_switch_targets!.join(', ')}, which is not in this account's model catalog.`,
-          )}
-        </div>
-      )}
       <Card
         title={
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             {(['all', 'problem', 'hidden'] as const).map((f) => (
-              <button key={f} className={`btn btn-sm ${filter === f ? 'btn-primary' : ''}`} onClick={() => setFilter(f)}>
-                {f === 'all' ? tr(`全部 ${res.data!.models.length}`, `All ${res.data!.models.length}`) : f === 'problem' ? tr(`有问题 ${res.data!.models.length - (counts.available ?? 0)}`, `Problems`) : tr(`已隐藏 ${res.data!.models.filter((m) => m.hidden).length}`, 'Hidden')}
+              <button key={f} className={`btn btn-sm ${filter === f ? 'btn-primary' : ''}`} onClick={() => setFilter(f)} data-testid={`mh-filter-${f}`}>
+                {f === 'all' ? tr(`全部 ${data.models.length}`, `All ${data.models.length}`) : f === 'problem' ? tr(`有问题 ${problems}`, `Problems ${problems}`) : tr(`已隐藏 ${data.models.filter((m) => m.hidden).length}`, `Hidden ${data.models.filter((m) => m.hidden).length}`)}
               </button>
             ))}
-            <input className="input" style={{ maxWidth: 220 }} placeholder={tr('搜索模型', 'Search model')} value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input" style={{ maxWidth: 200 }} placeholder={tr('搜索模型', 'Search model')} value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
         }
         extra={
@@ -123,81 +207,64 @@ export function ModelHealthTab() {
           <Empty />
         ) : (
           <div className="table-wrap">
-            <table className="table" data-testid="model-health-table">
+            <table className="table mh-table" data-testid="model-health-table">
               <thead>
                 <tr>
                   <th>{tr('模型', 'Model')}</th>
                   <th>{tr('状态', 'Status')}</th>
-                  <th className="hide-sm">{tr('凭据', 'Credentials')}</th>
+                  <th className="hide-sm">{tr('凭据', 'Creds')}</th>
                   <th className="hide-sm">{tr('最近检测', 'Last check')}</th>
-                  <th>{tr('操作', 'Actions')}</th>
+                  <th className="right">{tr('操作', 'Actions')}</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((m) => (
-                  <tr key={m.id} data-testid={`mh-row-${m.id}`} className={m.hidden ? 'row-muted' : ''}>
-                    <td>
-                      <button className="btn-link mono" onClick={() => setOpen(m.id)}>
-                        {m.id}
-                      </button>
-                      {m.hidden && (
-                        <>
-                          {' '}
-                          <Badge>{tr('已隐藏', 'hidden')}</Badge>
-                        </>
-                      )}
-                      {m.tag_title && (
-                        <>
-                          {' '}
-                          <Badge kind="warn">{m.tag_title === 'Leaving Soon' ? tr('即将下线', 'Leaving soon') : m.tag_title}</Badge>
-                        </>
-                      )}
-                      {m.display_name && <div className="faint small">{m.display_name}</div>}
-                    </td>
-                    <td style={{ maxWidth: 380 }}>
-                      {statusBadge(m.status, tr)}
-                      {m.reason && <div className="small wrap-text" style={{ marginTop: 4 }}>{m.reason}</div>}
-                      {(m.notes ?? []).map((n) => (
-                        <div key={n} className="faint small wrap-text" style={{ marginTop: 2 }}>
-                          ⓘ {n}
-                        </div>
-                      ))}
-                    </td>
-                    <td className="hide-sm small">
-                      {m.credentials.map((c) => (
-                        <div key={c.label} className="nowrap" title={c.message}>
-                          <Badge kind={c.state === 'ok' ? 'ok' : c.state === 'cooling' ? 'warn' : 'err'} dot>
-                            {c.state === 'ok' ? tr('正常', 'ok') : c.state === 'cooling' ? tr('冷却', 'cooling') : tr('错误', 'error')}
-                            {c.http_status ? ` ${c.http_status}` : ''}
-                          </Badge>{' '}
-                          <span className="faint">{c.label}</span>
-                          {c.quota_remaining !== undefined && <span className="faint"> · {Math.round(c.quota_remaining * 100)}%</span>}
-                        </div>
-                      ))}
-                    </td>
-                    <td className="hide-sm small">
-                      {m.last_check ? (
-                        <>
-                          <Badge kind={m.last_check.outcome === 'ok' ? 'ok' : 'err'}>
-                            {tr(OUTCOME_ZH[m.last_check.outcome] ?? m.last_check.outcome, m.last_check.outcome)}
-                            {m.last_check.http_status ? ` ${m.last_check.http_status}` : ''}
-                          </Badge>
-                          <div className="faint">{fmtRelative(m.last_check.checked_at, lang)}</div>
-                        </>
-                      ) : (
-                        <span className="faint">{tr('未检测', 'never')}</span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
-                        <button className="btn btn-sm" disabled={!!busy} onClick={() => void retest(m.id)} data-testid={`mh-retest-${m.id}`}>
-                          {busy === `retest:${m.id}` ? <Spinner /> : <IconRefresh />} {tr('重新测试', 'Retest')}
+                {rows.map((m) => {
+                  const reason = shortReason(m, tr);
+                  return (
+                    <tr key={m.id} data-testid={`mh-row-${m.id}`} className={m.hidden ? 'row-muted' : ''}>
+                      <td className="mh-model">
+                        <button className="btn-link mono ellipsis" onClick={() => setOpen(m.id)} title={m.display_name ? `${m.id} — ${m.display_name}` : m.id}>
+                          {m.id}
                         </button>
-                        <Switch checked={!m.hidden} disabled={!!busy} onChange={(v) => void setHidden(m.id, !v)} label={tr('显示', 'Shown')} />
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        <span className="chips">
+                          {noteChips(m).map((c) => (
+                            <Chip key={c.kind} kind={c.kind} title={c.title} />
+                          ))}
+                          {m.hidden && <span className="chip chip-hidden" title={tr('已隐藏（oauth-excluded-models）', 'Hidden')}>{tr('隐', 'H')}</span>}
+                        </span>
+                      </td>
+                      <td className="mh-status" title={m.reason || reason}>
+                        {statusBadge(m.status, tr)}
+                        {reason && <span className="ellipsis faint small">{reason}</span>}
+                      </td>
+                      <td className="hide-sm">
+                        <CredSummary m={m} />
+                      </td>
+                      <td className="hide-sm small nowrap" title={m.last_check?.message}>
+                        {m.last_check ? (
+                          <>
+                            <span className={m.last_check.outcome === 'ok' ? 'ok-text' : 'err-text'}>
+                              {tr(OUTCOME_ZH[m.last_check.outcome] ?? m.last_check.outcome, m.last_check.outcome)}
+                              {m.last_check.http_status && m.last_check.outcome !== 'ok' ? ` ${m.last_check.http_status}` : ''}
+                            </span>{' '}
+                            <span className="faint">{fmtRelative(m.last_check.checked_at, lang)}</span>
+                          </>
+                        ) : (
+                          <span className="faint">—</span>
+                        )}
+                      </td>
+                      <td className="right nowrap">
+                        <button className="btn btn-sm" disabled={!!busy} onClick={() => void retest(m.id)} data-testid={`mh-retest-${m.id}`} title={tr('重新测试', 'Retest')}>
+                          {busy === `retest:${m.id}` ? <Spinner /> : <IconRefresh />}
+                          <span className="hide-sm"> {tr('测试', 'Test')}</span>
+                        </button>{' '}
+                        <span title={m.hidden ? tr('已隐藏，点击显示', 'Hidden – click to show') : tr('显示中，点击隐藏', 'Shown – click to hide')} style={{ display: 'inline-block' }}>
+                          <Switch checked={!m.hidden} disabled={!!busy} onChange={(v) => void setHidden(m.id, !v)} />
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
