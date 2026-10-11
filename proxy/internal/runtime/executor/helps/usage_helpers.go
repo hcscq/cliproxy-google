@@ -33,6 +33,7 @@ type UsageReporter struct {
 	requested           string
 	thinkingParams      string
 	thinkingNote        string
+	thinkingSupport     *registry.ThinkingSupport
 	baseURL             string
 	executorType        string
 	model               string
@@ -343,11 +344,23 @@ func (r *UsageReporter) SetTranslatedReasoningEffort(payload []byte, format stri
 	}
 	r.reasoning = thinking.ExtractTranslatedReasoningEffort(payload, format)
 	r.thinkingParams = thinking.ExactThinkingParams(payload, format)
-	var support *registry.ThinkingSupport
-	if info := registry.LookupModelInfo(r.model, r.provider); info != nil {
-		support = info.Thinking
+	support := r.thinkingSupport
+	if support == nil {
+		if info := registry.LookupModelInfo(r.model, r.provider); info != nil {
+			support = info.Thinking
+		}
 	}
 	r.thinkingNote = thinking.OffAdjustmentNote(r.requested, r.thinkingParams, support)
+}
+
+// SetModelThinking records the resolved model's thinking capabilities (the same
+// definition used to apply thinking), so the adjustment note does not depend on
+// a separate registry lookup. Call before SetTranslatedReasoningEffort.
+func (r *UsageReporter) SetModelThinking(info *registry.ModelInfo) {
+	if r == nil || info == nil {
+		return
+	}
+	r.thinkingSupport = info.Thinking
 }
 
 // ThinkingNote returns why a "thinking off" request was adjusted ("" if it was not).

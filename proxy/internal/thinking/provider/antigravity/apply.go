@@ -106,6 +106,9 @@ func (a *Applier) applyLevelFormat(body []byte, config thinking.ThinkingConfig) 
 		if config.ExplicitZero {
 			// The model accepts an explicit zero budget (measured per model);
 			// send it rather than relying on the model's default.
+			// Drop any translated level (e.g. "none"): the upstream rejects
+			// thinkingLevel=none and must see only the zero budget.
+			result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.thinkingLevel")
 			result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.thinkingBudget", 0)
 			return result, nil
 		}

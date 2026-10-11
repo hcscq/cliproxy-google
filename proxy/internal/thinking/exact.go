@@ -72,10 +72,14 @@ func firstExisting(r gjson.Result, keys ...string) gjson.Result {
 // what was sent instead when the model cannot fully disable thinking. It
 // returns "" when thinking was not requested off or was really disabled.
 func OffAdjustmentNote(requestedEffort, sent string, support *registry.ThinkingSupport) string {
-	if !strings.EqualFold(strings.TrimSpace(requestedEffort), string(LevelNone)) || support == nil {
+	if !strings.EqualFold(strings.TrimSpace(requestedEffort), string(LevelNone)) {
 		return ""
 	}
-	switch support.OffMode {
+	offMode := ""
+	if support != nil {
+		offMode = support.OffMode
+	}
+	switch offMode {
 	case OffModeZero, OffModeOmit:
 		return ""
 	case OffModeZeroReduced:

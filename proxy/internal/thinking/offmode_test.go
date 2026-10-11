@@ -53,6 +53,34 @@ func TestThinkingOffFollowsPerModelOffMode(t *testing.T) {
 	}
 }
 
+// Regression: the OpenAI translator emits thinkingLevel="none"; the explicit zero
+// budget must replace it (the upstream rejects level "none" with 400).
+func TestThinkingOffFromTranslatedLevelNone(t *testing.T) {
+	src := []byte(`{"model":"x","reasoning_effort":"none","messages":[]}`)
+	body := []byte(`{"request":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"none"}}}}`)
+	for mode, want := range map[string]string{
+		thinking.OffModeZeroReduced: "budget=0",
+		thinking.OffModeZero:        "budget=0",
+		thinking.OffModeOmit:        "",
+		"":                          "level=low,include_thoughts=false",
+	} {
+		info := gemini3Model("gemini-3.8-flash-tiered", mode)
+		out, err := thinking.ApplyThinkingWithModelInfo(body, src, info.ID, "openai", "antigravity", "antigravity", info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := thinking.ExactThinkingParams(out, "antigravity"); got != want {
+			t.Errorf("off mode %q: sent %q want %q (%s)", mode, got, want, out)
+		}
+		if gjson.GetBytes(out, "request.generationConfig.thinkingConfig.thinkingLevel").String() == "none" {
+			t.Errorf("off mode %q: thinkingLevel none leaked upstream: %s", mode, out)
+		}
+	}
+	if n := thinking.OffAdjustmentNote("none", "level=minimal", nil); n == "" {
+		t.Error("unknown model capabilities must still report a non-off value")
+	}
+}
+
 func TestExactThinkingParams(t *testing.T) {
 	cases := map[string]string{
 		`{"request":{"generationConfig":{"thinkingConfig":{"thinkingBudget":8192,"includeThoughts":true}}}}`: "budget=8192,include_thoughts=true",
