@@ -5,14 +5,16 @@ import { fmtCompact } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, CopyButton, Empty, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
 import { IconPlus, IconRefresh, IconTrash } from '../components/icons';
+import { ModelHealthTab } from './ModelHealth';
 
-type Tab = 'available' | 'excluded' | 'alias' | 'catalog';
+type Tab = 'health' | 'available' | 'excluded' | 'alias' | 'catalog';
 const CHANNELS = ['antigravity', 'vertex', 'aistudio'];
 
 export function ModelsPage() {
   const { t, tr } = useI18n();
-  const [tab, setTab] = useState<Tab>('available');
+  const [tab, setTab] = useState<Tab>('health');
   const tabs: [Tab, string][] = [
+    ['health', tr('模型状态', 'Health')],
     ['available', tr('可用模型', 'Available')],
     ['excluded', tr('排除模型', 'Excluded')],
     ['alias', tr('别名 / 扩展模型', 'Aliases / extra models')],
@@ -33,6 +35,7 @@ export function ModelsPage() {
           </button>
         ))}
       </div>
+      {tab === 'health' && <ModelHealthTab />}
       {tab === 'available' && <AvailableModels />}
       {tab === 'excluded' && <ExcludedModels />}
       {tab === 'alias' && <Aliases />}

@@ -270,3 +270,6 @@ table.table { width: 100%; border-collapse: collapse; }
 .card-capped { display: flex; flex-direction: column; max-height: 460px; }
 .card-capped > .card-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; flex: 1; }
 a.list-row { text-decoration: none; color: inherit; }
+.btn-link { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-align: left; }
+.btn-link:hover { text-decoration: underline; }
+tr.row-muted td { opacity: .62; }

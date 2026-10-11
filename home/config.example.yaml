@@ -201,6 +201,9 @@ routing:
   # Thinking tokens count against the limit; a fixed thinking budget >= limit is
   # lowered to limit/2. false = legacy behaviour (limit stripped). Default true.
   honor-max-tokens: true
+  # Gemini 3.x: send streaming requests that ask for thoughts to the non-stream
+  # upstream endpoint and replay as one SSE event (complete thinking, higher TTFT).
+  stream-thinking-emulation: false
 
   cooldown:
     # Disable Home request-error and quota cooldown scheduling when true.

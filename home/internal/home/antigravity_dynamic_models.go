@@ -55,6 +55,7 @@ type antigravityCatalogEntry struct {
 	failedAt  time.Time
 	inFlight  bool
 	tokenHash string
+	health    *antigravityCatalogHealth
 }
 
 var (
@@ -208,7 +209,22 @@ func (r *Runtime) refreshAntigravityCatalog(authID string, snapshot *coreauth.Au
 			}
 		}
 		if err == nil {
-			models, err = fetchAntigravityCatalog(ctx, full)
+			var raw []byte
+			raw, err = fetchAntigravityCatalogRaw(ctx, full)
+			if err == nil {
+				models, err = parseAntigravityCatalog(raw)
+			}
+			if err == nil {
+				health := parseAntigravityCatalogHealth(raw)
+				health.fetchedAt = time.Now()
+				antigravityCatalogMu.Lock()
+				if e := antigravityCatalog[authID]; e != nil {
+					e.health = health
+				} else {
+					antigravityCatalog[authID] = &antigravityCatalogEntry{health: health}
+				}
+				antigravityCatalogMu.Unlock()
+			}
 		}
 		cancel()
 	}
@@ -258,6 +274,14 @@ func sameAntigravityCatalog(a, b map[string]antigravityUpstreamModel) bool {
 }
 
 func fetchAntigravityCatalog(ctx context.Context, auth *coreauth.Auth) (map[string]antigravityUpstreamModel, error) {
+	data, err := fetchAntigravityCatalogRaw(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
+	return parseAntigravityCatalog(data)
+}
+
+func fetchAntigravityCatalogRaw(ctx context.Context, auth *coreauth.Auth) ([]byte, error) {
 	token := extractAccessToken(auth)
 	if token == "" {
 		return nil, errAntigravityNoToken
@@ -287,7 +311,7 @@ func fetchAntigravityCatalog(ctx context.Context, auth *coreauth.Auth) (map[stri
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &antigravityHTTPError{status: resp.StatusCode}
 	}
-	return parseAntigravityCatalog(data)
+	return data, nil
 }
 
 func parseAntigravityCatalog(data []byte) (map[string]antigravityUpstreamModel, error) {

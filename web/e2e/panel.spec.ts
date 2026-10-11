@@ -73,6 +73,9 @@ test('models list', async ({ page }) => {
   await login(page);
   await page.getByTestId('nav-models').click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(/模型|Models/);
+  // Default tab: model health view (empty on a fresh Home is fine).
+  await expect(page.getByTestId('model-health')).toBeVisible();
+  await page.getByTestId('models-tab-available').click();
   if (process.env.EXPECT_MODEL) await expect(page.getByTestId('models-table')).toContainText(process.env.EXPECT_MODEL);
   await shot(page, '05-models');
   await page.getByTestId('models-tab-excluded').click();

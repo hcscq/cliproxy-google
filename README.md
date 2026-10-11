@@ -217,3 +217,13 @@ Home 会把上游错误响应体完整保存到请求记录（`usage.fail_body`�
 - 被截断时，各协议返回 `finish_reason: "length"`（OpenAI）、`stop_reason: "max_tokens"`（Claude）、`finishReason: "MAX_TOKENS"`（Gemini）。
 
 开关：`routing.honor-max-tokens`（默认 true，面板“设置”页可改）。设为 false 恢复旧行为。
+
+## 模型状态与上游限制
+
+管理面板“模型 → 模型状态”按模型汇总真实状态。数据来源：上游模型目录（弃用 / 即将下线 / 每账号额度）、各凭据的冷却与最近错误、手动“重新测试”的结果。重新测试会用每个已启用的 Antigravity 凭据各发一个极小请求，结果存在 PostgreSQL 的 `model_health_checks` 表，所有 Home 副本共享。
+
+- **状态**：可用 / 部分冷却 / 冷却中 / 上游拒绝 / 已下线（上游）/ 未知，并附中文原因和最近错误。
+- **不会自动隐藏任何模型**：“显示”开关写入 `oauth-excluded-models.antigravity`，可随时取消；已隐藏的模型也会列出。
+- **已下线模型**：例如 gemini-3-flash-agent、gemini-3.5-flash-low、gemini-3.5-flash-extra-low。上游对它们仍返回 200，正文是 “… is no longer available. Please switch to …”。代理识别到这种回复后，改为按协议格式返回 404 错误（`MODEL_RETIRED` / `model_not_supported`），不再把这段文字当成正常回答，并且只冷却该（凭据, 模型）。
+- **上游弃用**：上游目录的 `deprecatedModelIds` 标为弃用的模型（例如 gemini-3.1-pro-high → gemini-pro-agent）会显示为“上游拒绝”并给出建议替代。这类模型对任何请求都返回 400 INVALID_ARGUMENT。
+- **Gemini 3.x 流式思考**：上游流式只在思考较长时才返回思考摘要，思考签名在正文之后才到；非流式总是完整。`routing.stream-thinking-emulation: true`（面板“设置”中可开，默认关闭）会让请求思考内容的流式请求改走上游非流式接口，再按流式格式一次性返回。

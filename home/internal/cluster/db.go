@@ -130,7 +130,10 @@ func AutoMigrateContext(ctx context.Context, db *gorm.DB) error {
 		if err := autoMigratePostgresContext(ctx, db, false, nil); err != nil {
 			return err
 		}
-		return ensureUsageFailBodyColumns(ctx, db)
+		if err := ensureUsageFailBodyColumns(ctx, db); err != nil {
+			return err
+		}
+		return ensureModelHealthTable(ctx, db)
 	}
 
 	startedAt := time.Now()
@@ -146,7 +149,7 @@ func AutoMigrateContext(ctx context.Context, db *gorm.DB) error {
 		return errMigrate
 	}
 	log.WithFields(fields).Info("database schema migration completed")
-	return nil
+	return ensureModelHealthTable(ctx, db)
 }
 
 func autoMigratePostgresContext(ctx context.Context, db *gorm.DB, runWhenCurrent bool, afterSchema func(context.Context, *gorm.DB) error) error {

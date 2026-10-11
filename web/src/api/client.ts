@@ -220,6 +220,12 @@ export class ApiClient {
   models(scope: 'available' | 'static' = 'available') {
     return this.get<{ scope: string; models: ModelInfo[] | Record<string, ModelInfo[]> }>('/models', { scope });
   }
+  modelHealth() {
+    return this.get<ModelHealthResponse>('/models/health');
+  }
+  retestModel(model: string) {
+    return this.post<{ result: ModelHealthCheck; model?: ModelHealth }>('/models/health/retest', { model });
+  }
   modelDefinitions(channel: string) {
     return this.get<{ channel?: string; models: ModelInfo[] }>(`/routing/model-definitions/${encodeURIComponent(channel)}`);
   }
@@ -336,6 +342,62 @@ export interface Topology {
   cpas: ProxyNode[];
   master?: HomeNode;
   management?: { home_id?: string; home_ip?: string; home_port?: number };
+}
+
+export type ModelHealthStatus = 'available' | 'partial' | 'cooling' | 'rejected' | 'retired' | 'unknown';
+
+export interface ModelHealthCheck {
+  outcome: 'ok' | 'retired' | 'rejected' | 'quota' | 'capacity' | 'auth_error' | 'error' | string;
+  http_status?: number;
+  message?: string;
+  checked_at: string;
+  details?: { auth_id: string; label: string; outcome: string; http_status: number; message?: string; latency_ms: number }[];
+}
+
+export interface ModelHealthCredential {
+  label: string;
+  state: 'ok' | 'cooling' | 'error' | string;
+  http_status?: number;
+  message?: string;
+  next_retry_after?: string;
+  updated_at?: string;
+  in_catalog: boolean;
+  quota_remaining?: number;
+  quota_reset_time?: string;
+}
+
+export interface ModelHealth {
+  id: string;
+  display_name?: string;
+  status: ModelHealthStatus;
+  reason?: string;
+  hidden: boolean;
+  in_catalog: boolean;
+  registered: boolean;
+  tag_title?: string;
+  tag_description?: string;
+  deprecated_to?: string;
+  credentials: ModelHealthCredential[];
+  last_check?: ModelHealthCheck;
+  last_error?: string;
+  last_error_at?: string;
+  notes?: string[];
+}
+
+export interface ModelHealthResponse {
+  models: ModelHealth[];
+  generated_at: string;
+  catalog_fetched_at?: string;
+  missing_switch_targets?: string[];
+}
+
+/** Toggles `model` in the antigravity list of an oauth-excluded-models map. */
+export function toggleExcludedModel(map: Record<string, string[]>, model: string, hide: boolean): Record<string, string[]> {
+  const next: Record<string, string[]> = { ...map };
+  const list = (next.antigravity ?? []).filter((m) => m.toLowerCase() !== model.toLowerCase());
+  if (hide) list.push(model);
+  next.antigravity = list;
+  return next;
 }
 
 export interface ModelCooldown {

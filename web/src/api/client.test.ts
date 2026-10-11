@@ -227,3 +227,15 @@ describe('credentialUsable / coolingModels', () => {
     expect(credentialUsable({ ...c, unavailable: true })).toBe(false);
   });
 });
+
+describe('toggleExcludedModel', () => {
+  it('adds and removes models from the antigravity list only', async () => {
+    const { toggleExcludedModel } = await import('./client');
+    const base = { antigravity: ['chat_20706'], vertex: ['x'] };
+    const hidden = toggleExcludedModel(base, 'gemini-3.5-flash-low', true);
+    expect(hidden.antigravity).toEqual(['chat_20706', 'gemini-3.5-flash-low']);
+    expect(hidden.vertex).toEqual(['x']);
+    expect(toggleExcludedModel(hidden, 'GEMINI-3.5-flash-low', false).antigravity).toEqual(['chat_20706']);
+    expect(toggleExcludedModel({}, 'a', true).antigravity).toEqual(['a']);
+  });
+});

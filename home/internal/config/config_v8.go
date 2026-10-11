@@ -76,6 +76,7 @@ func buildV8Paths() []configPath {
 		{"max-retry-interval", "routing.retry.max-retry-interval"},
 		{"capacity-retry", "routing.retry.capacity-retry"},
 		{"honor-max-tokens", "routing.honor-max-tokens"},
+		{"stream-thinking-emulation", "routing.stream-thinking-emulation"},
 		{"disable-cooling", "routing.cooldown.disable-cooling"}, {"save-cooldown-status", "routing.cooldown.save-cooldown-status"},
 		{"transient-error-cooldown-seconds", "routing.cooldown.transient-error-cooldown-seconds"},
 		{"proxy-url", "requests.proxy-url"}, {"passthrough-headers", "requests.passthrough-headers"},

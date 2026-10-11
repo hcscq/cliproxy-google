@@ -185,6 +185,12 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 		return resp, err
 	}
 
+	if text, retired := retiredModelText(bodyBytes); retired {
+		err = retiredModelErr(baseModel, text)
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
+		return resp, err
+	}
+
 	// Success
 	if useCredits {
 		clearAntigravityCreditsFailureState(auth)
@@ -404,6 +410,16 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	}
 
 	// Stream success
+	if peeked, errRetired := peekRetiredModelStream(httpResp.Body, baseModel); errRetired != nil {
+		if errClose := httpResp.Body.Close(); errClose != nil {
+			log.Errorf("antigravity executor: close response body error: %v", errClose)
+		}
+		helps.RecordAPIResponseError(ctx, e.cfg, errRetired)
+		err = errRetired
+		return resp, err
+	} else {
+		httpResp.Body = peeked
+	}
 	if useCredits {
 		clearAntigravityCreditsFailureState(auth)
 	}

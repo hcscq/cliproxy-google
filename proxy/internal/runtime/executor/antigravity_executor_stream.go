@@ -127,7 +127,12 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		}
 	}
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
-	httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	emulateStream := streamThinkingEmulationApplies(e.cfg, baseModel, requestPayload)
+	streamAlt := opts.Alt
+	if emulateStream {
+		streamAlt = ""
+	}
+	httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, !emulateStream, streamAlt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
 		err = errReq
 		return nil, err
@@ -192,6 +197,28 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	}
 
 	// Stream success
+	if emulateStream {
+		replayed, errReplay := replayNonStreamAsSSE(httpResp.Body)
+		if errClose := httpResp.Body.Close(); errClose != nil {
+			log.Errorf("antigravity executor: close response body error: %v", errClose)
+		}
+		if errReplay != nil {
+			helps.RecordAPIResponseError(ctx, e.cfg, errReplay)
+			err = errReplay
+			return nil, err
+		}
+		httpResp.Body = io.NopCloser(bytes.NewReader(replayed))
+	}
+	if peeked, errRetired := peekRetiredModelStream(httpResp.Body, baseModel); errRetired != nil {
+		if errClose := httpResp.Body.Close(); errClose != nil {
+			log.Errorf("antigravity executor: close response body error: %v", errClose)
+		}
+		helps.RecordAPIResponseError(ctx, e.cfg, errRetired)
+		err = errRetired
+		return nil, err
+	} else {
+		httpResp.Body = peeked
+	}
 	if useCredits {
 		clearAntigravityCreditsFailureState(auth)
 	}

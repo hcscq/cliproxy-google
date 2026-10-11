@@ -114,6 +114,14 @@ type Config struct {
 	// lowered so some of the limit remains for the answer.
 	HonorMaxTokens *bool `yaml:"honor-max-tokens,omitempty" json:"honor-max-tokens,omitempty"`
 
+	// StreamThinkingEmulation makes streaming requests that ask for thinking
+	// on Antigravity Gemini models call the non-stream upstream endpoint and
+	// replay the full response as a single SSE chunk. Upstream gemini-3.x
+	// streams often omit thought summaries (they are always present in the
+	// non-stream response), so this trades time-to-first-token for complete
+	// reasoning text. Default off.
+	StreamThinkingEmulation bool `yaml:"stream-thinking-emulation,omitempty" json:"stream-thinking-emulation,omitempty"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 
