@@ -25,6 +25,7 @@ const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
       { path: 'routing.strategy', type: 'select', options: ['round-robin', 'weighted-round-robin', 'fill-first'], zh: '凭据选择策略', en: 'Credential strategy', hintZh: '加权轮询使用每个 Key 的权重；fill-first 优先用满一个凭据。', hintEn: 'Weighted uses per-key weights; fill-first drains one credential first.' },
       { path: 'routing.session-affinity', type: 'bool', zh: '会话粘性', en: 'Session affinity', hintZh: '同一会话尽量固定到同一凭据（状态保存在 PostgreSQL）。', hintEn: 'Pin a session to one credential (state in PostgreSQL).' },
       { path: 'routing.session-affinity-ttl', type: 'text', zh: '会话粘性时长', en: 'Session affinity TTL', hintZh: '例如 1h、30m', hintEn: 'e.g. 1h, 30m' },
+      { path: 'routing.antigravity-catalog-refresh', type: 'text', zh: '模型目录刷新间隔', en: 'Model catalog refresh interval', hintZh: 'Home 主节点定时获取各 Antigravity 凭据上游模型目录的间隔（如 15m、30m、1h；最小 1m；填 off 关闭定时，仅保留手动与错误触发刷新）。留空 = 15m。每次刷新每个凭据 1 次上游请求，结果存数据库供所有副本使用。', hintEn: 'How often the Home leader re-fetches every Antigravity credential\'s upstream model catalog (e.g. 15m, 30m, 1h; min 1m; "off" disables the timer, manual and error-triggered refreshes still work). Empty = 15m. One upstream call per credential per refresh, stored in the database for all replicas.' },
       { path: 'routing.force-model-prefix', type: 'bool', zh: '强制模型前缀', en: 'Force model prefix', hintZh: '带前缀的凭据只响应 “前缀/模型”。', hintEn: 'Prefixed credentials only serve "prefix/model".' },
     ],
   },

@@ -220,6 +220,12 @@ export class ApiClient {
   models(scope: 'available' | 'static' = 'available') {
     return this.get<{ scope: string; models: ModelInfo[] | Record<string, ModelInfo[]> }>('/models', { scope });
   }
+  antigravityCatalog() {
+    return this.get<CatalogResponse>('/models/catalog');
+  }
+  refreshAntigravityCatalog(authId?: string) {
+    return this.post<CatalogResponse>('/models/catalog/refresh', authId ? { auth_id: authId } : {});
+  }
   modelHealth() {
     return this.get<ModelHealthResponse>('/models/health');
   }
@@ -268,6 +274,59 @@ export class ApiClient {
   }
   renameAccessKey(id: number, displayName: string) {
     return this.patch<{ api_key: AccessKey }>('/access/api-keys', { id, display_name: displayName || null });
+  }
+  /** Binds a key to credential groups / model groups (empty arrays = unrestricted). */
+  setAccessKeyScope(id: number, scope: { channels?: number[]; model_groups?: number[] }) {
+    return this.patch<{ api_key: AccessKey }>('/access/api-keys', { id, ...scope });
+  }
+
+  // ---- credential groups (backend: channel groups) ----
+  credentialGroups() {
+    return this.get<{ channel_groups: CredentialGroup[] }>('/channel-groups');
+  }
+  createCredentialGroup(name: string) {
+    return this.post<{ channel_group: CredentialGroup }>('/channel-groups', { channel_name: name, enabled: true });
+  }
+  updateCredentialGroup(id: number, patch: { channel_name?: string; enabled?: boolean }) {
+    return this.patch<{ channel_group: CredentialGroup }>(`/channel-groups/${id}`, patch);
+  }
+  deleteCredentialGroup(id: number) {
+    return this.del<{ status: string }>(`/channel-groups/${id}`);
+  }
+  credentialGroupMembers() {
+    return this.get<{ channel_group_details: CredentialGroupMember[] }>('/channel-group-details');
+  }
+  addCredentialGroupMember(groupId: number, authId: string) {
+    return this.post<{ channel_group_detail: CredentialGroupMember }>('/channel-group-details', { channel_group_id: groupId, auth_id: authId });
+  }
+  removeCredentialGroupMember(memberId: number) {
+    return this.del<{ status: string }>(`/channel-group-details/${memberId}`);
+  }
+
+  // ---- model groups ----
+  modelGroups() {
+    return this.get<{ model_groups: ModelGroup[] }>('/model-groups');
+  }
+  createModelGroup(name: string) {
+    return this.post<{ model_group: ModelGroup }>('/model-groups', { group_name: name, enabled: true });
+  }
+  updateModelGroup(id: number, patch: { group_name?: string; enabled?: boolean }) {
+    return this.patch<{ model_group: ModelGroup }>(`/model-groups/${id}`, patch);
+  }
+  deleteModelGroup(id: number) {
+    return this.del<{ status: string }>(`/model-groups/${id}`);
+  }
+  modelGroupMembers() {
+    return this.get<{ model_group_details: ModelGroupMember[] }>('/model-group-details');
+  }
+  addModelGroupMember(groupId: number, modelId: string, channels: number[] = []) {
+    return this.post<{ model_group_detail: ModelGroupMember }>('/model-group-details', { model_group_id: groupId, model_id: modelId, channels });
+  }
+  updateModelGroupMember(memberId: number, channels: number[]) {
+    return this.patch<{ model_group_detail: ModelGroupMember }>(`/model-group-details/${memberId}`, { channels });
+  }
+  removeModelGroupMember(memberId: number) {
+    return this.del<{ status: string }>(`/model-group-details/${memberId}`);
   }
   deleteAccessKey(id: number) {
     return this.del<{ status: string }>('/access/api-keys', { id });
@@ -344,7 +403,7 @@ export interface Topology {
   management?: { home_id?: string; home_ip?: string; home_port?: number };
 }
 
-export type ModelHealthStatus = 'available' | 'partial' | 'cooling' | 'rejected' | 'retired' | 'unknown';
+export type ModelHealthStatus = 'available' | 'partial' | 'cooling' | 'rejected' | 'retired' | 'removed' | 'unknown';
 
 export interface ModelHealthCheck {
   outcome: 'ok' | 'retired' | 'rejected' | 'quota' | 'capacity' | 'auth_error' | 'error' | string;
@@ -364,6 +423,7 @@ export interface ModelHealthCredential {
   in_catalog: boolean;
   quota_remaining?: number;
   quota_reset_time?: string;
+  removed_at?: string;
 }
 
 export interface ModelHealth {
@@ -685,4 +745,88 @@ export function summarizeError(err?: RequestEvent['error']): { title: string; me
     }
   }
   return out;
+}
+
+export interface CredentialGroup {
+  id: number;
+  channel_name: string;
+  enabled: boolean;
+  disabled?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+export interface CredentialGroupMember {
+  id: number;
+  channel_group_id: number;
+  auth_id: string;
+}
+export interface ModelGroup {
+  id: number;
+  group_name: string;
+  enabled: boolean;
+  disabled?: boolean;
+}
+export interface ModelGroupMember {
+  id: number;
+  model_group_id: number;
+  model_id: string;
+  channels?: number[] | null;
+}
+export interface CatalogChange {
+  model: string;
+  at: string;
+}
+export interface CatalogCredentialStatus {
+  auth_id: string;
+  label: string;
+  status: 'ok' | 'error' | 'pending' | string;
+  error?: string;
+  http_status?: number;
+  model_count: number;
+  fetched_at?: string;
+  attempted_at?: string;
+  next_due_at?: string;
+  trigger?: string;
+  fetched_by?: string;
+  added: CatalogChange[];
+  removed: CatalogChange[];
+}
+export interface CatalogResponse {
+  interval_seconds: number;
+  leader: boolean;
+  credentials: CatalogCredentialStatus[];
+}
+
+/** Live availability of a credential group: members that exist and are usable right now. */
+export function credentialGroupAvailability(
+  groupId: number,
+  members: CredentialGroupMember[],
+  creds: Credential[],
+): { total: number; usable: number; missing: number } {
+  const byId = new Map(creds.map((c) => [c.id, c]));
+  let total = 0;
+  let usable = 0;
+  let missing = 0;
+  for (const m of members) {
+    if (m.channel_group_id !== groupId) continue;
+    total++;
+    const c = byId.get(m.auth_id);
+    if (!c) missing++;
+    else if (credentialUsable(c)) usable++;
+  }
+  return { total, usable, missing };
+}
+
+/** Human summary of what an access key may use (Chinese/English via tr). */
+export function keyScopeSummary(
+  k: { channels?: number[]; model_groups?: number[] },
+  cgNames: Map<number, string>,
+  mgNames: Map<number, string>,
+): { credentials: string[] | null; models: string[] | null } {
+  const ch = k.channels ?? [];
+  const mg = k.model_groups ?? [];
+  return {
+    credentials: ch.length ? ch.map((id) => cgNames.get(id) ?? `#${id}`) : null,
+    models: mg.length ? mg.map((id) => mgNames.get(id) ?? `#${id}`) : null,
+  };
 }

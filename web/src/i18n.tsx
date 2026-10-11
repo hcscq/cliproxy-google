@@ -17,6 +17,7 @@ const dict = {
   providerKeys: ['Gemini / Vertex 密钥', 'Gemini / Vertex keys'],
   models: ['模型', 'Models'],
   accessKeys: ['访问密钥', 'Access keys'],
+  groups: ['分组与权限', 'Groups'],
   usage: ['用量与请求', 'Usage & requests'],
   logs: ['日志', 'Logs'],
   nodes: ['节点', 'Nodes'],

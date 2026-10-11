@@ -7,6 +7,7 @@ import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Spinner, Switch } from '
 import { QuotaStatusBadge, QuotaWindows } from '../components/quota';
 import { IconDownload, IconPlus, IconRefresh, IconTrash } from '../components/icons';
 import { AddCredentialModal } from './AddCredential';
+import { GroupChecklist, useGroupLookup } from './Groups';
 
 export function credentialStatus(c: Credential, t: ReturnType<typeof useI18n>['t'], tr: ReturnType<typeof useI18n>['tr']) {
   if (c.disabled) return <Badge>{t('disabled')}</Badge>;
@@ -32,6 +33,9 @@ export function CredentialsPage() {
   const { toast } = useUi();
   const { busy, run } = useAction();
   const creds = useAsync(() => api.credentials(), [], 20000);
+  const groups = useGroupLookup();
+  const groupsOf = (id: string) =>
+    (groups.data?.credentialMembers ?? []).filter((m) => m.auth_id === id).map((m) => groups.cgNames.get(m.channel_group_id) ?? `#${m.channel_group_id}`);
   const quota = useAsync(() => api.quotaCredentials({ limit: 200 }), [], 60000);
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -137,6 +141,13 @@ export function CredentialsPage() {
                     <div className="faint small mono ellipsis" style={{ maxWidth: 320 }}>
                       {c.note ? `📝 ${c.note}` : c.id}
                     </div>
+                    {groupsOf(c.id).length > 0 && (
+                      <div className="scope-chips small" style={{ marginTop: 3 }} title={tr('所属凭据分组', 'Credential groups')}>
+                        {groupsOf(c.id).map((n) => (
+                          <span key={n} className="tag">🔑 {n}</span>
+                        ))}
+                      </div>
+                    )}
                   </td>
                   <td>
                     <Badge kind="primary">{c.provider}</Badge>
@@ -185,6 +196,7 @@ export function CredentialsPage() {
           onChanged={async () => {
             await creds.reload();
             await quota.reload();
+            await groups.reload();
           }}
           onDeleted={async () => {
             setSelected(null);
@@ -300,6 +312,8 @@ function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred
           <h3 style={{ marginBottom: 8 }}>{t('quota')}</h3>
           <QuotaWindows item={quota} />
         </div>
+
+        <CredentialGroupsEditor credId={cred.id} onChanged={onChanged} />
 
         <div>
           <h3 style={{ marginBottom: 8 }}>{tr('路由设置', 'Routing settings')}</h3>
@@ -420,6 +434,35 @@ function ModelCooldownList({ cred }: { cred: Credential }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function CredentialGroupsEditor({ credId, onChanged }: { credId: string; onChanged: () => Promise<void> }) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { busy, run } = useAction();
+  const groups = useGroupLookup();
+  const d = groups.data;
+  if (!d) return null;
+  const mine = d.credentialMembers.filter((m) => m.auth_id === credId);
+  const value = mine.map((m) => m.channel_group_id);
+  const change = (next: number[]) =>
+    run('groups', async () => {
+      for (const id of next.filter((x) => !value.includes(x))) await api.addCredentialGroupMember(id, credId);
+      for (const m of mine.filter((x) => !next.includes(x.channel_group_id))) await api.removeCredentialGroupMember(m.id);
+      await groups.reload();
+      await onChanged();
+    });
+  return (
+    <div data-testid="cred-groups-editor">
+      <h3 style={{ marginBottom: 8 }}>
+        {tr('凭据分组', 'Credential groups')} {busy === 'groups' && <Spinner />}
+      </h3>
+      <GroupChecklist groups={d.credentialGroups.map((g) => ({ id: g.id, name: g.channel_name, enabled: g.enabled }))} value={value} onChange={(v) => void change(v)} />
+      <p className="hint" style={{ marginTop: 6 }}>
+        {tr('绑定了凭据分组的访问密钥只会使用分组内的凭据。凭据可同时属于多个分组；不属于任何分组的凭据只服务未绑定分组的密钥。', 'Keys bound to credential groups only use members. A credential may be in several groups; ungrouped credentials only serve keys without groups.')}
+      </p>
     </div>
   );
 }

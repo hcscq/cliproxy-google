@@ -99,3 +99,69 @@ test('create and delete an access key', async ({ page }) => {
   await page.getByTestId('confirm-ok').click();
   await expect(row).toHaveCount(0);
 });
+
+test('credential/model groups bind to an access key and are cleaned up', async ({ page }) => {
+  await login(page);
+  const ts = Date.now();
+  const cg = `e2e-cg-${ts}`;
+  const mg = `e2e-mg-${ts}`;
+  const keyName = `e2e-scope-${ts}`;
+
+  await page.getByTestId('nav-groups').click();
+  await expect(page.getByTestId('cg-warning')).toBeVisible();
+  await page.getByTestId('create-credential-group').click();
+  await page.getByTestId('group-name-input').fill(cg);
+  await page.getByTestId('group-name-save').click();
+  const cgRow = page.locator('[data-testid^="cg-"]', { hasText: cg }).first();
+  await expect(cgRow).toContainText(/无成员|No members/);
+
+  await page.getByTestId('tab-model-groups').click();
+  await page.getByTestId('create-model-group').click();
+  await page.getByTestId('group-name-input').fill(mg);
+  await page.getByTestId('group-name-save').click();
+  const mgRow = page.locator('[data-testid^="mg-"]', { hasText: mg }).first();
+  await mgRow.locator('[data-testid^="mg-add-input-"]').fill('gemini-3.8-flash-tiered');
+  await mgRow.locator('[data-testid^="mg-add-"]').last().click();
+  await expect(mgRow).toContainText('gemini-3.8-flash-tiered');
+  await shot(page, '18-model-groups');
+
+  await page.getByTestId('nav-accessKeys').click();
+  await page.getByTestId('create-access-key').click();
+  await page.getByTestId('access-key-name').fill(keyName);
+  await page.getByTestId('create-access-key-submit').click();
+  await page.getByRole('button', { name: /关闭|Close/ }).last().click();
+  const row = page.locator('[data-testid^="access-key-"]', { hasText: keyName });
+  await expect(row).toContainText(/全部凭据 · 全部模型|All credentials · all models/);
+  await row.locator('[data-testid^="edit-access-key-"]').click();
+  await page.getByTestId('key-credential-groups').getByText(cg).click();
+  await expect(page.getByTestId('key-no-fallback-warning')).toBeVisible();
+  await page.getByTestId('key-model-groups').getByText(mg).click();
+  await shot(page, '18-key-scope-dialog');
+  await page.getByTestId('edit-access-key-save').click();
+  await expect(row).toContainText(cg);
+  await expect(row).toContainText(mg);
+
+  // deleting the groups unbinds the key (no silent lock-out)
+  await page.getByTestId('nav-groups').click();
+  await page.locator('[data-testid^="cg-"]', { hasText: cg }).first().locator('[data-testid^="cg-delete-"]').click();
+  await expect(page.getByText(keyName).first()).toBeVisible();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.locator('[data-testid^="cg-"]', { hasText: cg })).toHaveCount(0);
+  await page.getByTestId('tab-model-groups').click();
+  await page.locator('[data-testid^="mg-"]', { hasText: mg }).first().locator('[data-testid^="mg-delete-"]').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.locator('[data-testid^="mg-"]', { hasText: mg })).toHaveCount(0);
+
+  await page.getByTestId('nav-accessKeys').click();
+  await expect(row).toContainText(/全部凭据 · 全部模型|All credentials · all models/);
+  await row.locator('[data-testid^="delete-access-key-"]').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(row).toHaveCount(0);
+});
+
+test('model catalog panel shows refresh controls', async ({ page }) => {
+  await login(page);
+  await page.getByTestId('nav-models').click();
+  await expect(page.getByTestId('catalog-panel')).toBeVisible();
+  await expect(page.getByTestId('catalog-refresh-all')).toBeVisible();
+});

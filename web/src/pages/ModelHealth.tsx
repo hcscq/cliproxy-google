@@ -5,8 +5,9 @@ import { fmtRelative, fmtTime } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
 import { IconRefresh } from '../components/icons';
+import { CatalogPanel } from './CatalogPanel';
 
-const STATUS_ORDER: ModelHealthStatus[] = ['retired', 'rejected', 'cooling', 'partial', 'unknown', 'available'];
+const STATUS_ORDER: ModelHealthStatus[] = ['retired', 'removed', 'rejected', 'cooling', 'partial', 'unknown', 'available'];
 
 export function statusBadge(s: ModelHealthStatus, tr: (zh: string, en: string) => string) {
   switch (s) {
@@ -20,6 +21,8 @@ export function statusBadge(s: ModelHealthStatus, tr: (zh: string, en: string) =
       return <Badge kind="err" dot>{tr('上游拒绝', 'Rejected upstream')}</Badge>;
     case 'retired':
       return <Badge kind="err" dot>{tr('已下线（上游）', 'Retired upstream')}</Badge>;
+    case 'removed':
+      return <Badge kind="err" dot>{tr('上游已移除', 'Removed upstream')}</Badge>;
     default:
       return <Badge dot>{tr('未知', 'Unknown')}</Badge>;
   }
@@ -50,6 +53,10 @@ export function shortReason(m: ModelHealth, tr: (zh: string, en: string) => stri
     }
     case 'partial':
       return tr(`${ok}/${m.credentials.length} 凭据可用`, `${ok}/${m.credentials.length} usable`);
+    case 'removed': {
+      const t = m.credentials.map((c) => c.removed_at).filter(Boolean).sort().reverse()[0];
+      return t ? tr(`${fmtTime(t)} 从上游目录移除`, `Removed ${fmtTime(t)}`) : tr('已从上游目录移除', 'Removed from catalog');
+    }
     case 'unknown':
       return tr('不在当前账号目录中', 'Not in catalog');
     default:
@@ -186,6 +193,7 @@ export function ModelHealthTab() {
           </div>
         )}
       </div>
+      <CatalogPanel onRefreshed={res.reload} />
       <Card
         title={
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>

@@ -30,3 +30,4 @@ export const IconDownload = mk('M12 3v12M7 10l5 5 5-5M4 21h16');
 export const IconUpload = mk('M12 21V9M7 14l5-5 5 5M4 3h16');
 export const IconExternal = mk('M14 4h6v6M20 4l-9 9M18 14v6H4V6h6');
 export const IconEdit = mk('M4 20h4L19 9l-4-4L4 16zM14 6l4 4');
+export const IconLayers = mk('M12 3l9 5-9 5-9-5 9-5zm-9 9l9 5 9-5M3 16l9 5 9-5');

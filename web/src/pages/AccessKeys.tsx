@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAction, useApi, useAsync, useUi } from '../app-context';
-import { generateApiKey, maskSecret, type AccessKey } from '../api/client';
+import { credentialGroupAvailability, generateApiKey, keyScopeSummary, maskSecret, type AccessKey, type CredentialGroupMember } from '../api/client';
+import { GroupChecklist, useGroupLookup } from './Groups';
 import { fmtCompact, fmtRelative } from '../format';
 import { useI18n } from '../i18n';
 import { Card, CopyButton, Empty, ErrorBox, Loading, Modal, Spinner } from '../components/ui';
@@ -14,6 +15,7 @@ export function AccessKeysPage() {
   const { toast, confirm } = useUi();
   const { busy, run } = useAction();
   const keys = useAsync(() => api.accessKeys(), []);
+  const groups = useGroupLookup();
   const usage = useAsync(() => api.usageOverview({ from: new Date(Date.now() - 30 * 86400e3).toISOString() }).catch(() => undefined), []);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<AccessKey | null>(null);
@@ -70,6 +72,7 @@ export function AccessKeysPage() {
               <tr>
                 <th>{t('name')}</th>
                 <th>{tr('密钥', 'Key')}</th>
+                <th>{tr('可用范围', 'Scope')}</th>
                 <th className="hide-sm">{tr('30 天请求', 'Requests (30d)')}</th>
                 <th className="hide-sm">{tr('最后使用', 'Last used')}</th>
                 <th />
@@ -93,10 +96,13 @@ export function AccessKeysPage() {
                         <CopyButton small text={k.api_key} />
                       </div>
                     </td>
+                    <td>
+                      <ScopeCell k={k} cgNames={groups.cgNames} mgNames={groups.mgNames} />
+                    </td>
                     <td className="hide-sm">{u ? fmtCompact(u.request_count) : <span className="faint">0</span>}</td>
                     <td className="hide-sm faint small">{u?.last_used_at ? fmtRelative(u.last_used_at, lang) : '—'}</td>
                     <td className="actions">
-                      <button className="btn btn-sm btn-ghost" onClick={() => setRenaming(k)} title={tr('重命名', 'Rename')}>
+                      <button className="btn btn-sm btn-ghost" onClick={() => setRenaming(k)} title={tr('编辑名称与可用范围', 'Edit name & scope')} data-testid={`edit-access-key-${k.id}`}>
                         <IconEdit />
                       </button>
                       <button
@@ -131,7 +137,7 @@ export function AccessKeysPage() {
 
       {creating && <CreateKeyModal onClose={() => setCreating(false)} onCreated={keys.reload} />}
       {renaming && (
-        <RenameModal
+        <EditKeyModal
           k={renaming}
           onClose={() => setRenaming(null)}
           onSaved={async () => {
@@ -221,39 +227,91 @@ function CreateKeyModal({ onClose, onCreated }: { onClose: () => void; onCreated
   );
 }
 
-function RenameModal({ k, onClose, onSaved }: { k: AccessKey; onClose: () => void; onSaved: () => Promise<void> }) {
+function ScopeCell({ k, cgNames, mgNames }: { k: AccessKey; cgNames: Map<number, string>; mgNames: Map<number, string> }) {
+  const { tr } = useI18n();
+  const sc = keyScopeSummary(k, cgNames, mgNames);
+  if (!sc.credentials && !sc.models) return <span className="faint small">{tr('全部凭据 · 全部模型', 'All credentials · all models')}</span>;
+  return (
+    <div className="scope-chips small">
+      {sc.credentials ? sc.credentials.map((n) => <span key={`c-${n}`} className="tag" title={tr('凭据分组', 'Credential group')}>🔑 {n}</span>) : <span className="faint">{tr('全部凭据', 'All credentials')}</span>}
+      {sc.models ? sc.models.map((n) => <span key={`m-${n}`} className="tag" title={tr('模型分组', 'Model group')}>▦ {n}</span>) : <span className="faint">{tr('全部模型', 'All models')}</span>}
+    </div>
+  );
+}
+
+function EditKeyModal({ k, onClose, onSaved }: { k: AccessKey; onClose: () => void; onSaved: () => Promise<void> }) {
   const api = useApi();
   const { t, tr } = useI18n();
   const { run, busy } = useAction();
+  const groups = useGroupLookup();
+  const creds = useAsync(() => api.credentials().then((r) => r.files ?? []), []);
   const [name, setName] = useState(k.display_name ?? '');
+  const [channels, setChannels] = useState<number[]>(k.channels ?? []);
+  const [modelGroups, setModelGroups] = useState<number[]>(k.model_groups ?? []);
+  const d = groups.data;
+  const members = (d?.credentialMembers ?? []) as CredentialGroupMember[];
+  const usableInScope = channels.reduce((n, id) => n + credentialGroupAvailability(id, members, creds.data ?? []).usable, 0);
+  const save = () =>
+    run('save', async () => {
+      if ((k.display_name ?? '') !== name.trim()) await api.renameAccessKey(k.id, name.trim());
+      await api.setAccessKeyScope(k.id, { channels, model_groups: modelGroups });
+      await onSaved();
+    });
   return (
     <Modal
-      title={tr('重命名密钥', 'Rename key')}
+      title={tr('编辑访问密钥', 'Edit access key')}
       onClose={onClose}
+      wide
       footer={
         <>
           <button className="btn" onClick={onClose}>
             {t('cancel')}
           </button>
-          <button
-            className="btn btn-primary"
-            disabled={!!busy}
-            onClick={() =>
-              run('rename', async () => {
-                await api.renameAccessKey(k.id, name.trim());
-                await onSaved();
-              })
-            }
-          >
+          <button className="btn btn-primary" disabled={!!busy || !d} onClick={() => void save()} data-testid="edit-access-key-save">
             {busy && <Spinner />}
             {t('save')}
           </button>
         </>
       }
     >
-      <div className="field">
-        <label>{t('name')}</label>
-        <input className="input" value={name} maxLength={128} onChange={(e) => setName(e.target.value)} autoFocus />
+      <div className="stack">
+        <div className="field">
+          <label>{t('name')}</label>
+          <input className="input" value={name} maxLength={128} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        {!d ? (
+          <Loading />
+        ) : (
+          <>
+            <div className="field" data-testid="key-credential-groups">
+              <label>{tr('凭据分组（不选 = 可使用全部凭据）', 'Credential groups (none = all credentials)')}</label>
+              <GroupChecklist
+                groups={d.credentialGroups.map((g) => {
+                  const a = credentialGroupAvailability(g.id, members, creds.data ?? []);
+                  return { id: g.id, name: g.channel_name, enabled: g.enabled, extra: a.total ? tr(`当前可用 ${a.usable}/${a.total}`, `usable ${a.usable}/${a.total}`) : tr('无成员', 'no members') };
+                })}
+                value={channels}
+                onChange={setChannels}
+              />
+              {channels.length > 0 && (
+                <div className={`alert small ${usableInScope === 0 ? 'err' : 'warn'}`} data-testid="key-no-fallback-warning">
+                  {usableInScope === 0
+                    ? tr('所选分组当前没有可用凭据：保存后此密钥的请求会立即失败（503）。', 'The selected groups have no usable credential right now: requests with this key will fail (503).')
+                    : tr('此密钥将只使用所选分组内的凭据；分组内凭据全部冷却或耗尽时请求直接失败（503 / 429），不会回退到其他凭据。', 'This key will only use credentials in the selected groups; when all are cooling or exhausted requests fail (503 / 429) with no fallback.')}
+                </div>
+              )}
+            </div>
+            <div className="field" data-testid="key-model-groups">
+              <label>{tr('模型分组（不选 = 可调用全部模型）', 'Model groups (none = all models)')}</label>
+              <GroupChecklist groups={d.modelGroups.map((g) => ({ id: g.id, name: g.group_name, enabled: g.enabled }))} value={modelGroups} onChange={setModelGroups} />
+              {modelGroups.length > 0 && (
+                <span className="hint">
+                  {tr('只能调用所选分组中模型的并集；模型列表只显示这些模型，其他模型返回 403（model_not_allowed）。', 'Only the union of the selected groups’ models; model lists show only those, others get 403 (model_not_allowed).')}
+                </span>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );

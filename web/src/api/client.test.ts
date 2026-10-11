@@ -239,3 +239,30 @@ describe('toggleExcludedModel', () => {
     expect(toggleExcludedModel({}, 'a', true).antigravity).toEqual(['a']);
   });
 });
+
+import { credentialGroupAvailability, keyScopeSummary, type Credential } from './client';
+
+describe('credential groups', () => {
+  const creds = [
+    { id: 'a', provider: 'antigravity', auth_index: 'a', name: 'a' },
+    { id: 'b', provider: 'antigravity', auth_index: 'b', name: 'b', unavailable: true },
+    { id: 'c', provider: 'antigravity', auth_index: 'c', name: 'c', disabled: true },
+  ] as Credential[];
+  const members = [
+    { id: 1, channel_group_id: 7, auth_id: 'a' },
+    { id: 2, channel_group_id: 7, auth_id: 'b' },
+    { id: 3, channel_group_id: 7, auth_id: 'gone' },
+    { id: 4, channel_group_id: 8, auth_id: 'c' },
+  ];
+  it('counts live usable members per group', () => {
+    expect(credentialGroupAvailability(7, members, creds)).toEqual({ total: 3, usable: 1, missing: 1 });
+    expect(credentialGroupAvailability(8, members, creds)).toEqual({ total: 1, usable: 0, missing: 0 });
+    expect(credentialGroupAvailability(9, members, creds)).toEqual({ total: 0, usable: 0, missing: 0 });
+  });
+  it('summarises key scope; empty = unrestricted', () => {
+    const cg = new Map([[7, 'svc-a']]);
+    const mg = new Map([[3, 'flash-only']]);
+    expect(keyScopeSummary({}, cg, mg)).toEqual({ credentials: null, models: null });
+    expect(keyScopeSummary({ channels: [7, 99], model_groups: [3] }, cg, mg)).toEqual({ credentials: ['svc-a', '#99'], models: ['flash-only'] });
+  });
+});

@@ -3,7 +3,7 @@ import { HashRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react
 import { AuthProvider, UiProvider, useAuth, useTheme } from './app-context';
 import { I18nProvider, useI18n, type TKey } from './i18n';
 import {
-  IconChart, IconCube, IconGear, IconHome, IconKey, IconList, IconLogout, IconMenu, IconMoon, IconServer, IconShield, IconSun, IconTicket,
+  IconChart, IconCube, IconGear, IconHome, IconKey, IconLayers, IconList, IconLogout, IconMenu, IconMoon, IconServer, IconShield, IconSun, IconTicket,
 } from './components/icons';
 import { LoginPage } from './pages/Login';
 import { DashboardPage } from './pages/Dashboard';
@@ -11,6 +11,7 @@ import { CredentialsPage } from './pages/Credentials';
 import { ProviderKeysPage } from './pages/ProviderKeys';
 import { ModelsPage } from './pages/Models';
 import { AccessKeysPage } from './pages/AccessKeys';
+import { GroupsPage } from './pages/Groups';
 import { UsagePage } from './pages/Usage';
 import { LogsPage } from './pages/Logs';
 import { NodesPage } from './pages/Nodes';
@@ -22,6 +23,7 @@ const NAV: { path: string; label: TKey; icon: typeof IconHome }[] = [
   { path: '/provider-keys', label: 'providerKeys', icon: IconKey },
   { path: '/models', label: 'models', icon: IconCube },
   { path: '/access-keys', label: 'accessKeys', icon: IconTicket },
+  { path: '/groups', label: 'groups', icon: IconLayers },
   { path: '/usage', label: 'usage', icon: IconChart },
   { path: '/logs', label: 'logs', icon: IconList },
   { path: '/nodes', label: 'nodes', icon: IconServer },
@@ -86,6 +88,7 @@ function Shell() {
             <Route path="/provider-keys" element={<ProviderKeysPage />} />
             <Route path="/models" element={<ModelsPage />} />
             <Route path="/access-keys" element={<AccessKeysPage />} />
+            <Route path="/groups" element={<GroupsPage />} />
             <Route path="/usage" element={<UsagePage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/nodes" element={<NodesPage />} />

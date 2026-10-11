@@ -18,3 +18,20 @@ describe('model health compact text', () => {
     expect(chips[1].title).toContain('Use X');
   });
 });
+
+import { intervalLabel, triggerLabel } from './CatalogPanel';
+
+describe('catalog labels', () => {
+  const zh = (z: string) => z;
+  it('formats interval and trigger', () => {
+    expect(intervalLabel(900, zh)).toBe('每 15 分钟自动刷新');
+    expect(intervalLabel(3600, zh)).toBe('每 1 小时自动刷新');
+    expect(intervalLabel(0, zh)).toContain('已关闭');
+    expect(triggerLabel('event:404 gemini-x', zh)).toBe('错误触发（404 gemini-x）');
+    expect(triggerLabel('manual', zh)).toBe('手动');
+  });
+  it('short reason for removed models', () => {
+    const m = { id: 'x', status: 'removed', hidden: false, in_catalog: false, registered: false, credentials: [{ label: 'a', state: 'removed', in_catalog: false, removed_at: '2026-10-11T05:00:00Z' }] };
+    expect(shortReason(m as never, zh)).toContain('从上游目录移除');
+  });
+});
