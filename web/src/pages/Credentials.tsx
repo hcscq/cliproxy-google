@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAction, useApi, useAsync, useUi } from '../app-context';
-import { isSupportedProvider, type Credential, type ModelInfo, type QuotaItem } from '../api/client';
+import { coolingModels, credentialUsable, isSupportedProvider, type Credential, type ModelInfo, type QuotaItem } from '../api/client';
 import { downloadBlob, fmtRelative, fmtTime } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
@@ -10,8 +10,15 @@ import { AddCredentialModal } from './AddCredential';
 
 export function credentialStatus(c: Credential, t: ReturnType<typeof useI18n>['t'], tr: ReturnType<typeof useI18n>['tr']) {
   if (c.disabled) return <Badge>{t('disabled')}</Badge>;
-  if (c.unavailable) return <Badge kind="warn" dot>{tr('冷却/不可用', 'Cooling down')}</Badge>;
-  if (c.status === 'active') return <Badge kind="ok" dot>{tr('可用', 'Active')}</Badge>;
+  if (c.unavailable || c.credential_scope_error) return <Badge kind="warn" dot>{tr('整体冷却/不可用', 'Cooling down')}</Badge>;
+  const cooling = coolingModels(c).length;
+  if (credentialUsable(c) && cooling > 0)
+    return (
+      <Badge kind="warn" dot>
+        {tr(`可用 · ${cooling} 个模型冷却`, `Active · ${cooling} model(s) cooling`)}
+      </Badge>
+    );
+  if (credentialUsable(c) && (c.status === 'active' || c.status === 'error')) return <Badge kind="ok" dot>{tr('可用', 'Active')}</Badge>;
   return (
     <Badge kind="err" dot>
       {c.status || 'unknown'}
@@ -137,7 +144,13 @@ export function CredentialsPage() {
                   <td>
                     <div className="stack" style={{ gap: 4 }}>
                       {credentialStatus(c, t, tr)}
-                      {c.status_message && <span className="faint small ellipsis" style={{ maxWidth: 200 }} title={c.status_message}>{c.status_message}</span>}
+                      {coolingModels(c).length > 0 ? (
+                        <span className="faint small ellipsis" style={{ maxWidth: 220 }} title={coolingModels(c).map((m) => m.model).join(', ')}>
+                          {coolingModels(c).map((m) => m.model).join(', ')}
+                        </span>
+                      ) : (
+                        c.credential_scope_error && c.status_message && <span className="faint small ellipsis" style={{ maxWidth: 200 }} title={c.status_message}>{c.status_message}</span>
+                      )}
                     </div>
                   </td>
                   <td className="hide-sm">
@@ -227,7 +240,8 @@ function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred
           {credentialStatus(cred, t, tr)}
           <QuotaStatusBadge item={quota} />
         </div>
-        {cred.status_message && <div className="alert warn small">{cred.status_message}</div>}
+        {cred.credential_scope_error && cred.status_message && <div className="alert warn small">{cred.status_message}</div>}
+        <ModelCooldownList cred={cred} />
 
         <dl className="kv small">
           <dt>ID</dt>
@@ -368,5 +382,44 @@ function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred
         </div>
       </div>
     </Drawer>
+  );
+}
+
+function ModelCooldownList({ cred }: { cred: Credential }) {
+  const { tr, lang } = useI18n();
+  const items = cred.model_cooldowns ?? [];
+  if (!items.length) return null;
+  return (
+    <div className="stack" style={{ gap: 6 }} data-testid="model-cooldowns">
+      <div className="small strong">{tr('按模型的冷却 / 最近错误（仅影响对应模型）', 'Per-model cooldown / recent errors (only that model is affected)')}</div>
+      <table className="table small">
+        <thead>
+          <tr>
+            <th>{tr('模型', 'Model')}</th>
+            <th>{tr('状态', 'State')}</th>
+            <th>{tr('恢复时间', 'Retry at')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((m) => (
+            <tr key={m.model}>
+              <td className="mono">{m.model}</td>
+              <td>
+                <Badge kind={m.cooling ? 'warn' : undefined} dot>
+                  {m.cooling ? (m.quota_exceeded ? tr('额度耗尽冷却', 'Quota cooldown') : tr('冷却中', 'Cooling')) : tr('最近失败', 'Recent error')}
+                  {m.http_status ? ` · ${m.http_status}` : ''}
+                </Badge>
+                {m.status_message && (
+                  <div className="faint small ellipsis" style={{ maxWidth: 280 }} title={m.status_message}>
+                    {m.status_message}
+                  </div>
+                )}
+              </td>
+              <td className="small">{m.next_retry_after ? `${fmtTime(m.next_retry_after)} (${fmtRelative(m.next_retry_after, lang)})` : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

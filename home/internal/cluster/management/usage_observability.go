@@ -1569,9 +1569,9 @@ func usageRecordSummaryResponse(record *cluster.UsageObservabilityRecord) gin.H 
 	var errorValue any
 	if record.Error != nil {
 		errorValue = gin.H{
-			"status_code":  record.Error.StatusCode,
-			"message":      record.Error.Message,
-			"body_preview": record.Error.BodyPreview,
+			"status_code":    record.Error.StatusCode,
+			"message":        record.Error.Message,
+			"body_preview":   record.Error.BodyPreview,
 			"body_truncated": record.Error.BodyTruncated,
 			"body_size":      record.Error.BodySize,
 		}

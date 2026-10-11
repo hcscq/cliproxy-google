@@ -338,6 +338,27 @@ export interface Topology {
   management?: { home_id?: string; home_ip?: string; home_port?: number };
 }
 
+export interface ModelCooldown {
+  model: string;
+  cooling: boolean;
+  status_message?: string;
+  quota_exceeded?: boolean;
+  next_retry_after?: string;
+  http_status?: number;
+  updated_at?: string;
+}
+
+/** A credential is usable unless disabled or blocked as a whole; per-model
+ * cooldowns (quota on one model, capacity) only affect those models. */
+export function credentialUsable(c: Credential): boolean {
+  return !c.disabled && !c.unavailable && !c.credential_scope_error;
+}
+
+/** Models currently cooling down on this credential. */
+export function coolingModels(c: Credential): ModelCooldown[] {
+  return (c.model_cooldowns ?? []).filter((m) => m.cooling);
+}
+
 export interface Credential {
   id: string;
   auth_index: string;
@@ -360,6 +381,9 @@ export interface Credential {
   websockets?: boolean;
   'disable-cooling'?: boolean;
   'request-retry'?: number;
+  next_retry_after?: string;
+  model_cooldowns?: ModelCooldown[];
+  credential_scope_error?: boolean;
   created_at?: string;
   updated_at?: string;
   in_flight?: number | null;

@@ -215,3 +215,15 @@ describe('capRank', () => {
     expect(capRank([{ label: 'a', value: 1 }], 8, () => 'x')).toHaveLength(1);
   });
 });
+
+describe('credentialUsable / coolingModels', () => {
+  it('model-scoped cooldown keeps credential usable', async () => {
+    const { credentialUsable, coolingModels } = await import('./client');
+    const c = { id: 'a', auth_index: 'a', name: 'a', provider: 'antigravity', status: 'error', unavailable: false,
+      model_cooldowns: [{ model: 'gemini-2.5-pro', cooling: true }, { model: 'x', cooling: false }] };
+    expect(credentialUsable(c)).toBe(true);
+    expect(coolingModels(c).map((m) => m.model)).toEqual(['gemini-2.5-pro']);
+    expect(credentialUsable({ ...c, credential_scope_error: true })).toBe(false);
+    expect(credentialUsable({ ...c, unavailable: true })).toBe(false);
+  });
+});

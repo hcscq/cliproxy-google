@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useApi, useAsync } from '../app-context';
-import { isSupportedProvider, normalizeTopology, type Credential, type QuotaItem } from '../api/client';
+import { isSupportedProvider, normalizeTopology, type Credential, type QuotaItem, credentialUsable, coolingModels } from '../api/client';
 import { fmtCompact, fmtMs, fmtPct, fmtRelative, fmtTime } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, Empty, ErrorBox, Loading, Stat } from '../components/ui';
@@ -31,7 +31,7 @@ export function DashboardPage() {
 
   const { homes, staleHomes, proxies, leader } = normalizeTopology(topo.data);
   const files: Credential[] = (creds.data?.files ?? []).filter((c) => isSupportedProvider(c.provider));
-  const activeCreds = files.filter((c) => !c.disabled && !c.unavailable && c.status === 'active').length;
+  const activeCreds = files.filter(credentialUsable).length;
   const quotaById = new Map<string, QuotaItem>((quota.data?.items ?? []).map((q) => [q.credential_id, q]));
   const totals = usage.data?.totals;
   // Credentials ordered by 24h request count (unused ones last, by name).
@@ -121,6 +121,13 @@ export function DashboardPage() {
                       {c.label || c.email || c.name}
                     </span>
                     {c.disabled ? <Badge>{t('disabled')}</Badge> : <QuotaStatusBadge item={quotaById.get(c.id)} />}
+                    {!c.disabled && coolingModels(c).length > 0 && (
+                      <Badge kind="warn" dot>
+                        <span title={coolingModels(c).map((m) => m.model).join(', ')}>
+                          {tr(`${coolingModels(c).length} 个模型冷却中`, `${coolingModels(c).length} model(s) cooling`)}
+                        </span>
+                      </Badge>
+                    )}
                   </div>
                   <QuotaWindows item={quotaById.get(c.id)} />
                 </div>

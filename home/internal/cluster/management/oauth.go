@@ -590,7 +590,68 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
 		entry["request-retry"] = requestRetry
 	}
+	if !auth.NextRetryAfter.IsZero() {
+		entry["next_retry_after"] = auth.NextRetryAfter
+	}
+	cooldowns := modelCooldownEntries(auth, time.Now())
+	entry["model_cooldowns"] = cooldowns
+	entry["credential_scope_error"] = credentialScopeError(auth, time.Now())
 	return entry
+}
+
+// modelCooldownEntries lists models that are cooling down or recently failed on
+// this credential. Model-scoped failures (per-model quota, capacity) only
+// affect that (credential, model) pair; the credential stays usable for others.
+func modelCooldownEntries(auth *coreauth.Auth, now time.Time) []gin.H {
+	out := []gin.H{}
+	if auth == nil {
+		return out
+	}
+	names := make([]string, 0, len(auth.ModelStates))
+	for name := range auth.ModelStates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		st := auth.ModelStates[name]
+		if st == nil || st.Status != coreauth.StatusError {
+			continue
+		}
+		cooling := st.Unavailable && st.NextRetryAfter.After(now)
+		item := gin.H{
+			"model":          name,
+			"cooling":        cooling,
+			"status_message": st.StatusMessage,
+			"quota_exceeded": st.Quota.Exceeded,
+		}
+		if cooling {
+			item["next_retry_after"] = st.NextRetryAfter
+		}
+		if st.LastError != nil && st.LastError.HTTPStatus != 0 {
+			item["http_status"] = st.LastError.HTTPStatus
+		}
+		if !st.UpdatedAt.IsZero() {
+			item["updated_at"] = st.UpdatedAt
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// credentialScopeError reports whether the whole credential is blocked
+// (auth-level cooldown, credential quota, or 401/403), as opposed to only some
+// models.
+func credentialScopeError(auth *coreauth.Auth, now time.Time) bool {
+	if auth == nil || auth.Disabled {
+		return false
+	}
+	if auth.Unavailable && (auth.NextRetryAfter.IsZero() || auth.NextRetryAfter.After(now)) {
+		return true
+	}
+	if auth.LastError != nil && (auth.LastError.HTTPStatus == 401 || auth.LastError.HTTPStatus == 403) && len(auth.ModelStates) == 0 {
+		return true
+	}
+	return false
 }
 
 // authFileName handles an auth file name.
