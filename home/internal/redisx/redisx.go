@@ -74,6 +74,7 @@ type Client struct {
 	rdb     redis.UniversalClient
 	bulk    redis.UniversalClient // longer timeouts, for background bulk work
 	prefix  string
+	cfg     Config
 	timeout time.Duration
 	healthy atomic.Bool
 	fails   atomic.Int32
@@ -89,7 +90,7 @@ func Open(cfg Config) *Client {
 	rdb := newRedisClient(cfg, cfg.OpTimeout, 64, 4)
 	bulk := newRedisClient(cfg, 5*time.Second, 8, 0)
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Client{rdb: rdb, bulk: bulk, prefix: cfg.KeyPrefix, timeout: cfg.OpTimeout, stop: cancel}
+	c := &Client{rdb: rdb, bulk: bulk, cfg: cfg, prefix: cfg.KeyPrefix, timeout: cfg.OpTimeout, stop: cancel}
 	c.probe(ctx)
 	go c.monitor(ctx)
 	mode := "standalone " + cfg.Addr

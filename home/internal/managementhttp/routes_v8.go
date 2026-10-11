@@ -39,7 +39,7 @@ func managementV8Routes(legacy *RouteRegistry, sdk *cpasdkapi.Handler, home *clu
 		}
 		if home != nil {
 			// Home resources keep their existing names under the new version.
-			for _, prefix := range []string{"/nodes", "/topology", "/certificates", "/capabilities", "/credentials/", "/quota/", "/usage/", "/request-events", "/request-logs", "/billing/", "/proxy/", "/users", "/channel-groups", "/channel-group-details", "/model-groups", "/model-group-details", "/plugin-store-auth", "/models", "/groups", "/group-rules"} {
+			for _, prefix := range []string{"/nodes", "/topology", "/infra", "/certificates", "/capabilities", "/credentials/", "/quota/", "/usage/", "/request-events", "/request-logs", "/billing/", "/proxy/", "/users", "/channel-groups", "/channel-group-details", "/model-groups", "/model-group-details", "/plugin-store-auth", "/models", "/groups", "/group-rules"} {
 				if key.Path == prefix || strings.HasPrefix(key.Path, strings.TrimSuffix(prefix, "/")+"/") {
 					routes.Set(key.Method, key.Path, handler)
 					break

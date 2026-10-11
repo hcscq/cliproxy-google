@@ -86,3 +86,12 @@ func DatabasePoolStatus(ctx context.Context, db *gorm.DB) PoolStatus {
 	}
 	return st
 }
+
+// PoolStatus reports this Home's PostgreSQL pools.
+func (r *Repository) PoolStatus(ctx context.Context) PoolStatus {
+	db, err := r.database()
+	if err != nil {
+		return PoolStatus{PingError: err.Error()}
+	}
+	return DatabasePoolStatus(ctx, db)
+}
