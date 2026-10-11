@@ -218,7 +218,11 @@ func ConvertAntigravityResponseToClaude(ctx context.Context, _ string, originalR
 
 		// Use cpaUsageMetadata within the message_start event for Claude.
 		if promptTokenCount := gjson.GetBytes(rawJSON, "response.cpaUsageMetadata.promptTokenCount"); promptTokenCount.Exists() {
-			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.usage.input_tokens", promptTokenCount.Int())
+			// Anthropic semantics: input_tokens excludes cache reads.
+			cached := gjson.GetBytes(rawJSON, "response.cpaUsageMetadata.cachedContentTokenCount").Int()
+			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.usage.input_tokens", max(promptTokenCount.Int()-cached, 0))
+			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.usage.cache_read_input_tokens", cached)
+			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.usage.cache_creation_input_tokens", 0)
 		}
 		if candidatesTokenCount := gjson.GetBytes(rawJSON, "response.cpaUsageMetadata.candidatesTokenCount"); candidatesTokenCount.Exists() && !webSearchStreamMode {
 			messageStartTemplate, _ = sjson.SetBytes(messageStartTemplate, "message.usage.output_tokens", candidatesTokenCount.Int())
@@ -485,14 +489,10 @@ func appendFinalEvents(params *Params, output *[]byte, force bool) {
 	if params.WebSearchRequests > 0 {
 		delta, _ = sjson.SetBytes(delta, "usage.server_tool_use.web_search_requests", params.WebSearchRequests)
 	}
-	// Add cache_read_input_tokens if cached tokens are present (indicates prompt caching is working)
-	if params.CachedTokenCount > 0 {
-		var err error
-		delta, err = sjson.SetBytes(delta, "usage.cache_read_input_tokens", params.CachedTokenCount)
-		if err != nil {
-			log.Warnf("antigravity claude response: failed to set cache_read_input_tokens: %v", err)
-		}
-	}
+	// Anthropic always reports both cache fields. Gemini only has implicit
+	// caching (reads); there is no cache-write accounting, so creation is 0.
+	delta, _ = sjson.SetBytes(delta, "usage.cache_read_input_tokens", params.CachedTokenCount)
+	delta, _ = sjson.SetBytes(delta, "usage.cache_creation_input_tokens", 0)
 	*output = translatorcommon.AppendSSEEventString(*output, "message_delta", string(delta), 3)
 
 	params.HasSentFinalEvents = true
@@ -544,16 +544,12 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 	responseJSON := []byte(`{"id":"","type":"message","role":"assistant","model":"","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}`)
 	responseJSON, _ = sjson.SetBytes(responseJSON, "id", claudeMessageID(root.Get("response.responseId").String()))
 	responseJSON, _ = sjson.SetBytes(responseJSON, "model", root.Get("response.modelVersion").String())
-	responseJSON, _ = sjson.SetBytes(responseJSON, "usage.input_tokens", promptTokens)
+	// Anthropic semantics: input_tokens excludes cache reads (matches the
+	// streaming path, which already subtracts them).
+	responseJSON, _ = sjson.SetBytes(responseJSON, "usage.input_tokens", max(promptTokens-cachedTokens, 0))
 	responseJSON, _ = sjson.SetBytes(responseJSON, "usage.output_tokens", outputTokens)
-	// Add cache_read_input_tokens if cached tokens are present (indicates prompt caching is working)
-	if cachedTokens > 0 {
-		var err error
-		responseJSON, err = sjson.SetBytes(responseJSON, "usage.cache_read_input_tokens", cachedTokens)
-		if err != nil {
-			log.Warnf("antigravity claude response: failed to set cache_read_input_tokens: %v", err)
-		}
-	}
+	responseJSON, _ = sjson.SetBytes(responseJSON, "usage.cache_read_input_tokens", cachedTokens)
+	responseJSON, _ = sjson.SetBytes(responseJSON, "usage.cache_creation_input_tokens", 0)
 
 	if shouldTranslateWebSearchGrounding(originalRequestRawJSON, requestRawJSON) {
 		if groundingMetadata := antigravityGroundingMetadata(root); groundingMetadata.Exists() {

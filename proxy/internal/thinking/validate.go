@@ -74,6 +74,12 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 			}
 		}
 	}
+	// Claude models served through Antigravity are typed as a Gemini-family
+	// provider, but their budget range is Claude's. Gemini clients expect
+	// out-of-range budgets to be clamped (as Google does), not rejected.
+	if !modelFamilyMismatch && isGeminiFamily(fromFormat) && strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude") {
+		modelFamilyMismatch = true
+	}
 	allowClampUnsupported := toHasLevelSupport && (!isSameProviderFamily(fromFormat, toFormat) || modelFamilyMismatch)
 
 	// strictBudget determines whether to enforce strict budget range validation.

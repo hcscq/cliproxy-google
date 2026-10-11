@@ -50,7 +50,7 @@ export function UsagePage() {
       <div className="grid grid-4">
         <Stat label={tr('请求数', 'Requests')} value={tot ? fmtCompact(tot.request_count) : '…'} sub={tot ? `${tr('失败', 'failed')} ${fmtNum(tot.failed_count)}` : undefined} />
         <Stat label={t('successRate')} value={tot ? fmtPct(tot.request_count ? tot.success_count / tot.request_count : undefined) : '…'} sub={overview.data?.live ? `RPM ${fmtNum(overview.data.live.rpm, 1)} · TPM ${fmtCompact(overview.data.live.tpm)}` : undefined} />
-        <Stat label={t('tokens')} value={tot ? fmtCompact(tot.total_tokens) : '…'} sub={tot ? `${tr('输入', 'in')} ${fmtCompact(tot.input_tokens)} · ${tr('输出', 'out')} ${fmtCompact(tot.output_tokens)} · ${tr('思考', 'reasoning')} ${fmtCompact(tot.reasoning_tokens)}` : undefined} />
+        <Stat label={t('tokens')} value={tot ? fmtCompact(tot.total_tokens) : '…'} sub={tot ? `${tr('输入', 'in')} ${fmtCompact(tot.input_tokens)} · ${tr('输出', 'out')} ${fmtCompact(tot.output_tokens)} · ${tr('思考', 'reasoning')} ${fmtCompact(tot.reasoning_tokens)} · ${tr('缓存命中', 'cached')} ${fmtCompact(tot.cached_tokens)}${tot.input_tokens ? ` (${fmtPct((tot.cached_tokens ?? 0) / tot.input_tokens)})` : ''}` : undefined} />
         <Stat label={t('latency')} value={tot ? fmtMs(tot.avg_latency_ms) : '…'} sub={tot ? `P95 ${fmtMs(tot.p95_latency_ms)}` : undefined} />
       </div>
 
@@ -166,7 +166,10 @@ function RequestEvents({ from }: { from: string }) {
                   <td>
                     <Badge kind={e.failed ? 'err' : 'ok'}>{e.status_code ?? (e.failed ? 'ERR' : 200)}</Badge>
                   </td>
-                  <td className="hide-sm small">{fmtCompact(e.tokens?.total_tokens)}</td>
+                  <td className="hide-sm small" title={e.tokens?.cached_tokens ? `${tr('其中缓存命中', 'cached')} ${fmtNum(e.tokens.cached_tokens)}` : undefined}>
+                    {fmtCompact(e.tokens?.total_tokens)}
+                    {!!e.tokens?.cached_tokens && <span className="muted" data-testid="row-cached"> · {tr('缓存', 'cached')} {fmtCompact(e.tokens.cached_tokens)}</span>}
+                  </td>
                   <td className="hide-sm small">{fmtMs(e.performance?.latency_ms)}</td>
                   <td className="hide-sm small ellipsis" style={{ maxWidth: 200 }}>
                     {e.credential?.label ?? '—'}

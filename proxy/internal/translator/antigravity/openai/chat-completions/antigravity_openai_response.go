@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
-	log "github.com/sirupsen/logrus"
 
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/gemini/openai/chat-completions"
 	"github.com/tidwall/gjson"
@@ -52,7 +51,38 @@ var functionCallIDCounter uint64
 //
 // Returns:
 //   - [][]byte: A slice of OpenAI-compatible JSON responses
-func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
+func ConvertAntigravityResponseToOpenAI(ctx context.Context, model string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
+	out := convertAntigravityResponseToOpenAIStream(ctx, model, originalRequestRawJSON, requestRawJSON, rawJSON, param)
+	if !gjson.GetBytes(originalRequestRawJSON, "stream_options.include_usage").Bool() {
+		return out
+	}
+	return splitOpenAIStreamUsage(out)
+}
+
+// splitOpenAIStreamUsage implements stream_options.include_usage: usage is
+// removed from content chunks and sent in one extra trailing chunk whose
+// choices array is empty, as the OpenAI spec requires.
+func splitOpenAIStreamUsage(chunks [][]byte) [][]byte {
+	res := make([][]byte, 0, len(chunks)+1)
+	for _, chunk := range chunks {
+		usage := gjson.GetBytes(chunk, "usage")
+		if !usage.Exists() || usage.Type == gjson.Null {
+			res = append(res, chunk)
+			continue
+		}
+		content, _ := sjson.DeleteBytes(chunk, "usage")
+		res = append(res, content)
+		tail := []byte(`{"id":"","object":"chat.completion.chunk","created":0,"model":"","choices":[]}`)
+		tail, _ = sjson.SetBytes(tail, "id", gjson.GetBytes(chunk, "id").String())
+		tail, _ = sjson.SetBytes(tail, "created", gjson.GetBytes(chunk, "created").Int())
+		tail, _ = sjson.SetBytes(tail, "model", gjson.GetBytes(chunk, "model").String())
+		tail, _ = sjson.SetRawBytes(tail, "usage", []byte(usage.Raw))
+		res = append(res, tail)
+	}
+	return res
+}
+
+func convertAntigravityResponseToOpenAIStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
 	params, ok := (*param).(*convertCliResponseToOpenAIChatParams)
 	if !ok {
 		params = &convertCliResponseToOpenAIChatParams{
@@ -295,16 +325,10 @@ func setOpenAIUsageMetadata(template []byte, usageResult gjson.Result) []byte {
 	promptTokenCount := usageResult.Get("promptTokenCount").Int()
 	thoughtsTokenCount := usageResult.Get("thoughtsTokenCount").Int()
 	template, _ = sjson.SetBytes(template, "usage.prompt_tokens", promptTokenCount)
-	if thoughtsTokenCount > 0 {
-		template, _ = sjson.SetBytes(template, "usage.completion_tokens_details.reasoning_tokens", thoughtsTokenCount)
-	}
-	if cachedTokenCount > 0 {
-		var err error
-		template, err = sjson.SetBytes(template, "usage.prompt_tokens_details.cached_tokens", cachedTokenCount)
-		if err != nil {
-			log.Warnf("antigravity openai response: failed to set cached_tokens: %v", err)
-		}
-	}
+	// OpenAI always reports both detail objects (zeros included); clients such
+	// as cost trackers read them unconditionally.
+	template, _ = sjson.SetBytes(template, "usage.completion_tokens_details.reasoning_tokens", thoughtsTokenCount)
+	template, _ = sjson.SetBytes(template, "usage.prompt_tokens_details.cached_tokens", cachedTokenCount)
 	return template
 }
 
