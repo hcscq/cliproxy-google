@@ -145,3 +145,27 @@ func TestUsageStreamFallsBackWhenRedisDown(t *testing.T) {
 		t.Fatal("fallback not counted")
 	}
 }
+
+func TestUsageStreamConsumerNamesAreUnique(t *testing.T) {
+	a := newUsageStream(nil, nil, "")
+	b := newUsageStream(nil, nil, "")
+	if a.consumer == b.consumer {
+		t.Fatalf("consumer names collide: %q", a.consumer)
+	}
+}
+
+// Two consumers draining one stream must store every entry exactly once.
+func TestUsageStreamTwoConsumersNoDuplicates(t *testing.T) {
+	rc := testUsageRedis(t)
+	store := &fakeUsageItemsStore{rows: map[string]string{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newUsageStream(rc, store, "")
+	b := newUsageStream(rc, store, "")
+	go a.Run(ctx)
+	go b.Run(ctx)
+	for i := 0; i < 3000; i++ {
+		a.Append(ctx, `{"i":1}`, time.Now())
+	}
+	waitFor(t, 15*time.Second, func() bool { return store.count() == 3000 }, "3000 rows")
+}

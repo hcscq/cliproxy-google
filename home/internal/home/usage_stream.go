@@ -11,12 +11,18 @@ package home
 //   - a PostgreSQL outage is buffered in Redis (bounded by MAXLEN) instead of in
 //     Home memory, and drained by all Homes when PostgreSQL returns.
 // Redelivered entries are de-duplicated by stream id (usage.stream_id), so a
-// crash between commit and XACK does not double-bill.
+// crash between commit and XACK does not double-bill. The check is safe because
+// an entry is only claimed from another consumer after usageStreamClaimIdle
+// (60s), while a consumer's own write is cancelled after usageWriterDrainLimit
+// (20s): by the time an entry is claimed its original writer has either
+// committed (then the claim sees the row) or rolled back.
 // When Redis is disabled or XADD fails, the payload goes to the in-memory
 // queue -> PostgreSQL path as before (fallback). Redis is never required.
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"os"
 	"strconv"
@@ -89,7 +95,12 @@ func newUsageStream(rc *redisx.Client, store usageItemsStore, consumer string) *
 		maxLen = v
 	}
 	if consumer == "" {
-		consumer, _ = os.Hostname()
+		// Unique per process: two Homes sharing a consumer name would both
+		// re-read (and store) the same pending entries.
+		host, _ := os.Hostname()
+		var b [4]byte
+		_, _ = rand.Read(b[:])
+		consumer = host + "-" + hex.EncodeToString(b[:])
 	}
 	return &usageStream{rc: rc, store: store, consumer: consumer, maxLen: maxLen}
 }
