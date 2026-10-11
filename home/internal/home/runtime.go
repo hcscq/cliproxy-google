@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/ratelimit"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -914,6 +915,13 @@ const (
 func (r *Runtime) dispatchForAPIKey(ctx context.Context, reqModel string, headers http.Header, apiKey string, credentialPolicy string, excludedAuthIDs []string, pinnedAuthID string, concurrencyCtx DispatchConcurrencyContext) (*DispatchResult, error) {
 	store, _ := r.clusterAdapter.(stickyAffinityStore)
 	cfg := r.Config()
+	// Count each client request once: proxy retry rounds (exclusions) and
+	// pinned re-dispatches belong to a request that was already admitted.
+	if cfg != nil && cfg.APIKeyRPM > 0 && len(excludedAuthIDs) == 0 && strings.TrimSpace(pinnedAuthID) == "" {
+		if ok, _ := ratelimit.Default.Allow(ctx, "key", apiKeyLimitID(apiKey), cfg.APIKeyRPM); !ok {
+			return nil, &coreauth.Error{Code: "api_key_rate_limited", Message: fmt.Sprintf("API key rate limit exceeded (%d requests per minute)", cfg.APIKeyRPM), HTTPStatus: http.StatusTooManyRequests}
+		}
+	}
 	if store == nil || cfg == nil || !cfg.StickySessions.StickyEnabled() || strings.TrimSpace(pinnedAuthID) != "" || headers == nil {
 		return r.dispatchForAPIKeyOnce(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, pinnedAuthID, concurrencyCtx)
 	}
@@ -952,6 +960,12 @@ func (r *Runtime) dispatchForAPIKey(ctx context.Context, reqModel string, header
 	}
 	store.RecordRequestAffinity(requestID, source, outcome, res.AuthID, prev)
 	return res, nil
+}
+
+// apiKeyLimitID keys rate limits by a hash so raw API keys never reach Redis.
+func apiKeyLimitID(apiKey string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(apiKey)))
+	return hex.EncodeToString(sum[:16])
 }
 
 // affinityBindingKey scopes a proxy affinity key to the caller's API key.
@@ -1091,12 +1105,27 @@ func (r *Runtime) dispatchWithOptions(ctx context.Context, reqModel string, opts
 			result.UnaccountedReply = unaccounted
 			result.AccountedReply = accounted
 		}
+		var rpmTicket ratelimit.Ticket
+		if cfg := r.Config(); cfg != nil && cfg.CredentialRPM > 0 {
+			allowed, ticket := ratelimit.Default.Allow(ctx, "cred", auth.ID, cfg.CredentialRPM)
+			if !allowed {
+				lastCandidateError = &coreauth.Error{Code: "credential_rpm_exceeded", Message: fmt.Sprintf("all eligible credentials are at their rate limit (%d requests per minute)", cfg.CredentialRPM), HTTPStatus: http.StatusTooManyRequests, Retryable: true}
+				if opts.Metadata == nil {
+					opts.Metadata = make(map[string]any)
+				}
+				candidates := append([]coreauth.ExcludedConcurrencyCandidate(nil), concurrencyExcludedCandidates(opts)...)
+				opts.Metadata[coreauth.ExcludedConcurrencyCandidatesMetadataKey] = append(candidates, coreauth.ExcludedConcurrencyCandidate{CredentialID: auth.ID})
+				continue
+			}
+			rpmTicket = ticket
+		}
 		if r.concurrencyAdmitter != nil {
 			admission, errAdmit := r.concurrencyAdmitter.AdmitCredentialConcurrency(ctx, ConcurrencyAdmissionRequest{
 				CredentialID: auth.ID, Model: concurrencyModel, Fingerprint: concurrencyCtx.Fingerprint,
 				ConnectedAt: concurrencyCtx.ConnectedAt, Controlled: concurrencyCtx.Controlled, ProtocolVersion: concurrencyCtx.ProtocolVersion,
 			})
 			if errAdmit != nil {
+				rpmTicket.Release(ctx)
 				admissionType := concurrencyAdmissionErrorType(errAdmit)
 				if !concurrencyCandidateIneligible(admissionType) {
 					return nil, errAdmit

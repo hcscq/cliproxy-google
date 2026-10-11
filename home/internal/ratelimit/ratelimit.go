@@ -136,3 +136,26 @@ func (t Ticket) Release(ctx context.Context) {
 	}
 	t.l.mu.Unlock()
 }
+
+var liveHomes atomicInt
+
+type atomicInt struct {
+	mu sync.Mutex
+	n  int
+}
+
+// SetLiveHomes records how many Home replicas share the limits (fallback split).
+func SetLiveHomes(n int) {
+	liveHomes.mu.Lock()
+	liveHomes.n = n
+	liveHomes.mu.Unlock()
+}
+
+func currentLiveHomes() int {
+	liveHomes.mu.Lock()
+	defer liveHomes.mu.Unlock()
+	return liveHomes.n
+}
+
+// Default is the process-wide limiter used by dispatch.
+var Default = New(currentLiveHomes)

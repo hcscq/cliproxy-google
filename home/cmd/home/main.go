@@ -6,6 +6,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/ratelimit"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/redisx"
 	"net"
 	"net/http"
 	"os"
@@ -407,6 +409,13 @@ func run() int {
 	if errStart := rt.Start(runCtx, configPath); errStart != nil {
 		log.Errorf("failed to start runtime: %v", errStart)
 		return 1
+	}
+	if clusterRepo != nil && clusterCfg != nil {
+		if rc := redisx.Open(clusterCfg.Redis); rc != nil {
+			redisx.SetDefault(rc)
+			defer rc.Close()
+		}
+		go trackLiveHomes(runCtx, clusterRepo, nodeCfg.HeartbeatTimeout)
 	}
 	if clusterRepo != nil {
 		clusterRepo.StartScopeCache(runCtx)
@@ -940,5 +949,22 @@ func applyLogLevel(cfg *config.Config) {
 	}
 	if nextLevel := log.GetLevel(); nextLevel != currentLevel {
 		log.Infof("log level changed from %s to %s (debug=%t)", currentLevel, nextLevel, debugEnabled)
+	}
+}
+
+// trackLiveHomes keeps the rate limiter's fallback split (limit / live Homes)
+// current; it only matters while Redis is off or down.
+func trackLiveHomes(ctx context.Context, repo *cluster.Repository, timeout time.Duration) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		if nodes, err := repo.ListClusterNodes(ctx, time.Now().Add(-timeout)); err == nil && len(nodes) > 0 {
+			ratelimit.SetLiveHomes(len(nodes))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
 }
