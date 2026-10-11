@@ -593,9 +593,12 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	if !auth.NextRetryAfter.IsZero() {
 		entry["next_retry_after"] = auth.NextRetryAfter
 	}
-	cooldowns := modelCooldownEntries(auth, time.Now())
-	entry["model_cooldowns"] = cooldowns
-	entry["credential_scope_error"] = credentialScopeError(auth, time.Now())
+	if cooldowns := modelCooldownEntries(auth, time.Now()); len(cooldowns) > 0 {
+		entry["model_cooldowns"] = cooldowns
+	}
+	if credentialScopeError(auth, time.Now()) {
+		entry["credential_scope_error"] = true
+	}
 	return entry
 }
 

@@ -21,7 +21,7 @@ func TestAuthFileEntryModelScopedCooldown(t *testing.T) {
 		},
 	}
 	e := authFileEntry(auth)
-	if e["credential_scope_error"].(bool) {
+	if e["credential_scope_error"] != nil {
 		t.Fatal("model-scoped quota must not mark whole credential")
 	}
 	cd := e["model_cooldowns"].([]gin.H)
@@ -33,7 +33,7 @@ func TestAuthFileEntryModelScopedCooldown(t *testing.T) {
 	}
 	auth.Unavailable = true
 	auth.NextRetryAfter = now.Add(time.Minute)
-	if !authFileEntry(auth)["credential_scope_error"].(bool) {
+	if authFileEntry(auth)["credential_scope_error"] != true {
 		t.Fatal("auth-level cooldown must mark whole credential")
 	}
 }
