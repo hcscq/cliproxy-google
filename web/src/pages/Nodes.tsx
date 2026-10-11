@@ -5,6 +5,7 @@ import { fmtRelative, fmtTime } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, Empty, ErrorBox, Loading, Stat, Switch } from '../components/ui';
 import { IconRefresh } from '../components/icons';
+import { InfraCard } from './InfraCard';
 
 export function NodesPage() {
   const api = useApi();
@@ -32,6 +33,7 @@ export function NodesPage() {
         <Stat label={t('homeReplicas')} value={String(norm.homes.length)} sub={staleHomes.length ? tr(`另有 ${staleHomes.length} 个失联副本等待回收`, `${staleHomes.length} stale replica(s) awaiting GC`) : tr('全部在线', 'all live')} />
         <Stat label={t('proxyNodes')} value={`${proxies.filter((p) => p.healthy).length} / ${proxies.length}`} sub={tr('健康 / 已连接', 'healthy / connected')} />
       </div>
+      <InfraCard />
       <Card
         title={t('homeReplicas')}
         bodyClass="table-wrap"

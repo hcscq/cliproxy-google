@@ -145,6 +145,10 @@ export class ApiClient {
   nodes() {
     return this.get<{ nodes: ProxyNode[] }>('/nodes');
   }
+  /** Redis / usage stream / PostgreSQL pool status as seen by the serving Home. */
+  infra() {
+    return this.get<InfraStatus>('/infra');
+  }
   latestVersion() {
     return this.get<Record<string, unknown>>('/server/latest-version');
   }
@@ -1122,4 +1126,44 @@ export function fmtBytes(n: number): string {
     i++;
   }
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+export interface InfraStatus {
+  home: string;
+  redis: {
+    enabled: boolean;
+    healthy: boolean;
+    mode: string;
+    master?: string;
+    role?: string;
+    connected_slaves?: string;
+    used_memory?: string;
+    ping_ms: number;
+    sentinels?: { addr: string; master?: string; error?: string }[];
+    error?: string;
+  };
+  usage_stream?: {
+    enabled: boolean;
+    active: boolean;
+    consumer: string;
+    length: number;
+    pending: number;
+    consumers: number;
+    appended: number;
+    flushed: number;
+    fallback: number;
+    redelivered: number;
+    last_flush_at: string;
+    last_error?: string;
+    max_len: number;
+  };
+  postgres: {
+    pooler_addr?: string;
+    via_pooler: boolean;
+    pooler_error?: string;
+    main: { MaxOpenConnections: number; OpenConnections: number; InUse: number; Idle: number; WaitCount: number; WaitDuration: number };
+    lease?: { OpenConnections: number; InUse: number };
+    ping_ms: number;
+    ping_error?: string;
+  };
 }
