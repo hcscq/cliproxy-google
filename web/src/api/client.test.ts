@@ -201,3 +201,17 @@ describe('summarizeError truncated bodies', () => {
     expect(s.reasons).toEqual(['MODEL_CAPACITY_EXHAUSTED']);
   });
 });
+
+import { capRank } from '../pages/Dashboard';
+describe('capRank', () => {
+  it('keeps the top N and aggregates the rest', () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({ label: `m${i}`, value: i }));
+    const out = capRank(items, 8, (n) => `其他 (${n})`);
+    expect(out).toHaveLength(9);
+    expect(out[0].label).toBe('m11');
+    expect(out[8]).toEqual({ label: '其他 (4)', value: 0 + 1 + 2 + 3 });
+  });
+  it('returns everything when within N', () => {
+    expect(capRank([{ label: 'a', value: 1 }], 8, () => 'x')).toHaveLength(1);
+  });
+});

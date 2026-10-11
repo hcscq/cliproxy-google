@@ -8,6 +8,16 @@ import { RankList, TrendChart } from '../components/charts';
 import { QuotaStatusBadge, QuotaWindows } from '../components/quota';
 import { IconRefresh } from '../components/icons';
 
+export const DASHBOARD_TOP_N = 8;
+
+/** Top-N rows by value plus one aggregated "other (N)" row for the rest. */
+export function capRank<T extends { label: string; value: number }>(items: T[], n: number, otherLabel: (count: number) => string): { label: string; value: number; sub?: string }[] {
+  const sorted = [...items].sort((a, b) => b.value - a.value);
+  if (sorted.length <= n) return sorted;
+  const rest = sorted.slice(n);
+  return [...sorted.slice(0, n), { label: otherLabel(rest.length), value: rest.reduce((a, b) => a + b.value, 0) }];
+}
+
 export function DashboardPage() {
   const api = useApi();
   const { t, tr, lang } = useI18n();
@@ -24,6 +34,14 @@ export function DashboardPage() {
   const activeCreds = files.filter((c) => !c.disabled && !c.unavailable && c.status === 'active').length;
   const quotaById = new Map<string, QuotaItem>((quota.data?.items ?? []).map((q) => [q.credential_id, q]));
   const totals = usage.data?.totals;
+  // Credentials ordered by 24h request count (unused ones last, by name).
+  const credUsage = new Map<string, number>();
+  for (const u of usage.data?.top?.credentials ?? []) {
+    credUsage.set(u.id, u.request_count);
+    if (u.label) credUsage.set(u.label, u.request_count);
+  }
+  const usageOf = (c: Credential) => credUsage.get(c.id) ?? credUsage.get(c.name) ?? credUsage.get(c.label ?? '') ?? 0;
+  const rankedFiles = [...files].sort((a, b) => usageOf(b) - usageOf(a) || (a.label || a.name).localeCompare(b.label || b.name));
 
   return (
     <div className="stack">
@@ -65,9 +83,15 @@ export function DashboardPage() {
         <Card title={tr('请求趋势（24 小时）', 'Requests (24h)')} extra={totals && <span className="faint small">P95 {fmtMs(totals.p95_latency_ms)} · {tr('平均', 'avg')} {fmtMs(totals.avg_latency_ms)}</span>}>
           {usage.error ? <ErrorBox error={usage.error} onRetry={usage.reload} /> : usage.data ? <TrendChart buckets={usage.data.trend} /> : <Loading />}
         </Card>
-        <Card title={tr('热门模型', 'Top models')}>
+        <Card title={tr('热门模型', 'Top models')} className="card-capped" extra={<Link to="/usage" data-testid="models-view-all">{tr('查看全部 →', 'View all →')}</Link>}>
           {usage.data?.top?.models?.length ? (
-            <RankList items={usage.data.top.models.slice(0, 6).map((m) => ({ label: m.label || m.id, value: m.request_count }))} />
+            <RankList
+              items={capRank(
+                usage.data.top.models.map((m) => ({ label: m.label || m.id, value: m.request_count })),
+                DASHBOARD_TOP_N,
+                (n) => tr(`其他 (${n})`, `Other (${n})`),
+              )}
+            />
           ) : usage.data ? (
             <Empty />
           ) : (
@@ -77,7 +101,7 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-2">
-        <Card title={tr('凭据额度', 'Credential quota')} extra={<Link to="/credentials">{tr('管理凭据 →', 'Manage →')}</Link>}>
+        <Card title={tr('凭据额度', 'Credential quota')} className="card-capped" extra={<Link to="/credentials" data-testid="creds-view-all">{tr('查看全部 →', 'View all →')}</Link>}>
           {creds.error ? (
             <ErrorBox error={creds.error} onRetry={creds.reload} />
           ) : !creds.data ? (
@@ -89,7 +113,7 @@ export function DashboardPage() {
             </Empty>
           ) : (
             <div className="stack">
-              {files.slice(0, 6).map((c) => (
+              {rankedFiles.slice(0, DASHBOARD_TOP_N).map((c) => (
                 <div key={c.id} className="stack" style={{ gap: 6 }}>
                   <div className="row">
                     <Badge kind="primary">{c.provider}</Badge>
@@ -101,11 +125,19 @@ export function DashboardPage() {
                   <QuotaWindows item={quotaById.get(c.id)} />
                 </div>
               ))}
+              {rankedFiles.length > DASHBOARD_TOP_N && (
+                <Link to="/credentials" className="list-row muted small" data-testid="creds-other">
+                  <span>{tr(`其他 (${rankedFiles.length - DASHBOARD_TOP_N})`, `Other (${rankedFiles.length - DASHBOARD_TOP_N})`)}</span>
+                  <span>
+                    {tr('请求', 'requests')} {fmtCompact(rankedFiles.slice(DASHBOARD_TOP_N).reduce((a, c) => a + usageOf(c), 0))} →
+                  </span>
+                </Link>
+              )}
             </div>
           )}
         </Card>
 
-        <Card title={tr('Home 副本', 'Home replicas')} extra={<Link to="/nodes">{tr('全部节点 →', 'All nodes →')}</Link>}>
+        <Card title={tr('Home 副本', 'Home replicas')} className="card-capped" extra={<Link to="/nodes">{tr('全部节点 →', 'All nodes →')}</Link>}>
           {topo.error ? (
             <ErrorBox error={topo.error} onRetry={topo.reload} />
           ) : !topo.data ? (

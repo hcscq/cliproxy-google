@@ -265,3 +265,8 @@ table.table { width: 100%; border-collapse: collapse; }
   .drawer-resize { display: none; }
   .modal.full { width: 100vw; height: 100vh; border-radius: 0; }
 }
+
+/* Dashboard list cards: equal capped height, scroll inside as a fallback. */
+.card-capped { display: flex; flex-direction: column; max-height: 460px; }
+.card-capped > .card-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; flex: 1; }
+a.list-row { text-decoration: none; color: inherit; }

@@ -64,8 +64,8 @@ export function UsagePage() {
             ['client_keys', tr('访问密钥', 'Access keys')],
           ] as const
         ).map(([k, title]) => (
-          <Card key={k} title={title}>
-            {top?.[k]?.length ? <RankList items={top[k]!.slice(0, 8).map((x) => ({ label: x.label || x.id, value: x.request_count, sub: x.failed_count ? `✕${x.failed_count}` : undefined }))} /> : overview.data ? <Empty /> : <Loading />}
+          <Card key={k} title={title} className="card-capped">
+            {top?.[k]?.length ? <RankList items={top[k]!.map((x) => ({ label: x.label || x.id, value: x.request_count, sub: x.failed_count ? `✕${x.failed_count}` : undefined }))} /> : overview.data ? <Empty /> : <Loading />}
           </Card>
         ))}
       </div>
