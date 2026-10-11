@@ -86,6 +86,12 @@ func (h *Handler) GetTopology(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "cpa_memberships_load_failed", errMemberships)
 		return
 	}
+	assignedHome := map[string]string{}
+	if assignments, errAssign := h.repo.ListHomeAssignments(ctx); errAssign == nil {
+		for _, a := range assignments {
+			assignedHome[strings.TrimSpace(a.NodeID)] = topologyHomeID(a.HomeIP, a.HomePort)
+		}
+	}
 	requiredPluginIDs := h.pluginTaskRequiredIDs(ctx)
 	statusesByNodeID, statusesByIP := pluginStatusesByNode(taskStatuses)
 
@@ -170,6 +176,7 @@ func (h *Handler) GetTopology(c *gin.Context) {
 			"home_id":                homeID,
 			"home_ip":                cpaRecord.HomeIP,
 			"home_port":              cpaRecord.HomePort,
+			"assigned_home_id":       emptyStringAsNil(assignedHome[strings.TrimSpace(cpaRecord.NodeID)]),
 			"plugin_report_state":    pluginState,
 			"plugin_report_statuses": statuses,
 		})

@@ -456,6 +456,8 @@ export interface ProxyNode {
   health?: string;
   state?: string;
   home_id?: string;
+  /** Home the leader assigned this proxy to (null: none yet, rendezvous fallback). */
+  assigned_home_id?: string | null;
   home_ip?: string;
   connected_time?: string;
   last_seen_at?: string;

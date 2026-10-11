@@ -143,6 +143,41 @@ type clusterNode struct {
 type clusterNodesEnvelope struct {
 	OK    bool          `json:"ok"`
 	Nodes []clusterNode `json:"nodes"`
+	// Assigned is the Home the leader assigned this proxy to (absent: use
+	// rendezvous order).
+	Assigned *clusterNode `json:"assigned,omitempty"`
+}
+
+// errHomeReassigned ends a subscriber lifetime so the proxy reconnects to the
+// Home the leader assigned it to (same graceful path as a Home failover).
+var errHomeReassigned = errors.New("home assignment changed; reconnecting to assigned home")
+
+// IsHomeReassignedError reports whether a lifetime ended for a reassignment.
+func IsHomeReassignedError(err error) bool { return errors.Is(err, errHomeReassigned) }
+
+// homeReassignMinInterval limits assignment-driven moves so a flapping table
+// cannot make a proxy bounce between Homes.
+const homeReassignMinInterval = time.Minute
+
+// orderClusterNodes puts the assigned Home first (when it is in the live list)
+// and keeps rendezvous order for the rest, which is also the full fallback.
+func orderClusterNodes(nodes []clusterNode, assigned *clusterNode, seed string) []clusterNode {
+	ordered := rendezvousOrder(nodes, seed)
+	if assigned == nil {
+		return ordered
+	}
+	for i, n := range ordered {
+		if strings.TrimSpace(n.IP) == strings.TrimSpace(assigned.IP) && n.Port == assigned.Port {
+			if i == 0 {
+				return ordered
+			}
+			out := make([]clusterNode, 0, len(ordered))
+			out = append(out, n)
+			out = append(out, ordered[:i]...)
+			return append(out, ordered[i+1:]...)
+		}
+	}
+	return ordered
 }
 
 type PluginTask struct {
@@ -207,6 +242,8 @@ type Client struct {
 	instanceID           string
 	legacyMembership     bool
 	clusterNodes         []clusterNode
+	reassignPending      bool
+	lastReassignAt       time.Time
 	reconnectFailures    int
 }
 
@@ -231,6 +268,7 @@ func (c *Client) NewLifetime() *Client {
 		seedHost:             c.seedHost,
 		seedPort:             c.seedPort,
 		clusterNodes:         append([]clusterNode(nil), c.clusterNodes...),
+		lastReassignAt:       c.lastReassignAt,
 		reconnectFailures:    c.reconnectFailures,
 		testOperationTimeout: c.testOperationTimeout,
 		instanceID:           c.instanceID,
@@ -807,7 +845,7 @@ func (c *Client) refreshClusterNodes(ctx context.Context) (bool, error) {
 		return false, errText
 	}
 
-	nodes, errParse := parseClusterNodesPayload([]byte(raw))
+	nodes, assigned, errParse := parseClusterNodesEnvelope([]byte(raw))
 	if errParse != nil {
 		return false, errParse
 	}
@@ -817,7 +855,7 @@ func (c *Client) refreshClusterNodes(ctx context.Context) (bool, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	nodes = rendezvousOrder(nodes, c.instanceID)
+	nodes = orderClusterNodes(nodes, assigned, c.instanceID)
 	c.clusterNodes = nodes
 	c.reconnectFailures = 0
 	return c.switchToNodeLocked(nodes[0]), nil
@@ -866,25 +904,61 @@ func mix64(x uint64) uint64 {
 }
 
 func parseClusterNodesPayload(raw []byte) ([]clusterNode, error) {
+	nodes, _, err := parseClusterNodesEnvelope(raw)
+	return nodes, err
+}
+
+func parseClusterNodesEnvelope(raw []byte) ([]clusterNode, *clusterNode, error) {
 	var envelope clusterNodesEnvelope
 	if errUnmarshal := json.Unmarshal(raw, &envelope); errUnmarshal != nil {
-		return nil, errUnmarshal
+		return nil, nil, errUnmarshal
 	}
-	return normalizeClusterNodes(envelope.Nodes), nil
+	assigned := envelope.Assigned
+	if assigned != nil && (strings.TrimSpace(assigned.IP) == "" || assigned.Port <= 0) {
+		assigned = nil
+	}
+	return normalizeClusterNodes(envelope.Nodes), assigned, nil
 }
 
 func (c *Client) updateClusterNodesFromPayload(raw []byte) error {
 	if c == nil || !c.clusterDiscoveryEnabled() {
 		return nil
 	}
-	nodes, errParse := parseClusterNodesPayload(raw)
+	nodes, assigned, errParse := parseClusterNodesEnvelope(raw)
 	if errParse != nil {
 		return errParse
 	}
 	c.mu.Lock()
-	c.clusterNodes = rendezvousOrder(nodes, c.instanceID)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	c.clusterNodes = orderClusterNodes(nodes, assigned, c.instanceID)
+	if assigned == nil || len(c.clusterNodes) == 0 {
+		return nil
+	}
+	first := c.clusterNodes[0]
+	if first.IP != strings.TrimSpace(assigned.IP) || first.Port != assigned.Port {
+		return nil // assigned Home is not live: stay where we are
+	}
+	if strings.TrimSpace(c.homeCfg.Host) == first.IP && c.homeCfg.Port == first.Port {
+		return nil
+	}
+	if !c.lastReassignAt.IsZero() && time.Since(c.lastReassignAt) < homeReassignMinInterval {
+		return nil
+	}
+	c.lastReassignAt = time.Now()
+	c.reassignPending = true
 	return nil
+}
+
+// takeReassignPending reports (and clears) a pending move to the assigned Home.
+func (c *Client) takeReassignPending() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pending := c.reassignPending
+	c.reassignPending = false
+	return pending
 }
 
 func normalizeClusterNodes(nodes []clusterNode) []clusterNode {
@@ -2054,6 +2128,10 @@ func (c *Client) RunConfigSubscriberLifetime(ctx context.Context, onConfig func(
 				} else {
 					log.Warn("failed to apply config update from home control center, ignoring")
 				}
+			}
+			if c.takeReassignPending() {
+				log.Info("home assignment changed; moving to the assigned home")
+				return c.endConfigSubscriberLifetimeWithSubscription(errHomeReassigned, pubsub, "home reassignment")
 			}
 		case *redis.Pong:
 			c.resetReconnectFailures()

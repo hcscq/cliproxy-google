@@ -557,3 +557,27 @@ func parseClusterRESPError(line string) error {
 		HTTPStatus: statusCode,
 	}
 }
+
+// AnnotateAssignment adds "assigned" (the Home this proxy should use) to a
+// CLUSTER NODES payload. Without a row the payload is returned unchanged and
+// the proxy keeps its rendezvous order.
+func (h *RESPHandler) AnnotateAssignment(ctx context.Context, payload []byte, nodeID string) []byte {
+	if h == nil || h.repo == nil || len(payload) == 0 || strings.TrimSpace(nodeID) == "" {
+		return payload
+	}
+	ip, port, ok, err := h.repo.HomeAssignmentFor(ctx, strings.TrimSpace(nodeID))
+	if err != nil || !ok {
+		return payload
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(payload, &body) != nil {
+		return payload
+	}
+	assigned, _ := json.Marshal(map[string]any{"ip": ip, "port": port})
+	body["assigned"] = assigned
+	out, errMarshal := json.Marshal(body)
+	if errMarshal != nil {
+		return payload
+	}
+	return out
+}

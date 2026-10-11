@@ -37,6 +37,19 @@ type clusterHandler interface {
 	RequestClientCertificate(context.Context, string, string, []byte) ([]byte, error)
 }
 
+// assignmentAnnotator is implemented by cluster handlers that know the
+// leader-computed proxy -> Home assignment.
+type assignmentAnnotator interface {
+	AnnotateAssignment(ctx context.Context, payload []byte, nodeID string) []byte
+}
+
+func (s *Server) annotateAssignment(ctx context.Context, payload []byte, nodeID string) []byte {
+	if a, ok := s.cluster.(assignmentAnnotator); ok && nodeID != "" {
+		return a.AnnotateAssignment(ctx, payload, nodeID)
+	}
+	return payload
+}
+
 type Server struct {
 	addr                    string
 	runtime                 *home.Runtime
@@ -143,7 +156,11 @@ func (s *Server) syncClusterClientCount(ctx context.Context) {
 	}
 }
 
-func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedConnection, writer *safeWriter) context.CancelFunc {
+func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedConnection, writer *safeWriter, clientNodeID ...string) context.CancelFunc {
+	nodeID := ""
+	if len(clientNodeID) > 0 {
+		nodeID = clientNodeID[0]
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -191,7 +208,7 @@ func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedC
 				case <-runCtx.Done():
 					return
 				case <-ticker.C:
-					if errSend := s.writeClusterSubscriptionUpdate(runCtx, writer); errSend != nil {
+					if errSend := s.writeClusterSubscriptionUpdate(runCtx, writer, nodeID); errSend != nil {
 						log.Warnf("failed to publish cluster update to subscriber: %v", errSend)
 						cancel()
 						return
@@ -211,7 +228,7 @@ func (s *Server) refreshSubscriptionLiveness(ctx context.Context, lifetime clust
 	return s.cluster.RefreshCPALiveness(ctx, lifetime)
 }
 
-func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *safeWriter) error {
+func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *safeWriter, nodeID string) error {
 	if s == nil || s.cluster == nil || writer == nil {
 		return nil
 	}
@@ -227,6 +244,7 @@ func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *saf
 	if len(payload) == 0 {
 		return nil
 	}
+	payload = s.annotateAssignment(ctx, payload, nodeID)
 	return writer.WriteDispatchReply(subscriptionMessage(clusterSubscriptionChannel, payload))
 }
 
@@ -571,6 +589,9 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 					_ = writer.WriteRedisError(cluster.FormatRESPError(errCluster))
 					return
 				}
+				if len(args) == 2 && strings.EqualFold(args[1], "NODES") {
+					payload = s.annotateAssignment(connectionCtx, payload, clientNodeID)
+				}
 				_ = writer.WriteRedisBulkString(payload)
 				return
 			}
@@ -674,7 +695,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				return
 			}
 			close(pendingConfigSubscriptionReady)
-			cancelSubscriptionUpdates = s.startSubscriptionUpdates(connectionCtx, tracked, writer)
+			cancelSubscriptionUpdates = s.startSubscriptionUpdates(connectionCtx, tracked, writer, clientNodeID)
 		}
 	}
 }

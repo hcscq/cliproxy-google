@@ -47,6 +47,7 @@ export function NodesPage() {
                 <th>{tr('角色', 'Role')}</th>
                 <th>{t('status')}</th>
                 <th>{tr('连接的代理', 'Proxies')}</th>
+                <th>{tr('分配的代理', 'Assigned')}</th>
                 <th className="hide-sm">{t('since')}</th>
                 <th>{t('lastSeen')}</th>
               </tr>
@@ -64,6 +65,7 @@ export function NodesPage() {
                   <td>
                     {h.healthy_cpa_count ?? 0} / {h.cpa_count ?? 0}
                   </td>
+                  <td data-testid="assigned-count">{proxies.filter((p) => p.assigned_home_id === h.id).length}</td>
                   <td className="hide-sm small">{fmtTime(h.started_at)}</td>
                   <td className="small">{fmtRelative(h.last_seen_at, lang)}</td>
                 </tr>
@@ -86,6 +88,7 @@ export function NodesPage() {
                 <th>IP</th>
                 <th>{t('status')}</th>
                 <th className="hide-sm">{tr('连接的 Home', 'Home')}</th>
+                <th className="hide-sm">{tr('分配的 Home', 'Assigned Home')}</th>
                 <th className="hide-sm">{tr('连接时间', 'Connected')}</th>
                 <th>{t('lastSeen')}</th>
               </tr>
@@ -102,6 +105,16 @@ export function NodesPage() {
                     </Badge>
                   </td>
                   <td className="hide-sm mono small">{p.home_id}</td>
+                  <td className="hide-sm mono small" data-testid="assigned-home">
+                    {p.assigned_home_id ? (
+                      <>
+                        {p.assigned_home_id}{' '}
+                        {p.assigned_home_id !== p.home_id && <Badge kind="warn">{tr('迁移中', 'moving')}</Badge>}
+                      </>
+                    ) : (
+                      <span className="faint">{tr('未分配（哈希）', 'none (hash)')}</span>
+                    )}
+                  </td>
                   <td className="hide-sm small">{fmtTime(p.connected_time)}</td>
                   <td className="small">{fmtRelative(p.last_seen_at, lang)}</td>
                 </tr>

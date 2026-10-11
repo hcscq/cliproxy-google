@@ -1084,5 +1084,8 @@ func ensureExtraTables(ctx context.Context, db *gorm.DB) error {
 	if err := ensureChannelGroupRuleTable(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureHomeAssignmentTable(ctx, db); err != nil {
+		return err
+	}
 	return ensureAffinityTables(ctx, db)
 }
