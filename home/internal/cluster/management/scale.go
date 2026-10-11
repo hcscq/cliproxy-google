@@ -34,9 +34,12 @@ func credentialStatus(a *coreauth.Auth, now time.Time) string {
 	switch {
 	case a.Disabled:
 		return credStatusDisabled
-	case credentialScopeError(a, now) || a.Status == coreauth.StatusError:
+	// A raw Status==error left behind by a model-scoped failure (e.g. one
+	// model's 429 quota) does not make the credential unusable; only a
+	// credential-scope error or whole-credential unavailability does.
+	case credentialScopeError(a, now) || (a.Unavailable && (a.NextRetryAfter.IsZero() || a.NextRetryAfter.After(now))):
 		return credStatusError
-	case len(modelCooldownEntries(a, now)) > 0:
+	case coolingModelCount(a, now) > 0:
 		return credStatusCooling
 	default:
 		return credStatusOK
@@ -858,4 +861,15 @@ func (h *Handler) ImportGroups(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "report": rep})
+}
+
+// coolingModelCount counts models whose cooldown is still active.
+func coolingModelCount(a *coreauth.Auth, now time.Time) int {
+	n := 0
+	for _, e := range modelCooldownEntries(a, now) {
+		if c, _ := e["cooling"].(bool); c {
+			n++
+		}
+	}
+	return n
 }
