@@ -112,7 +112,7 @@ func mergeAntigravityModels(static []*ModelInfo, upstream map[string]antigravity
 				continue // the account cannot use this model
 			}
 		}
-		add(m)
+		add(withAntigravityOffMode(m))
 	}
 	ids := make([]string, 0, len(upstream))
 	for id := range upstream {
@@ -284,6 +284,23 @@ func antigravityDynamicThinking(u antigravityUpstreamModel) *registry.ThinkingSu
 		t.OffMode = antigravityThinkingOffMode(u.ID)
 	}
 	return t
+}
+
+// withAntigravityOffMode returns m with its measured thinking off mode attached,
+// copying instead of mutating the shared static definition.
+func withAntigravityOffMode(m *ModelInfo) *ModelInfo {
+	if m == nil || m.Thinking == nil || m.Thinking.OffMode != "" {
+		return m
+	}
+	mode := antigravityThinkingOffMode(m.ID)
+	if mode == "" {
+		return m
+	}
+	cp := *m
+	t := *m.Thinking
+	t.OffMode = mode
+	cp.Thinking = &t
+	return &cp
 }
 
 // antigravityThinkingOffMode is how "thinking off" works per Antigravity model,

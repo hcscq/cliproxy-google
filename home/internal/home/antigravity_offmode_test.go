@@ -2,6 +2,7 @@ package home
 
 import (
 	"encoding/json"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"strings"
 	"testing"
 )
@@ -29,5 +30,17 @@ func TestAntigravityThinkingOffModePerModel(t *testing.T) {
 		if mode != "" && !strings.Contains(string(raw), `"off_mode":"`+mode+`"`) {
 			t.Errorf("%s: off_mode missing from the JSON sent to proxies: %s", id, raw)
 		}
+	}
+}
+
+func TestAntigravityStaticModelsGetOffModeWithoutMutation(t *testing.T) {
+	static := &ModelInfo{ID: "gemini-3.1-flash-lite", Thinking: &registry.ThinkingSupport{Min: 1, Max: 65535, ZeroAllowed: true, Levels: []string{"minimal", "low"}}}
+	upstream := map[string]antigravityUpstreamModel{"gemini-3.1-flash-lite": {ID: "gemini-3.1-flash-lite"}}
+	out := mergeAntigravityModels([]*ModelInfo{static}, upstream, nil, nil)
+	if len(out) != 1 || out[0].Thinking == nil || out[0].Thinking.OffMode != "zero" {
+		t.Fatalf("static model off mode not attached: %+v", out)
+	}
+	if static.Thinking.OffMode != "" {
+		t.Fatal("shared static definition was mutated")
 	}
 }
