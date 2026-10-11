@@ -1,13 +1,13 @@
 package home
 
 import (
-	"hash/fnv"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"net/http"
 	"net/url"
