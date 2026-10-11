@@ -187,6 +187,8 @@ func requestEventResponse(record *cluster.UsageObservabilityRecord) gin.H {
 		"executor_type":        record.ExecutorType,
 		"service_tier":         emptyStringAsNil(record.ServiceTier),
 		"reasoning_effort":     emptyStringAsNil(record.ReasoningEffort),
+		"thinking_params":      emptyStringAsNil(record.ThinkingParams),
+		"thinking_note":        emptyStringAsNil(record.ThinkingNote),
 		"runtime":              requestEventRuntimeResponse(record),
 		"credential":           requestEventCredentialResponse(record),
 		"client":               requestEventClientResponse(record),

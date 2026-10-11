@@ -211,6 +211,12 @@ function RequestEvents({ from }: { from: string }) {
   );
 }
 
+// Antigravity does not return a thought-token count for Claude models (thinking
+// tokens are folded into the output count), so 0 would be misleading.
+export function upstreamOmitsReasoningTokens(e: RequestEvent): boolean {
+  return (e.credential?.provider ?? e.provider) === 'antigravity' && (e.model ?? '').startsWith('claude') && !e.tokens?.reasoning_tokens;
+}
+
 function EventDrawer({ ev, onClose }: { ev: RequestEvent; onClose: () => void }) {
   const api = useApi();
   const { tr } = useI18n();
@@ -253,7 +259,24 @@ function EventDrawer({ ev, onClose }: { ev: RequestEvent; onClose: () => void })
           <dd className="mono">{e.runtime?.home_id}</dd>
           <dt>Tokens</dt>
           <dd>
-            {tr('输入', 'in')} {fmtNum(e.tokens?.input_tokens)} · {tr('输出', 'out')} {fmtNum(e.tokens?.output_tokens)} · {tr('思考', 'reasoning')} {fmtNum(e.tokens?.reasoning_tokens)} · {tr('缓存', 'cached')} {fmtNum(e.tokens?.cached_tokens)}
+            {tr('输入', 'in')} {fmtNum(e.tokens?.input_tokens)} · {tr('输出', 'out')} {fmtNum(e.tokens?.output_tokens)} · {tr('思考', 'reasoning')}{' '}
+            {upstreamOmitsReasoningTokens(e) ? (
+              <span className="faint" data-testid="reasoning-not-reported">
+                {tr('上游未报告', 'not reported by upstream')}
+              </span>
+            ) : (
+              fmtNum(e.tokens?.reasoning_tokens)
+            )}{' '}
+            · {tr('缓存', 'cached')} {fmtNum(e.tokens?.cached_tokens)}
+          </dd>
+          <dt>{tr('思考参数', 'Thinking')}</dt>
+          <dd data-testid="thinking-detail">
+            <span className="mono">{e.thinking_params || e.reasoning_effort || tr('未发送（模型默认）', 'not sent (model default)')}</span>
+            {e.thinking_note && (
+              <div style={{ marginTop: 4 }}>
+                <Badge kind="warn">{tr('已调整', 'adjusted')}</Badge> <span className="small">{e.thinking_note}</span>
+              </div>
+            )}
           </dd>
           <dt>{tr('粘性会话', 'Sticky session')}</dt>
           <dd data-testid="affinity-detail">

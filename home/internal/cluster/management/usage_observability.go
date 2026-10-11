@@ -1597,6 +1597,8 @@ func usageRecordSummaryResponse(record *cluster.UsageObservabilityRecord) gin.H 
 		"endpoint":             record.Endpoint,
 		"service_tier":         emptyStringAsNil(record.ServiceTier),
 		"reasoning_effort":     emptyStringAsNil(record.ReasoningEffort),
+		"thinking_params":      emptyStringAsNil(record.ThinkingParams),
+		"thinking_note":        emptyStringAsNil(record.ThinkingNote),
 		"executor_type":        record.ExecutorType,
 		"tokens": gin.H{
 			"input_tokens":          record.Tokens.InputTokens,
@@ -1764,6 +1766,8 @@ func usageExportRecordMap(record *cluster.UsageObservabilityRecord) map[string]a
 		"endpoint":                              record.Endpoint,
 		"service_tier":                          emptyStringAsNil(record.ServiceTier),
 		"reasoning_effort":                      emptyStringAsNil(record.ReasoningEffort),
+		"thinking_params":                       emptyStringAsNil(record.ThinkingParams),
+		"thinking_note":                         emptyStringAsNil(record.ThinkingNote),
 		"executor_type":                         record.ExecutorType,
 		"input_tokens":                          record.Tokens.InputTokens,
 		"output_tokens":                         record.Tokens.OutputTokens,

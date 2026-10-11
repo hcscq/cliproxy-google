@@ -66,6 +66,8 @@ type UsageRecord struct {
 	Model                      string    `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
 	Alias                      string    `gorm:"column:alias"`
 	Effort                     string    `gorm:"column:effort"`
+	ThinkingParams             string    `gorm:"column:thinking_params"`
+	ThinkingNote               string    `gorm:"column:thinking_note"`
 	ServiceTier                string    `gorm:"column:service_tier"`
 	ResponseServiceTier        string    `gorm:"column:response_service_tier"`
 	Endpoint                   string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
@@ -226,6 +228,8 @@ func UsageRecordFromPayloadWithRuntime(payload string, metadata UsageRuntimeMeta
 		Model:                      strings.TrimSpace(gjson.Get(payload, "model").String()),
 		Alias:                      strings.TrimSpace(gjson.Get(payload, "alias").String()),
 		Effort:                     strings.TrimSpace(gjson.Get(payload, "reasoning_effort").String()),
+		ThinkingParams:             strings.TrimSpace(gjson.Get(payload, "thinking_params").String()),
+		ThinkingNote:               strings.TrimSpace(gjson.Get(payload, "thinking_note").String()),
 		ServiceTier:                usageServiceTierFromPayload(payload),
 		ResponseServiceTier:        strings.TrimSpace(gjson.Get(payload, "response_service_tier").String()),
 		Endpoint:                   strings.TrimSpace(gjson.Get(payload, "endpoint").String()),

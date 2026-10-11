@@ -279,6 +279,40 @@ const errAntigravityNoToken = antigravityStringError("credential has no access t
 // supportsThinking=false; a static definition with the same id (e.g. the Gemini
 // API entry for gemini-2.5-flash); catalog budget hints; Gemini family defaults.
 func antigravityDynamicThinking(u antigravityUpstreamModel) *registry.ThinkingSupport {
+	t := antigravityDynamicThinkingBase(u)
+	if t != nil && t.OffMode == "" {
+		t.OffMode = antigravityThinkingOffMode(u.ID)
+	}
+	return t
+}
+
+// antigravityThinkingOffMode is how "thinking off" works per Antigravity model,
+// measured with raw upstream calls (2026-10-11, thinkingBudget=0 vs default):
+//   - zero:         0 accepted, no thought tokens        (3.1-flash-lite, 3.5-flash-low/extra-low, 3-flash-agent)
+//   - omit:         0 rejected (400), no thinking by default (3.5-flash-lite)
+//   - minimal:      0 rejected (400), minimal ≈ 0 thoughts (3-flash)
+//   - zero-reduced: 0 accepted, still ~35-160 thought tokens (3.1-pro-low, 3.6-flash-*, 3.8-flash, gemini-pro-agent)
+//
+// Unlisted models keep the proxy's generic fallback (lowest level, reported).
+func antigravityThinkingOffMode(id string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	switch id {
+	case "gemini-3.1-flash-lite", "gemini-3.5-flash-low", "gemini-3.5-flash-extra-low", "gemini-3-flash-agent":
+		return "zero"
+	case "gemini-3.5-flash-lite":
+		return "omit"
+	case "gemini-3-flash":
+		return "minimal"
+	case "gemini-3.1-pro-low", "gemini-pro-agent":
+		return "zero-reduced"
+	}
+	if strings.HasPrefix(id, "gemini-3.6-flash") || strings.HasPrefix(id, "gemini-3.8-flash") {
+		return "zero-reduced"
+	}
+	return ""
+}
+
+func antigravityDynamicThinkingBase(u antigravityUpstreamModel) *registry.ThinkingSupport {
 	if u.SupportsThinking != nil && !*u.SupportsThinking {
 		return nil
 	}

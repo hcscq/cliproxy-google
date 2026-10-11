@@ -672,6 +672,12 @@ export interface RequestEvent {
   performance?: { latency_ms?: number | null; ttft_ms?: number | null; tps?: number | null };
   runtime?: { home_id?: string; cpa_node_id?: string; cpa_ip?: string };
   upstream_status_code?: number | null;
+  /** Coarse thinking label (level, or a budget bucketed to a level). */
+  reasoning_effort?: string | null;
+  /** Exact thinking parameters sent upstream, e.g. "budget=8192,include_thoughts=true". */
+  thinking_params?: string | null;
+  /** Set when a "thinking off" request could not be fully honoured on this model. */
+  thinking_note?: string | null;
   related?: { request_log?: { available?: boolean; request_id?: string; home_ip?: string; home_port?: number } };
 }
 

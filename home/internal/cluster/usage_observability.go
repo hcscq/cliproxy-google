@@ -266,6 +266,8 @@ type UsageObservabilityRecord struct {
 	Endpoint           string
 	ServiceTier        string
 	ReasoningEffort    string
+	ThinkingParams     string
+	ThinkingNote       string
 	ExecutorType       string
 	Tokens             UsageObservabilityTokens
 	Performance        UsageObservabilityPerformance
@@ -389,6 +391,8 @@ type usageObservabilityRecordRow struct {
 	Model                      string          `gorm:"column:model"`
 	Alias                      string          `gorm:"column:alias"`
 	ReasoningEffort            string          `gorm:"column:reasoning_effort"`
+	ThinkingParams             string          `gorm:"column:thinking_params"`
+	ThinkingNote               string          `gorm:"column:thinking_note"`
 	ServiceTier                string          `gorm:"column:service_tier"`
 	Endpoint                   string          `gorm:"column:endpoint"`
 	AuthType                   string          `gorm:"column:auth_type"`
@@ -2139,6 +2143,8 @@ func usageObservabilityRecordSelect() string {
 		"usage"."model" AS model,
 		"usage"."alias" AS alias,
 		"usage"."effort" AS reasoning_effort,
+		"usage"."thinking_params" AS thinking_params,
+		"usage"."thinking_note" AS thinking_note,
 		"usage"."service_tier" AS service_tier,
 		"usage"."endpoint" AS endpoint,
 		"usage"."auth_type" AS auth_type,
@@ -2728,6 +2734,8 @@ func usageObservabilityRecordFromRow(row *usageObservabilityRecordRow) UsageObse
 		Endpoint:           strings.TrimSpace(row.Endpoint),
 		ServiceTier:        strings.TrimSpace(row.ServiceTier),
 		ReasoningEffort:    strings.TrimSpace(row.ReasoningEffort),
+		ThinkingParams:     strings.TrimSpace(row.ThinkingParams),
+		ThinkingNote:       strings.TrimSpace(row.ThinkingNote),
 		ExecutorType:       strings.TrimSpace(row.ExecutorType),
 		Tokens: UsageObservabilityTokens{
 			InputTokens:         row.InputTokens,

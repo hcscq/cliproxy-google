@@ -88,6 +88,12 @@ type ThinkingSupport struct {
 	Max int `json:"max,omitempty" yaml:"max,omitempty"`
 	// ZeroAllowed indicates whether 0 is a valid value (to disable thinking).
 	ZeroAllowed bool `json:"zero_allowed,omitempty" yaml:"zero-allowed,omitempty"`
+	// OffMode says how a request to turn thinking off is sent upstream, measured
+	// per model: "zero" (budget 0, really off), "zero-reduced" (budget 0 accepted
+	// but the model still thinks briefly), "omit" (0 rejected, no thinking by
+	// default), "minimal" (0 rejected, minimal level is closest). Empty = the
+	// proxy's generic fallback (lowest level).
+	OffMode string `json:"off_mode,omitempty" yaml:"off-mode,omitempty"`
 	// DynamicAllowed indicates whether -1 is a valid value (dynamic thinking budget).
 	DynamicAllowed bool `json:"dynamic_allowed,omitempty" yaml:"dynamic-allowed,omitempty"`
 	// Levels defines discrete reasoning effort levels (e.g., "low", "medium", "high").

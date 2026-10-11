@@ -35,7 +35,7 @@ func ensureUsageFailBodyColumns(ctx context.Context, db *gorm.DB) error {
 	if !m.HasTable(&UsageRecord{}) {
 		return nil
 	}
-	for _, field := range []string{"FailBodyTruncated", "FailBodySize"} {
+	for _, field := range []string{"FailBodyTruncated", "FailBodySize", "ThinkingParams", "ThinkingNote"} {
 		if !m.HasColumn(&UsageRecord{}, field) {
 			if err := m.AddColumn(&UsageRecord{}, field); err != nil {
 				return err
