@@ -1,6 +1,7 @@
 package home
 
 import (
+	"hash/fnv"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -816,9 +817,52 @@ func (c *Client) refreshClusterNodes(ctx context.Context) (bool, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	nodes = rendezvousOrder(nodes, c.instanceID)
 	c.clusterNodes = nodes
 	c.reconnectFailures = 0
 	return c.switchToNodeLocked(nodes[0]), nil
+}
+
+// rendezvousOrder orders Home nodes by highest-random-weight hashing of
+// (proxy instance, node). Every Home replica dispatches, so proxies only need
+// to spread evenly: HRW gives each proxy a stable, independent preference
+// list. Picking the lowest client_count instead made every proxy that
+// refreshed at the same time (start-up, every config publish) herd onto the
+// same Home, because client counts are only synced every few seconds.
+// Failover walks the same per-proxy list, so a lost Home's proxies spread
+// over the survivors too.
+func rendezvousOrder(nodes []clusterNode, seed string) []clusterNode {
+	if len(nodes) < 2 || strings.TrimSpace(seed) == "" {
+		return nodes
+	}
+	type scored struct {
+		node  clusterNode
+		score uint64
+	}
+	list := make([]scored, len(nodes))
+	for i, n := range nodes {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(seed))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(net.JoinHostPort(strings.TrimSpace(n.IP), strconv.Itoa(n.Port))))
+		list[i] = scored{node: n, score: mix64(h.Sum64())}
+	}
+	sort.SliceStable(list, func(i, j int) bool { return list[i].score > list[j].score })
+	out := make([]clusterNode, len(list))
+	for i := range list {
+		out[i] = list[i].node
+	}
+	return out
+}
+
+// mix64 is the splitmix64 finalizer so FNV's weak low bits do not bias HRW.
+func mix64(x uint64) uint64 {
+	x ^= x >> 30
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 27
+	x *= 0x94d049bb133111eb
+	x ^= x >> 31
+	return x
 }
 
 func parseClusterNodesPayload(raw []byte) ([]clusterNode, error) {
@@ -838,7 +882,7 @@ func (c *Client) updateClusterNodesFromPayload(raw []byte) error {
 		return errParse
 	}
 	c.mu.Lock()
-	c.clusterNodes = nodes
+	c.clusterNodes = rendezvousOrder(nodes, c.instanceID)
 	c.mu.Unlock()
 	return nil
 }
