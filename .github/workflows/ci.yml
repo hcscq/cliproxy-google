@@ -46,7 +46,7 @@ jobs:
         #   home/internal/cluster   TestOAuthConfigUpsertsPreserveConcurrentScopes
         run: |
           if go test -count=1 ./... 2>&1 | tee /tmp/test.log; [ "${PIPESTATUS[0]}" -eq 0 ]; then exit 0; fi
-          failed=$(grep -E '^(FAIL|---)' /tmp/test.log | grep -oE 'github.com/[^ ]+' | sort -u || true)
+          failed=$(grep -E '^(FAIL|---)' /tmp/test.log | grep -oE 'github.com/[^[:space:]]+' | sort -u || true)
           echo "::warning::first test run failed, rerunning failed packages: ${failed:-./...}"
           for attempt in 1 2 3; do
             go test -count=1 ${failed:-./...} && exit 0
