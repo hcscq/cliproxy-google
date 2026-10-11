@@ -17,8 +17,10 @@
         └──── mTLS (RESP, Service cliproxy-home:8327) ─┐
                                       ▼
               cliproxy-home-xxxxx × 2 (Deployment)       ← home/ （控制面，PG 选主）
-                                      │
-                                 PostgreSQL       ← 唯一的持久化状态
+                 │                    │                     │
+      Redis 7 + Sentinel ×3     pgbouncer ×2（事务池）   直连（租约池 / 批量写入池）
+   （共享热状态、请求记录流）              └──────────┬──────────┘
+                                                 PostgreSQL       ← 唯一的持久化状态（事实来源）
 ```
 
 - **proxy/**（CLIProxyAPI）：在 Home 模式下运行。启动时用共享的 bootstrap token 向 Home 自助注册，拿到一个临时的 mTLS 身份（只存在内存盘里，Pod 删除即消失），配置、凭据、调度、冷却、配额、Token 刷新全部由 Home 下发和协调。节点本地不写 config 或 auth 文件，日志只输出到 stdout。
@@ -26,7 +28,8 @@
 - 状态分布：
   - PostgreSQL：配置、凭据、刷新结果、冷却和配额、用量。
   - PostgreSQL 还保存：集群 CA、各 Home 副本的服务端证书、代理节点的临时身份、选主租约。
-  - k8s Secret：数据库密码、管理密钥、bootstrap token（不再有每个节点的身份 Secret）。
+  - Redis（可选，可随时关闭）：粘性会话绑定、RPM/限流窗口、冷却唤醒通知、待落库的请求记录流。Redis 不是事实来源，不可用时自动回退到 PostgreSQL / 内存路径。
+  - k8s Secret：数据库密码、管理密钥、bootstrap token、Redis 密码（不再有每个节点的身份 Secret）。
   - 代理 Pod 和 Home Pod：只有内存状态，可以随时删除、扩缩。
 
 ## 相对上游的改动
@@ -171,7 +174,7 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
   - 选主：PG 行锁和心跳。
 - 代理节点不做本地调度：选哪个凭据由 Home 决定，所以副本之间不需要共享轮询状态。
 - 每个 Home 副本内部的轮询游标（round-robin）保存在内存里。只有在两个 Home 同时服务时，分配顺序才可能略有不同，凭据的可用性不受影响。
-- 当前没有引入 Redis：已有的 PG 存储已经覆盖上面的需求。
+- Redis 只承载可丢弃的热状态和请求记录缓冲（见下文“Redis、请求记录流与 pgbouncer”），并发计数仍在 PostgreSQL。
 - 加副本不会增加上游配额（配额按账号计算）。
 - `/readyz` 失败只会把节点移出 Service，不会重启 Pod。只有 `/healthz` 失败才会重启。
 
@@ -227,6 +230,9 @@ GHCR 新建的 package **默认是私有的**，k3s 拉取镜像有两种办法�
 
 - Home 里还保留了部分非 Google 的模型目录逻辑（例如 Devin 和其他 provider 的模型列表刷新），以及 API Key 配置项。这些不影响运行，以后的阶段再清理。
 - 删除的测试只包括明确针对已删除 provider 的用例。
+- 代理向 Home 逐条串行上报用量，本地队列只保留 60 秒；Home 长时间不可用（例如 PG 停机导致 Home 退出）时，代理侧积压的用量会被丢弃。
+- 代理按分配切换 Home 时会先断开再重连，期间几秒内 `/readyz` 返回 503，Home 滚动更新后可能出现少量 503。
+- pgbouncer 收到 SIGTERM 会等待客户端断开，Pod 替换时 30 秒后被强制结束，Home 侧会出现一次连接中断错误（自动重连）。
 
 ## 上游容量不足重试
 
@@ -251,6 +257,34 @@ Home 会把上游错误响应体完整保存到请求记录（`usage.fail_body`�
 - **迁移（schema v7）**：已有的普通表会在 Home 启动时的迁移事务里自动转换。步骤：锁表，把旧表改名为 `usage_legacy`，创建分区表，复制数据并核对行数。旧表 `usage_legacy` 作为备份保留，确认无误后可手动执行 `DROP TABLE usage_legacy;` 删除。迁移由全局迁移锁串行执行，其他副本会等待。本地用 53.7 万行（1.8 GB）演练过，耗时见 `/workspace/capacity-report.md`。
 - **批量写入**：Home 收到的用量事件进入队列，单个写线程每批最多 500 条、最多等待 100ms，用一个事务写入用量行和计费记录。配额观测按凭据合并，只写每个凭据的最新一条。批量事务失败时会逐条重试，坏数据不会连累同批的其他记录。进程退出时会先把队列写完（最多 20 秒），滚动更新不会丢失请求记录。
 - **专用心跳连接**：选主和实例心跳使用独立的小连接池（`HOME_PG_LEASE_CONNS`，默认 3），不和请求路径争连接。心跳单次失败只记录警告并重试；只有被 fence，或连续失败超过心跳超时时间，才会退出。主连接池大小可用 `HOME_PG_MAX_OPEN` / `HOME_PG_MAX_IDLE` 调整（默认 40）。
+
+## Redis、请求记录流与 pgbouncer（容量阶段 2/3）
+
+**Redis（`15-redis.yaml`，1 主 2 从 + 3 个 Sentinel）**：`HOME_REDIS_ENABLED=true` 开启。承载粘性会话绑定（Lua 原子绑定）、凭据/密钥 RPM 限流窗口、冷却 pub/sub 唤醒，以及下面的请求记录流。所有请求路径上的 Redis 操作都有 100ms 超时，连续失败 3 次即标记为不健康并回退（PG / 内存），每秒探测一次，恢复后自动切回。
+
+**请求记录流（`HOME_USAGE_STREAM=1`）**：
+- Home 收到代理上报的用量后放入进程内缓冲（上限 65536 条），后台以管道方式批量 `XADD` 到共享流 `cpg:usage:stream`（`MAXLEN ~ 1,000,000`，`HOME_USAGE_STREAM_MAXLEN` 可调）。代理的 `LPUSH` 不再等待 Redis。
+- 每个 Home 运行 `HOME_USAGE_STREAM_WORKERS`（默认 4）个消费者（同一消费组 `usage-writers`，消费者名按进程唯一），每批最多 500 条，在一个 PG 事务里写入请求记录和计费记录，**提交成功后才 `XACK`/`XDEL`**。
+- Home 崩溃或重启：未确认的条目留在 Redis，空闲 60 秒后由其他 Home `XAUTOCLAIM` 接管；PG 不可用：条目积压在 Redis，恢复后由所有 Home 并行补写。
+- 去重：重投递的条目按 `usage.stream_id` 检查（只在该条记录的时间戳 ±1ms 内查，命中单个分区），提交与确认之间崩溃也不会重复计费。接管阈值 60s 大于单批写入超时 20s，保证接管时原写入者已提交或已回滚。
+- 回退：Redis 不健康、缓冲已满或 `XADD` 失败时，该条走原来的内存队列 → PG 批量写入路径；面板显示回退次数。
+- 已知窗口：Sentinel 切换时尚未复制到从节点的条目可能丢失（异步复制）；演练中未观察到丢失。
+
+**pgbouncer（`12-pgbouncer.yaml`，2 副本，事务池模式，1.25）**：Home 设置 `HOME_PG_POOLER_ADDR=pgbouncer.<ns>.svc.cluster.local:6432` 后，主连接池（请求路径）经 pgbouncer；**选主租约池和请求记录批量写入池始终直连 PG**（`HOME_PG_LEASE_CONNS` 默认 3，`HOME_PG_BULK_CONNS` 默认 4），选主不依赖 pgbouncer，批量事务也不付出每条语句多一跳的代价。Home 只使用事务级 advisory lock、不使用 LISTEN/NOTIFY，适合事务池；pgx 预编译语句依赖 `max_prepared_statements`（≥1.21）。启动时 pgbouncer 不可达会自动回退直连并在面板标出。连接预算：每个 pgbouncer 副本最多 30 个服务端连接（共 60）+ 每个 Home 直连 7 个，远低于 PG 的 `max_connections=100`，且不随 Home 副本数线性增长。
+
+**面板**：“节点”页顶部的“基础设施”卡片显示当前 Home 看到的 Redis（主节点、从节点数、各 Sentinel 视图、内存、延迟）、请求记录流（积压 / 待确认、消费者数、本副本写入数和回退数、上次落库时间、错误）、PostgreSQL（是否经 pgbouncer、主池 / 租约池 / 批量池连接、等待次数、延迟）。接口：`GET /v0/management/infra`。
+
+**故障演练**（本地 3 Home + 4 代理，2000 RPS × 60s，`tools/captest/drill.sh`；“行数”指落库请求记录与成功请求的对比）：
+
+| 演练 | 结果 |
+| --- | --- |
+| 基线（流 + pgbouncer） | 120000/120000 成功，行数一致，无重复 |
+| Redis 主节点 `SHUTDOWN` → Sentinel 切换 | 120001/120001 成功，约 5s 回退后恢复，行数一致，无重复 |
+| Home `kill -9` | 存活副本接管未确认条目，行数一致，无重复；该 Home 上的代理切换期间 21% 请求 503（本地无自动重启） |
+| pgbouncer 强制重启 | 216 个 502（0.18%），行数一致 |
+| PostgreSQL 停机 15s | Home 因无法续租而按设计退出（fence）；已写入流的记录在 Home 恢复后全部补写；**代理侧仍在排队的用量超过 60s 保留期会被丢弃**（见已知限制） |
+
+生产（无合成流量，仅验证请求）：删除一个 pgbouncer Pod、删除 Redis 主节点 Pod（切到 redis-2）、删除一个 Home Pod，验证请求全部成功，请求记录一条不少、无重复。
 
 ## 输出长度上限（max_tokens）
 
