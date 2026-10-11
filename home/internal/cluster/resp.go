@@ -214,6 +214,7 @@ func (h *RESPHandler) nodesPayload(ctx context.Context) ([]byte, error) {
 	if errNodes != nil {
 		return nil, errNodes
 	}
+	nodes = h.repo.withoutDrainingHomes(ctx, nodes, now)
 	var master *ClusterNodeRecord
 	if h.coordinator != nil {
 		currentMaster, errMaster := h.coordinator.CurrentMaster(ctx)

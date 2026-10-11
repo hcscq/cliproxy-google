@@ -21,11 +21,10 @@ func (s *Server) readinessError() string {
 		return "config not loaded"
 	}
 	if cfg.Home.Enabled {
-		client := home.Current()
-		if client == nil {
-			return "home client not connected"
-		}
-		if !client.HeartbeatOK() {
+		if !homeHealthy() && !homeWithinReadyGrace() {
+			if home.Current() == nil {
+				return "home client not connected"
+			}
 			return "home heartbeat not healthy"
 		}
 	}

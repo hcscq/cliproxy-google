@@ -941,7 +941,16 @@ func (c *Client) updateClusterNodesFromPayload(raw []byte) error {
 	if strings.TrimSpace(c.homeCfg.Host) == first.IP && c.homeCfg.Port == first.Port {
 		return nil
 	}
-	if !c.lastReassignAt.IsZero() && time.Since(c.lastReassignAt) < homeReassignMinInterval {
+	currentListed := false
+	for _, n := range c.clusterNodes {
+		if strings.TrimSpace(c.homeCfg.Host) == n.IP && c.homeCfg.Port == n.Port {
+			currentListed = true
+			break
+		}
+	}
+	// The rate limit only damps balancing moves; leaving a Home that is no
+	// longer listed (draining / gone) happens right away.
+	if currentListed && !c.lastReassignAt.IsZero() && time.Since(c.lastReassignAt) < homeReassignMinInterval {
 		return nil
 	}
 	c.lastReassignAt = time.Now()

@@ -1144,5 +1144,8 @@ func ensureExtraTables(ctx context.Context, db *gorm.DB) error {
 	if err := ensureHomeAssignmentTable(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureHomeDrainTable(ctx, db); err != nil {
+		return err
+	}
 	return ensureAffinityTables(ctx, db)
 }

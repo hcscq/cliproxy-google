@@ -178,6 +178,10 @@ func (r *Repository) RebalanceHomeAssignments(ctx context.Context, homeTimeout t
 		if err := tx.Where("last_seen_at >= ?", now.Add(-homeTimeout)).Find(&homeRows).Error; err != nil {
 			return err
 		}
+		draining, errDrain := drainingHomes(tx, now)
+		if errDrain != nil {
+			return errDrain
+		}
 		homes := make([]string, 0, len(homeRows))
 		homeAddr := make(map[string]ClusterNodeRecord, len(homeRows))
 		for _, h := range homeRows {
@@ -185,6 +189,9 @@ func (r *Repository) RebalanceHomeAssignments(ctx context.Context, homeTimeout t
 				continue
 			}
 			k := homeKey(h.IP, h.Port)
+			if draining[k] {
+				continue // shutting down: move its proxies away
+			}
 			homes = append(homes, k)
 			homeAddr[k] = h
 		}

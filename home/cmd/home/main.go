@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -142,8 +143,17 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	runCtx, cancelRun := context.WithCancel(ctx)
+	// runCtx is not a child of the signal context: on SIGTERM a serving Home
+	// first drains (proxies move away) and only then cancels runCtx.
+	runCtx, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
+	var serving atomic.Bool
+	go func() {
+		<-ctx.Done()
+		if !serving.Load() {
+			cancelRun() // signal during startup: stop right away
+		}
+	}()
 	var databaseSnapshot *cluster.ValidatedDatabaseSnapshot
 	if databaseImportPath != "" {
 		var errSnapshot error
@@ -597,10 +607,17 @@ func run() int {
 	go runUsageTokenAccountingBackfillMaintenance(runCtx, repo)
 	go runInFlightStagingCleanupMaintenance(runCtx, repo, rt)
 
+	serving.Store(true)
 	go func() {
 		<-ctx.Done()
+		if clusterRepo != nil {
+			drainHome(clusterRepo, clusterClientAddr, clusterAdvertisedPort, coordinator)
+		}
 		shutdownServers()
 	}()
+	if ctx.Err() != nil {
+		cancelRun()
+	}
 
 	select {
 	case errServe := <-httpErrCh:
@@ -721,7 +738,7 @@ func openRuntimeDatabase(ctx context.Context, clusterCfg *cluster.Config, cluste
 			db, errOpenSQLite := cluster.OpenSQLite(ctx, resolveSQLitePath(sqlitePath, clusterCfg.SQLite.Path), clusterCfg.SQLite.SlowQueryThreshold)
 			return db, cluster.DatabaseBackendSQLite, errOpenSQLite
 		case cluster.DatabaseBackendPostgres:
-			db, errOpenPostgres := cluster.Open(ctx, clusterCfg.PGSQL)
+			db, errOpenPostgres := openPostgresWithRetry(ctx, clusterCfg.PGSQL)
 			return db, cluster.DatabaseBackendPostgres, errOpenPostgres
 		default:
 			return nil, "", fmt.Errorf("unsupported database backend %q", clusterCfg.DatabaseBackend())
@@ -993,4 +1010,65 @@ func trackLiveHomes(ctx context.Context, repo *cluster.Repository, timeout time.
 		case <-t.C:
 		}
 	}
+}
+
+// openPostgresWithRetry waits for PostgreSQL at startup instead of exiting
+// (HOME_PG_STARTUP_WAIT, default 10m), so a Home restarted during a PG outage
+// does not crash-loop into ever-longer k8s back-off and resumes as soon as PG
+// is back.
+func openPostgresWithRetry(ctx context.Context, cfg cluster.PGSQLConfig) (*gorm.DB, error) {
+	wait := 10 * time.Minute
+	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv("HOME_PG_STARTUP_WAIT"))); err == nil && d >= 0 {
+		wait = d
+	}
+	deadline := time.Now().Add(wait)
+	backoff := time.Second
+	for {
+		db, err := cluster.Open(ctx, cfg)
+		if err == nil || ctx.Err() != nil || time.Now().After(deadline) {
+			return db, err
+		}
+		log.Warnf("postgres unavailable at startup (%v); retrying in %s", err, backoff)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < 5*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// drainHome marks this Home as draining, rebalances proxies away from it and
+// waits (HOME_DRAIN_TIMEOUT, default 25s) until none is connected, so a
+// rolling update moves proxies before their Home disappears.
+func drainHome(repo *cluster.Repository, ip string, port int, coordinator *cluster.Coordinator) {
+	timeout := 25 * time.Second
+	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv("HOME_DRAIN_TIMEOUT"))); err == nil && d >= 0 {
+		timeout = d
+	}
+	if timeout == 0 || ip == "" || port <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+5*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := repo.BeginHomeDrain(ctx, ip, port, timeout+time.Minute); err != nil {
+		log.WithError(err).Warn("home drain: could not mark draining; stopping without drain")
+		return
+	}
+	heartbeatTimeout := cluster.DefaultHeartbeatTimeout()
+	if _, err := repo.RebalanceHomeAssignments(ctx, heartbeatTimeout); err != nil {
+		log.WithError(err).Warn("home drain: rebalance failed")
+	}
+	for time.Since(start) < timeout {
+		n, err := repo.ConnectedProxyCount(ctx, ip, port, heartbeatTimeout)
+		if err == nil && n == 0 {
+			log.Infof("home drain: no proxies connected after %s; stopping", time.Since(start).Round(time.Millisecond))
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	log.Warnf("home drain: proxies still connected after %s; stopping anyway", timeout)
 }

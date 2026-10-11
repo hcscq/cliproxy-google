@@ -7,7 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/safemode"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
@@ -50,8 +49,7 @@ func (s *Server) homeHeartbeatMiddleware() gin.HandlerFunc {
 				return
 			}
 		}
-		client := home.Current()
-		if client == nil || !client.HeartbeatOK() {
+		if !waitForHome(c.Request.Context()) {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
 			return
 		}
