@@ -143,6 +143,11 @@ func BuildErrorResponseBodyWithError(status int, errText string, err error) []by
 			code = "internal_server_error"
 		}
 	}
+	// Home rejects models outside the API key's model groups with this code.
+	if strings.HasPrefix(strings.TrimSpace(errText), "model_not_allowed") {
+		errType = "permission_error"
+		code = "model_not_allowed"
+	}
 
 	payload, errMarshal := json.Marshal(ErrorResponse{
 		Error: ErrorDetail{

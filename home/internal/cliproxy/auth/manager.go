@@ -1331,6 +1331,11 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 	if !modelAllowedByID(routeKey, allowedModelIDs) {
 		return nil, ModelNotAllowedError(routeModel)
 	}
+	if allowed := allowedAuthIDsFromOptions(opts); allowed != nil && len(allowed) == 0 {
+		// Key bound to credential groups that currently contain no credential
+		// (empty or disabled groups). No fallback to other credentials.
+		return nil, &Error{Code: "auth_not_found", Message: "no credential available in this API key's credential groups (no fallback)", HTTPStatus: http.StatusServiceUnavailable}
+	}
 	retrySummary := m.summarizeDispatchAvailability(providers, routeModel, opts, nil, defaultRequestRetry)
 	requestRetry := retrySummary.requestRetry
 	if !retrySummary.hasRequestRetry || requestRetry < 0 {

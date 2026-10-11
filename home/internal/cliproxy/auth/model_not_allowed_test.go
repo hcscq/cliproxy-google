@@ -15,3 +15,12 @@ func TestDispatchRejectsModelOutsideKeyGroups(t *testing.T) {
 		t.Fatalf("want 403 model_not_allowed, got %#v", err)
 	}
 }
+
+func TestDispatchEmptyCredentialGroupsIsExplicit(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	_, err := m.Dispatch(context.Background(), []string{"antigravity"}, "gemini-3-flash", Options{Metadata: map[string]any{AllowedAuthIDsMetadataKey: []string{}}})
+	var e *Error
+	if !errors.As(err, &e) || e.HTTPStatus != http.StatusServiceUnavailable || e.Code != "auth_not_found" {
+		t.Fatalf("got %#v", err)
+	}
+}
