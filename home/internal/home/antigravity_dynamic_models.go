@@ -30,9 +30,9 @@ import (
 // Set HOME_ANTIGRAVITY_DYNAMIC_MODELS=false to fall back to the static list.
 
 const (
-	antigravityDefaultModelsBaseURL   = "https://daily-cloudcode-pa.googleapis.com"
-	antigravityModelsEndpointPath     = "/v1internal:fetchAvailableModels"
-	antigravityModelsUserAgent        = "antigravity/1.11.5 windows/amd64"
+	antigravityDefaultModelsBaseURL = "https://daily-cloudcode-pa.googleapis.com"
+	antigravityModelsEndpointPath   = "/v1internal:fetchAvailableModels"
+	antigravityModelsUserAgent      = "antigravity/1.11.5 windows/amd64"
 )
 
 type antigravityUpstreamModel struct {
