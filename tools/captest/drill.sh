@@ -9,7 +9,7 @@ HOMES=3 python3 $(dirname $0)/step.py $RPS $DUR $L > /workspace/cap/run/drill-$L
 SP=$!
 if [ -n "$ACT" ]; then sleep $AT; echo "[$(date +%T)] action: $ACT"; bash -c "$ACT"; fi
 wait $SP
-echo "[$(date +%T)] load done; draining"
+cl=$(Q "select count(*) from usage"); echo "[$(date +%T)] load done; rows so far $((cl-c0)); draining"
 for t in $(seq 1 90); do
   b=0
   for p in 8327 8337 8347; do

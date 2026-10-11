@@ -242,7 +242,19 @@ func (s *usageStream) ensureGroup(ctx context.Context) error {
 
 // Run consumes the stream until ctx is done. Unacked entries stay in Redis on
 // exit and are picked up by this or another Home.
-func (s *usageStream) Run(ctx context.Context) {
+func (s *usageStream) Run(ctx context.Context) { s.runWorker(ctx, s.consumer) }
+
+// usageStreamWorkers is the number of parallel consumers per Home
+// (HOME_USAGE_STREAM_WORKERS, default 4).
+func usageStreamWorkers() int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("HOME_USAGE_STREAM_WORKERS"))); err == nil && v > 0 && v <= 32 {
+		return v
+	}
+	return 4
+}
+
+// runWorker is one consumer loop; consumer names must be unique.
+func (s *usageStream) runWorker(ctx context.Context, consumer string) {
 	groupReady := false
 	lastClaim := time.Time{}
 	backoff := time.Duration(0)
@@ -275,16 +287,16 @@ func (s *usageStream) Run(ctx context.Context) {
 			groupReady = true
 		}
 		// 1) own pending entries (read before, not acked: e.g. PG failed or we restarted)
-		n, err := s.readAndFlush(ctx, "0", true)
+		n, err := s.readAndFlush(ctx, consumer, "0", true)
 		if err == nil && n == 0 && time.Since(lastClaim) >= usageStreamClaimEvery {
 			// 2) entries stuck on dead consumers
 			lastClaim = time.Now()
-			n, err = s.claimAndFlush(ctx)
-			s.pruneConsumers(ctx)
+			n, err = s.claimAndFlush(ctx, consumer)
+			s.pruneConsumers(ctx, consumer)
 		}
 		if err == nil && n == 0 {
 			// 3) new entries
-			n, err = s.readAndFlush(ctx, ">", false)
+			n, err = s.readAndFlush(ctx, consumer, ">", false)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -307,14 +319,14 @@ func (s *usageStream) Run(ctx context.Context) {
 
 func isNoGroup(err error) bool { return err != nil && strings.Contains(err.Error(), "NOGROUP") }
 
-func (s *usageStream) readAndFlush(ctx context.Context, start string, redelivered bool) (int, error) {
+func (s *usageStream) readAndFlush(ctx context.Context, consumer, start string, redelivered bool) (int, error) {
 	block := usageStreamBlock
 	if start != ">" {
 		block = -1 // no BLOCK for pending reads
 	}
 	rctx, cancel := context.WithTimeout(ctx, usageStreamBlock+3*time.Second)
 	res, err := s.rc.Bulk().XReadGroup(rctx, &redis.XReadGroupArgs{
-		Group: usageStreamGroup, Consumer: s.consumer,
+		Group: usageStreamGroup, Consumer: consumer,
 		Streams: []string{s.key(), start}, Count: usageStreamBatch, Block: block,
 	}).Result()
 	cancel()
@@ -336,7 +348,7 @@ func (s *usageStream) readAndFlush(ctx context.Context, start string, redelivere
 		}
 		rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		more, errMore := s.rc.Bulk().XReadGroup(rctx, &redis.XReadGroupArgs{
-			Group: usageStreamGroup, Consumer: s.consumer,
+			Group: usageStreamGroup, Consumer: consumer,
 			Streams: []string{s.key(), ">"}, Count: int64(usageStreamBatch - len(msgs)), Block: -1,
 		}).Result()
 		cancel()
@@ -349,10 +361,10 @@ func (s *usageStream) readAndFlush(ctx context.Context, start string, redelivere
 	return s.flush(ctx, msgs, redelivered)
 }
 
-func (s *usageStream) claimAndFlush(ctx context.Context) (int, error) {
+func (s *usageStream) claimAndFlush(ctx context.Context, consumer string) (int, error) {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	msgs, _, err := s.rc.Bulk().XAutoClaim(cctx, &redis.XAutoClaimArgs{
-		Stream: s.key(), Group: usageStreamGroup, Consumer: s.consumer,
+		Stream: s.key(), Group: usageStreamGroup, Consumer: consumer,
 		MinIdle: usageStreamClaimIdle, Start: "0", Count: usageStreamBatch,
 	}).Result()
 	cancel()
@@ -364,7 +376,7 @@ func (s *usageStream) claimAndFlush(ctx context.Context) (int, error) {
 }
 
 // pruneConsumers removes consumers of departed Homes that hold no entries.
-func (s *usageStream) pruneConsumers(ctx context.Context) {
+func (s *usageStream) pruneConsumers(ctx context.Context, self string) {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	cs, err := s.rc.Bulk().XInfoConsumers(cctx, s.key(), usageStreamGroup).Result()
@@ -372,7 +384,7 @@ func (s *usageStream) pruneConsumers(ctx context.Context) {
 		return
 	}
 	for _, c := range cs {
-		if c.Name != s.consumer && c.Pending == 0 && c.Idle >= usageStreamConsumerIdle {
+		if !strings.HasPrefix(c.Name, s.consumer) && c.Name != self && c.Pending == 0 && c.Idle >= usageStreamConsumerIdle {
 			_ = s.rc.Bulk().XGroupDelConsumer(cctx, s.key(), usageStreamGroup, c.Name).Err()
 		}
 	}

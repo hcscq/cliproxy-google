@@ -2,6 +2,7 @@ package home
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -192,7 +193,13 @@ func (r *Runtime) startUsageStream(ctx context.Context) {
 		st.Close(5 * time.Second)
 	}()
 	go st.Run(ctx)
-	log.Infof("usage stream enabled (consumer %s, maxlen %d)", st.consumer, st.maxLen)
+	// Extra consumers share the appender/counters but read and write in parallel
+	// (each batch is one PG transaction; through pgbouncer one writer cannot keep up).
+	workers := usageStreamWorkers()
+	for i := 1; i < workers; i++ {
+		go st.runWorker(ctx, fmt.Sprintf("%s-w%d", st.consumer, i))
+	}
+	log.Infof("usage stream enabled (consumer %s, %d workers, maxlen %d)", st.consumer, workers, st.maxLen)
 }
 
 func (r *Runtime) getUsageStream() *usageStream {
