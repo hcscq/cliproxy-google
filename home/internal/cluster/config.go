@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/redisx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,9 +17,10 @@ const (
 )
 
 type Config struct {
-	PGSQL  PGSQLConfig  `yaml:"pgsql"`
-	SQLite SQLiteConfig `yaml:"sqlite"`
-	Node   NodeConfig   `yaml:"node"`
+	PGSQL  PGSQLConfig   `yaml:"pgsql"`
+	SQLite SQLiteConfig  `yaml:"sqlite"`
+	Node   NodeConfig    `yaml:"node"`
+	Redis  redisx.Config `yaml:"redis"`
 }
 
 type PGSQLConfig struct {
@@ -55,9 +57,10 @@ type NodeConfig struct {
 }
 
 type rawConfig struct {
-	PGSQL  PGSQLConfig  `yaml:"pgsql"`
-	SQLite SQLiteConfig `yaml:"sqlite"`
-	Node   rawNode      `yaml:"node"`
+	PGSQL  PGSQLConfig   `yaml:"pgsql"`
+	SQLite SQLiteConfig  `yaml:"sqlite"`
+	Node   rawNode       `yaml:"node"`
+	Redis  redisx.Config `yaml:"redis"`
 }
 
 type rawNode struct {
@@ -116,6 +119,7 @@ func LoadConfigOptional(path string) (*Config, bool, error) {
 
 	cfg := &Config{
 		PGSQL: raw.PGSQL,
+		Redis: raw.Redis,
 		SQLite: SQLiteConfig{
 			Path:               strings.TrimSpace(raw.SQLite.Path),
 			SlowQueryThreshold: raw.SQLite.SlowQueryThreshold,

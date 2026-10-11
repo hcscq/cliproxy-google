@@ -7,6 +7,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/google/uuid v1.6.0
+	github.com/redis/go-redis/v9 v9.19.0
 	github.com/router-for-me/CLIProxyAPI/v8 v8.0.4
 	github.com/sirupsen/logrus v1.9.3
 	github.com/tidwall/gjson v1.18.0
@@ -76,7 +77,6 @@ require (
 	github.com/pion/webrtc/v4 v4.2.17 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
-	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
