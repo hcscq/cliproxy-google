@@ -288,9 +288,28 @@ func finalInterceptorHeaders(current, intercepted http.Header) http.Header {
 	return cloneHeader(intercepted)
 }
 
+// proxyOwnedResponseHeaders are set by the proxy's own executors (not copied
+// from the upstream) and always reach the client, even when upstream header
+// passthrough is disabled.
+var proxyOwnedResponseHeaders = []string{"X-Thinking-Adjusted"}
+
+func withProxyOwnedHeaders(dst, raw http.Header) http.Header {
+	for _, name := range proxyOwnedResponseHeaders {
+		v := raw.Get(name)
+		if v == "" {
+			continue
+		}
+		if dst == nil {
+			dst = make(http.Header)
+		}
+		dst.Set(name, v)
+	}
+	return dst
+}
+
 func downstreamHeadersFromExecutor(headers http.Header, passthrough bool) http.Header {
 	if !passthrough {
-		return nil
+		return withProxyOwnedHeaders(nil, headers)
 	}
 	return FilterUpstreamHeaders(headers)
 }
@@ -299,7 +318,7 @@ func downstreamHeadersAfterInterceptors(baseRaw, finalRaw http.Header, passthrou
 	if passthrough {
 		return FilterUpstreamHeaders(finalRaw)
 	}
-	return FilterUpstreamHeaders(diffHeaders(baseRaw, finalRaw))
+	return withProxyOwnedHeaders(FilterUpstreamHeaders(diffHeaders(baseRaw, finalRaw)), finalRaw)
 }
 
 func diffHeaders(base, next http.Header) http.Header {
