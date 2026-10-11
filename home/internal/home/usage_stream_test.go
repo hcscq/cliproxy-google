@@ -76,6 +76,8 @@ func TestUsageStreamFlushesAndAcks(t *testing.T) {
 	rc := testUsageRedis(t)
 	store := &fakeUsageItemsStore{rows: map[string]string{}}
 	s := newUsageStream(rc, store, "h1")
+	go s.runAppender()
+	defer s.Close(time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.Run(ctx)
@@ -96,6 +98,8 @@ func TestUsageStreamRetriesWhenStoreFails(t *testing.T) {
 	rc := testUsageRedis(t)
 	store := &fakeUsageItemsStore{rows: map[string]string{}, failLeft: 2}
 	s := newUsageStream(rc, store, "h1")
+	go s.runAppender()
+	defer s.Close(time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for i := 0; i < 50; i++ {
@@ -116,6 +120,8 @@ func TestUsageStreamClaimsFromDeadConsumer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dead := newUsageStream(rc, &fakeUsageItemsStore{rows: map[string]string{}}, "dead")
+	go dead.runAppender()
+	defer dead.Close(time.Second)
 	if err := dead.ensureGroup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +135,8 @@ func TestUsageStreamClaimsFromDeadConsumer(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	store := &fakeUsageItemsStore{rows: map[string]string{}}
 	live := newUsageStream(rc, store, "live")
+	go live.runAppender()
+	defer live.Close(time.Second)
 	go live.Run(ctx)
 	waitFor(t, 10*time.Second, func() bool { return store.count() == 20 }, "claimed rows")
 	waitFor(t, 3*time.Second, func() bool { return live.Status(ctx).Pending == 0 }, "no pending")
@@ -138,6 +146,8 @@ func TestUsageStreamFallsBackWhenRedisDown(t *testing.T) {
 	rc := redisx.Open(redisx.Config{Enabled: true, Addr: "127.0.0.1:1"})
 	defer rc.Close()
 	s := newUsageStream(rc, &fakeUsageItemsStore{rows: map[string]string{}}, "h1")
+	go s.runAppender()
+	defer s.Close(time.Second)
 	if s.Append(context.Background(), `{"i":1}`, time.Now()) {
 		t.Fatal("append should fail over to the in-memory path")
 	}
@@ -161,6 +171,8 @@ func TestUsageStreamTwoConsumersNoDuplicates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a := newUsageStream(rc, store, "")
+	go a.runAppender()
+	defer a.Close(time.Second)
 	b := newUsageStream(rc, store, "")
 	go a.Run(ctx)
 	go b.Run(ctx)
@@ -168,4 +180,23 @@ func TestUsageStreamTwoConsumersNoDuplicates(t *testing.T) {
 		a.Append(ctx, `{"i":1}`, time.Now())
 	}
 	waitFor(t, 15*time.Second, func() bool { return store.count() == 3000 }, "3000 rows")
+}
+
+// Payloads buffered when the stream closes are flushed into Redis.
+func TestUsageStreamCloseFlushesBuffer(t *testing.T) {
+	rc := testUsageRedis(t)
+	s := newUsageStream(rc, &fakeUsageItemsStore{rows: map[string]string{}}, "")
+	go s.runAppender()
+	for i := 0; i < 1000; i++ {
+		if !s.Append(context.Background(), `{"i":1}`, time.Now()) {
+			t.Fatal("append failed")
+		}
+	}
+	s.Close(5 * time.Second)
+	if n, _ := rc.Bulk().XLen(context.Background(), s.key()).Result(); n != 1000 {
+		t.Fatalf("xlen=%d want 1000", n)
+	}
+	if s.Append(context.Background(), `{"i":1}`, time.Now()) {
+		t.Fatal("append after close must fall back")
+	}
 }

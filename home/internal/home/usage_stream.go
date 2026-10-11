@@ -33,6 +33,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/redisx"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -44,6 +45,8 @@ const (
 	usageStreamClaimEvery       = 15 * time.Second
 	usageStreamConsumerIdle     = time.Hour
 	usageStreamDefaultMax       = 1_000_000
+	usageStreamBuffer           = 65536 // payloads waiting for XADD in this Home
+	usageStreamAppendBatch      = 256
 )
 
 // usageStreamClaimIdle is how long an entry sits unacked on another consumer
@@ -78,6 +81,15 @@ type usageStream struct {
 	consumer string
 	maxLen   int64
 
+	// Append hands payloads to an in-process buffer; one appender pipelines
+	// XADDs (a synchronous XADD per proxy LPUSH made proxies' sequential usage
+	// forwarders fall behind). Failures go to fallbackPush (in-memory -> PG).
+	buf          chan streamItem
+	fallbackPush func(payload string, receivedAt time.Time) bool
+	appendMu     sync.RWMutex
+	closed       bool
+	appenderDone chan struct{}
+
 	appended, flushed, fallback, redelivered atomic.Int64
 	lastFlush                                atomic.Int64
 	mu                                       sync.Mutex
@@ -102,7 +114,13 @@ func newUsageStream(rc *redisx.Client, store usageItemsStore, consumer string) *
 		_, _ = rand.Read(b[:])
 		consumer = host + "-" + hex.EncodeToString(b[:])
 	}
-	return &usageStream{rc: rc, store: store, consumer: consumer, maxLen: maxLen}
+	return &usageStream{rc: rc, store: store, consumer: consumer, maxLen: maxLen,
+		buf: make(chan streamItem, usageStreamBuffer), appenderDone: make(chan struct{})}
+}
+
+type streamItem struct {
+	payload    string
+	receivedAt time.Time
 }
 
 func (s *usageStream) key() string { return s.rc.Key(usageStreamName) }
@@ -117,30 +135,101 @@ func (s *usageStream) setErr(err error) {
 	s.mu.Unlock()
 }
 
-// Append adds one payload to the stream; false means the caller must use the
-// fallback path.
+// Append queues one payload for the stream; false means the caller must use
+// the fallback path (Redis unhealthy, buffer full or stream stopped).
 func (s *usageStream) Append(ctx context.Context, payload string, receivedAt time.Time) bool {
-	if s == nil || !s.rc.Healthy() {
-		if s != nil {
-			s.fallback.Add(1)
-		}
+	if s == nil {
 		return false
 	}
-	cctx, cancel := s.rc.Ctx(ctx)
-	defer cancel()
-	err := s.rc.Raw().XAdd(cctx, &redis.XAddArgs{
-		Stream: s.key(),
-		MaxLen: s.maxLen,
-		Approx: true,
-		Values: []any{"p", payload, "t", strconv.FormatInt(receivedAt.UTC().UnixNano(), 10)},
-	}).Err()
-	s.rc.Observe(err)
-	if err != nil {
+	if !s.rc.Healthy() {
 		s.fallback.Add(1)
 		return false
 	}
-	s.appended.Add(1)
-	return true
+	s.appendMu.RLock()
+	defer s.appendMu.RUnlock()
+	if s.closed {
+		s.fallback.Add(1)
+		return false
+	}
+	select {
+	case s.buf <- streamItem{payload: payload, receivedAt: receivedAt.UTC()}:
+		return true
+	default:
+		s.fallback.Add(1)
+		return false
+	}
+}
+
+// runAppender pipelines buffered payloads into the stream until Close.
+func (s *usageStream) runAppender() {
+	defer close(s.appenderDone)
+	batch := make([]streamItem, 0, usageStreamAppendBatch)
+	for {
+		item, ok := <-s.buf
+		if !ok {
+			return
+		}
+		batch = append(batch[:0], item)
+	fill:
+		for len(batch) < usageStreamAppendBatch {
+			select {
+			case it, ok := <-s.buf:
+				if !ok {
+					break fill
+				}
+				batch = append(batch, it)
+			default:
+				break fill
+			}
+		}
+		s.xaddBatch(batch)
+	}
+}
+
+func (s *usageStream) xaddBatch(batch []streamItem) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pipe := s.rc.Bulk().Pipeline()
+	cmds := make([]*redis.StringCmd, len(batch))
+	for i, it := range batch {
+		cmds[i] = pipe.XAdd(ctx, &redis.XAddArgs{
+			Stream: s.key(),
+			MaxLen: s.maxLen,
+			Approx: true,
+			Values: []any{"p", it.payload, "t", strconv.FormatInt(it.receivedAt.UnixNano(), 10)},
+		})
+	}
+	_, err := pipe.Exec(ctx)
+	s.rc.Observe(err)
+	for i, c := range cmds {
+		if c.Err() == nil {
+			s.appended.Add(1)
+			continue
+		}
+		s.fallback.Add(1)
+		if s.fallbackPush == nil || !s.fallbackPush(batch[i].payload, batch[i].receivedAt) {
+			log.Warn("usage stream: payload dropped (XADD and fallback queue both failed)")
+		}
+	}
+}
+
+// Close stops accepting payloads and waits (bounded) until buffered ones are
+// in the stream or handed to the fallback.
+func (s *usageStream) Close(timeout time.Duration) {
+	if s == nil {
+		return
+	}
+	s.appendMu.Lock()
+	if !s.closed {
+		s.closed = true
+		close(s.buf)
+	}
+	s.appendMu.Unlock()
+	select {
+	case <-s.appenderDone:
+	case <-time.After(timeout):
+		log.Warnf("usage stream: %d buffered payloads not flushed before shutdown", len(s.buf))
+	}
 }
 
 func (s *usageStream) ensureGroup(ctx context.Context) error {

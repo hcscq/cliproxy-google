@@ -178,9 +178,19 @@ func (r *Runtime) startUsageStream(ctx context.Context) {
 		return
 	}
 	st := newUsageStream(rc, itemsStore, "")
+	st.fallbackPush = func(payload string, receivedAt time.Time) bool {
+		q := r.getClusterUsageQueue()
+		return q != nil && q.Push(payload, receivedAt)
+	}
 	r.clusterUsageQueueMu.Lock()
 	r.usageStream = st
 	r.clusterUsageQueueMu.Unlock()
+	go st.runAppender()
+	go func() {
+		// Flush buffered payloads into Redis (or the fallback) on shutdown.
+		<-ctx.Done()
+		st.Close(5 * time.Second)
+	}()
 	go st.Run(ctx)
 	log.Infof("usage stream enabled (consumer %s, maxlen %d)", st.consumer, st.maxLen)
 }
@@ -210,10 +220,12 @@ func (r *Runtime) stopClusterUsageWriter() {
 	r.clusterUsageQueueMu.Lock()
 	queue := r.clusterUsageQueue
 	done := r.clusterUsageDone
+	stream := r.usageStream
 	r.clusterUsageQueue = nil
 	r.clusterUsageDone = nil
 	r.usageStream = nil
 	r.clusterUsageQueueMu.Unlock()
+	stream.Close(5 * time.Second)
 	if queue != nil {
 		queue.Close()
 	}
