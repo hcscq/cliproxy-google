@@ -424,17 +424,22 @@ func run() int {
 		}
 	}
 
+	// Redis before the runtime: the runtime's usage writer picks the stream
+	// path only when the Redis client already exists.
+	var redisClient *redisx.Client
+	if clusterRepo != nil && clusterCfg != nil {
+		if redisClient = redisx.Open(clusterCfg.Redis); redisClient != nil {
+			redisx.SetDefault(redisClient)
+			defer redisClient.Close()
+		}
+	}
 	if errStart := rt.Start(runCtx, configPath); errStart != nil {
 		log.Errorf("failed to start runtime: %v", errStart)
 		return 1
 	}
 	if clusterRepo != nil && clusterCfg != nil {
-		if rc := redisx.Open(clusterCfg.Redis); rc != nil {
-			redisx.SetDefault(rc)
-			defer rc.Close()
-			if eventWatcher != nil {
-				cluster.SubscribeEventWake(runCtx, eventWatcher.Wake)
-			}
+		if redisClient != nil && eventWatcher != nil {
+			cluster.SubscribeEventWake(runCtx, eventWatcher.Wake)
 		}
 		go trackLiveHomes(runCtx, clusterRepo, nodeCfg.HeartbeatTimeout)
 	}
