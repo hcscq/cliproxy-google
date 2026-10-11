@@ -237,6 +237,8 @@ func decodeHomeDispatchError(raw []byte) error {
 	switch strings.ToLower(code) {
 	case "model_not_found":
 		result.HTTPStatus = http.StatusNotFound
+	case "model_not_allowed":
+		result.HTTPStatus = http.StatusForbidden
 	case "model_cooldown":
 		result.HTTPStatus = http.StatusTooManyRequests
 		cooldownErr := &homeDispatchRetryAfterError{cause: result}

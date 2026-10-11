@@ -1329,7 +1329,7 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 	excludedAuthIDs := excludedAuthIDsFromOptions(opts)
 	routeKey := canonicalModelKey(routeModel)
 	if !modelAllowedByID(routeKey, allowedModelIDs) {
-		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+		return nil, ModelNotAllowedError(routeModel)
 	}
 	retrySummary := m.summarizeDispatchAvailability(providers, routeModel, opts, nil, defaultRequestRetry)
 	requestRetry := retrySummary.requestRetry
@@ -3088,4 +3088,10 @@ func (m *Manager) retiredModelError(providers []string, routeModel string) error
 func isRetiredModelMessage(msg string) bool {
 	lower := strings.ToLower(msg)
 	return strings.Contains(lower, "model_retired") || strings.Contains(lower, "retired upstream")
+}
+
+// ModelNotAllowedError is returned when the caller's API key is restricted to
+// model groups that do not contain the requested model.
+func ModelNotAllowedError(model string) *Error {
+	return &Error{Code: "model_not_allowed", Message: "model " + strings.TrimSpace(model) + " is not allowed for this API key", HTTPStatus: http.StatusForbidden}
 }

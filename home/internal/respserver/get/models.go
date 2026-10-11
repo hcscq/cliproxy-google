@@ -34,6 +34,12 @@ func handleModels(ctx context.Context, env dispatch.Env, args []string) dispatch
 // buildModelsJSON assembles the models payload grouped by provider bucket.
 // Authentication is the caller's responsibility.
 func buildModelsJSON(env dispatch.Env) (string, error) {
+	return buildModelsJSONScoped(env, nil, nil)
+}
+
+// buildModelsJSONScoped is buildModelsJSON limited to the credentials and
+// models an API key may use (nil = unrestricted).
+func buildModelsJSONScoped(env dispatch.Env, allowedAuthIDs, allowedModelIDs []string) (string, error) {
 	if env.Runtime == nil || env.Runtime.CoreManager() == nil {
 		return "", errRuntimeNotReady
 	}
@@ -93,10 +99,26 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 		b.byID[idKey] = model
 	}
 
+	var authSet, modelSet map[string]bool
+	if allowedAuthIDs != nil {
+		authSet = make(map[string]bool, len(allowedAuthIDs))
+		for _, id := range allowedAuthIDs {
+			authSet[strings.TrimSpace(id)] = true
+		}
+	}
+	if allowedModelIDs != nil {
+		modelSet = make(map[string]bool, len(allowedModelIDs))
+		for _, id := range allowedModelIDs {
+			modelSet[strings.ToLower(coreauth.CanonicalModelID(strings.TrimSpace(id)))] = true
+		}
+	}
 	reg := registry.GetGlobalRegistry()
 	auths := env.Runtime.CoreManager().List()
 	for _, auth := range auths {
 		if auth == nil || auth.Disabled || auth.ID == "" {
+			continue
+		}
+		if authSet != nil && !authSet[auth.ID] {
 			continue
 		}
 		groupKey := resolveGroupKey(auth)
@@ -105,6 +127,9 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 		}
 		models := reg.GetModelsForClient(auth.ID)
 		for _, model := range models {
+			if modelSet != nil && (model == nil || !modelSet[strings.ToLower(coreauth.CanonicalModelID(strings.TrimSpace(model.ID)))]) {
+				continue
+			}
 			addModel(groupKey, model)
 		}
 	}

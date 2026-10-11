@@ -66,11 +66,20 @@ func handleDefaultModels(ctx context.Context, env dispatch.Env, jsonArg string) 
 	req.Header = parseHeaders(jsonArg)
 	req.URL.RawQuery = parseQuery(jsonArg).Encode()
 
-	if _, authErr := env.Runtime.AuthenticateHTTPRequest(ctx, req); authErr != nil {
+	authRes, authErr := env.Runtime.AuthenticateHTTPRequest(ctx, req)
+	if authErr != nil {
 		return dispatch.BulkString([]byte(buildAuthErrorJSON(authErr)))
 	}
+	var allowedAuthIDs, allowedModelIDs []string
+	if authRes != nil && strings.TrimSpace(authRes.Principal) != "" {
+		var errScope error
+		allowedAuthIDs, allowedModelIDs, errScope = env.Runtime.APIKeyModelScope(ctx, authRes.Principal)
+		if errScope != nil {
+			return dispatch.BulkString([]byte(buildErrorJSON(errScope.Error())))
+		}
+	}
 
-	payload, errBuild := buildModelsJSON(env)
+	payload, errBuild := buildModelsJSONScoped(env, allowedAuthIDs, allowedModelIDs)
 	if errBuild != nil {
 		return dispatch.BulkString([]byte(buildErrorJSON(errBuild.Error())))
 	}
