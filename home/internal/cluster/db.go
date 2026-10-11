@@ -41,10 +41,40 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 		return nil, errDSN
 	}
 
+	directDSN := dsn
+	pooler := PoolStatus{PoolerAddr: pgPoolerAddr()}
+	if pooler.PoolerAddr != "" {
+		if pooled, ok := dsnWithHostPort(dsn, pooler.PoolerAddr); ok {
+			if pdb, errP := gorm.Open(postgres.Open(pooled), databaseGORMConfig(cfg.SlowQueryThreshold)); errP == nil {
+				pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				psql, _ := pdb.DB()
+				errPing := psql.PingContext(pctx)
+				cancel()
+				if errPing == nil {
+					_ = psql.Close()
+					dsn, pooler.ViaPooler = pooled, true
+				} else {
+					_ = psql.Close()
+					pooler.PoolerError = errPing.Error()
+				}
+			} else {
+				pooler.PoolerError = errP.Error()
+			}
+		} else {
+			pooler.PoolerError = "invalid HOME_PG_POOLER_ADDR"
+		}
+		if pooler.ViaPooler {
+			log.Infof("postgres: main pool via pooler %s (lease pool direct)", pooler.PoolerAddr)
+		} else {
+			log.Warnf("postgres: pooler %s unavailable (%s); using direct connections", pooler.PoolerAddr, pooler.PoolerError)
+		}
+	}
+
 	db, errOpen := gorm.Open(postgres.Open(dsn), databaseGORMConfig(cfg.SlowQueryThreshold))
 	if errOpen != nil {
 		return nil, errOpen
 	}
+	recordPoolerState(db, pooler)
 
 	sqlDB, errDB := db.DB()
 	if errDB != nil {
@@ -61,7 +91,7 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 	// A tiny dedicated pool for the coordinator (incarnation heartbeat, leader
 	// election). Request-path work can saturate the main pool under load; the
 	// lease must never wait behind it or the Home gets fenced.
-	if lease, errLease := gorm.Open(postgres.Open(dsn), databaseGORMConfig(cfg.SlowQueryThreshold)); errLease == nil {
+	if lease, errLease := gorm.Open(postgres.Open(directDSN), databaseGORMConfig(cfg.SlowQueryThreshold)); errLease == nil {
 		if leaseSQL, errSQL := lease.DB(); errSQL == nil {
 			n := envInt("HOME_PG_LEASE_CONNS", 3)
 			leaseSQL.SetMaxOpenConns(n)
