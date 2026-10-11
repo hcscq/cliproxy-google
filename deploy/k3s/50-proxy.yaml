@@ -53,7 +53,7 @@ spec:
                   matchLabels: {app: cliproxy}
       containers:
         - name: proxy
-          image: ghcr.io/hcscq/cliproxy-google-proxy:sha-2a7c1ac45af9c233c14110c5987c3c0f5d0040fb
+          image: ghcr.io/hcscq/cliproxy-google-proxy:sha-ec9c1e9758aa945b580e7500e09b217b41e468ec
           imagePullPolicy: IfNotPresent
           env:
             - {name: HOME_ADDRESS, value: "cliproxy-home.cliproxy.svc.cluster.local:8327"}
