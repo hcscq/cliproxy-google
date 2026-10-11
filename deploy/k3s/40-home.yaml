@@ -84,6 +84,12 @@ spec:
             - {name: HOME_EPHEMERAL_NODE_TTL, value: "10m"}
             # Shared Redis layer (15-redis.yaml). "false" = PostgreSQL/in-memory only (deployed: true since phase 2).
             - {name: HOME_REDIS_ENABLED, value: "true"}
+            # Request logs through a Redis stream (batch flush to PG; falls back to the
+            # in-memory queue when Redis is down). "" / "0" = off.
+            - {name: HOME_USAGE_STREAM, value: "0"}
+            # Main PG pool through pgbouncer (12-pgbouncer.yaml); the lease pool stays
+            # direct. "" = direct connections.
+            - {name: HOME_PG_POOLER_ADDR, value: ""}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef: {name: redis-auth, key: password, optional: true}

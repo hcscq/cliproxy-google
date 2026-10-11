@@ -1,0 +1,92 @@
+# pgbouncer (transaction pooling) in front of PostgreSQL for the Home main pool.
+# Home opts in with HOME_PG_POOLER_ADDR (40-home.yaml); its leader-lease pool
+# always connects to PostgreSQL directly, and Home falls back to direct
+# connections if pgbouncer is unreachable at startup.
+# Server connections are capped per replica (MAX_DB_CONNECTIONS) so the total
+# stays well under PostgreSQL's max_connections (100) however many Homes run.
+# Home's prepared statements need pgbouncer >= 1.21 (MAX_PREPARED_STATEMENTS).
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  namespace: cliproxy
+spec:
+  selector:
+    app: pgbouncer
+  ports:
+    - name: pg
+      port: 6432
+      targetPort: 6432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: cliproxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pgbouncer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  template:
+    metadata:
+      labels:
+        app: pgbouncer
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: pgbouncer}
+      containers:
+        - name: pgbouncer
+          image: edoburu/pgbouncer:v1.25.2-p0
+          env:
+            - {name: DB_HOST, value: postgres.cliproxy.svc.cluster.local}
+            - {name: DB_PORT, value: "5432"}
+            - {name: DB_NAME, value: cliproxy_home}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: {name: postgres-auth, key: username}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: postgres-auth, key: password}
+            - {name: AUTH_TYPE, value: scram-sha-256}
+            - {name: LISTEN_PORT, value: "6432"}
+            - {name: POOL_MODE, value: transaction}
+            - {name: MAX_CLIENT_CONN, value: "1000"}
+            - {name: DEFAULT_POOL_SIZE, value: "25"}
+            - {name: RESERVE_POOL_SIZE, value: "5"}
+            - {name: RESERVE_POOL_TIMEOUT, value: "2"}
+            - {name: MAX_DB_CONNECTIONS, value: "30"}
+            - {name: MAX_PREPARED_STATEMENTS, value: "500"}
+            - {name: IGNORE_STARTUP_PARAMETERS, value: "extra_float_digits,search_path"}
+          ports:
+            - containerPort: 6432
+          readinessProbe:
+            tcpSocket: {port: 6432}
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: 6432}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pgbouncer
+  namespace: cliproxy
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: pgbouncer}
