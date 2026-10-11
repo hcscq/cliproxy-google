@@ -133,7 +133,7 @@ func AutoMigrateContext(ctx context.Context, db *gorm.DB) error {
 		if err := ensureUsageFailBodyColumns(ctx, db); err != nil {
 			return err
 		}
-		return ensureModelHealthTable(ctx, db)
+		return ensureExtraTables(ctx, db)
 	}
 
 	startedAt := time.Now()
@@ -149,7 +149,7 @@ func AutoMigrateContext(ctx context.Context, db *gorm.DB) error {
 		return errMigrate
 	}
 	log.WithFields(fields).Info("database schema migration completed")
-	return ensureModelHealthTable(ctx, db)
+	return ensureExtraTables(ctx, db)
 }
 
 func autoMigratePostgresContext(ctx context.Context, db *gorm.DB, runWhenCurrent bool, afterSchema func(context.Context, *gorm.DB) error) error {
@@ -1016,4 +1016,12 @@ func quoteDSNValue(value string) string {
 
 	replacer := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 	return "'" + replacer.Replace(value) + "'"
+}
+
+// ensureExtraTables creates tables added by this fork (idempotent).
+func ensureExtraTables(ctx context.Context, db *gorm.DB) error {
+	if err := ensureModelHealthTable(ctx, db); err != nil {
+		return err
+	}
+	return ensureAntigravityCatalogTable(ctx, db)
 }

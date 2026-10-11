@@ -394,6 +394,7 @@ func run() int {
 		})
 		refreshController := cluster.NewRefreshController(coordinator, rt, clusterRepo, clusterTLSConfig)
 		coordinator.SetOnMasterChanged(refreshController.OnMasterChanged)
+		rt.SetLeaderFunc(coordinator.IsMaster)
 		rt.SetClusterRefreshHandler(refreshController.RefreshNowObserved)
 		clusterRESPHandler = cluster.NewRESPHandler(coordinator, refreshController, clusterRepo)
 		if clusterAdapter == nil {

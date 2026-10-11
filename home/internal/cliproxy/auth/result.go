@@ -68,6 +68,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if resultAuthID == "" {
 		return
 	}
+	if !result.Success {
+		notifyModelError(resultAuthID, result.Provider, resultModel, result.Error)
+	}
 	now := time.Now()
 
 	unlockUpdate := m.updateLocks.lock(resultAuthID)

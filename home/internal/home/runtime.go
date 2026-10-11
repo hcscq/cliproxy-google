@@ -56,6 +56,7 @@ type Runtime struct {
 	pluginSyncNodeActive    func(context.Context, string, string) (bool, error)
 	pluginSyncHTTPClient    pluginstore.HTTPDoer
 	clusterAdapter          ClusterAdapter
+	agCatalog               antigravityCatalogSync
 	concurrencyAdmitter     ConcurrencyAdmitter
 	clusterRefresh          func(context.Context, string, string) ([]byte, error)
 	originalStore           coreauth.Store
@@ -334,6 +335,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	r.cancel = cancel
 	r.startClusterUsageWriter(runCtx)
 	r.startKVCleanupLoop(runCtx)
+	r.startAntigravityCatalogLoop(runCtx)
 
 	if !r.clusterAutoRefreshGated() && strings.TrimSpace(r.authDir) != "" {
 		if errEnsureAuthDir := os.MkdirAll(r.authDir, 0o755); errEnsureAuthDir != nil {
@@ -1272,4 +1274,23 @@ func (r *Runtime) authenticateHTTPRequest(ctx context.Context, req *http.Request
 		return nil, access.NewNoCredentialsError()
 	}
 	return r.accessManager.Authenticate(ctx, req)
+}
+
+// APIKeyModelScope returns the credential and model restrictions of an API key
+// (nil slices mean "no restriction").
+func (r *Runtime) APIKeyModelScope(ctx context.Context, apiKey string) (authIDs []string, modelIDs []string, err error) {
+	if r == nil || strings.TrimSpace(apiKey) == "" {
+		return nil, nil, nil
+	}
+	authIDs, err = r.allowedAuthIDsForAPIKey(ctx, apiKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if store, ok := r.clusterAdapter.(modelScopedAuthStore); ok && store != nil {
+		modelIDs, err = store.AllowedModelIDsForAPIKey(ctx, apiKey)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return authIDs, modelIDs, nil
 }

@@ -122,6 +122,12 @@ type Config struct {
 	// reasoning text. Default off.
 	StreamThinkingEmulation bool `yaml:"stream-thinking-emulation,omitempty" json:"stream-thinking-emulation,omitempty"`
 
+	// AntigravityCatalogRefresh is how often Home re-fetches each Antigravity
+	// credential's upstream model catalog (Go duration, default 15m; "0" or
+	// "off" disables the timer, event-driven and manual refreshes still work).
+	// Only the Home leader fetches; the result is shared through the database.
+	AntigravityCatalogRefresh string `yaml:"antigravity-catalog-refresh,omitempty" json:"antigravity-catalog-refresh,omitempty"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 

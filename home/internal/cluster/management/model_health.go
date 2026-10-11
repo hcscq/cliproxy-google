@@ -31,6 +31,7 @@ const (
 	modelStatusCooling   = "cooling"
 	modelStatusRejected  = "rejected"
 	modelStatusRetired   = "retired"
+	modelStatusRemoved   = "removed"
 	modelStatusUnknown   = "unknown"
 )
 
@@ -44,6 +45,7 @@ type modelHealthCredential struct {
 	InCatalog      bool       `json:"in_catalog"`
 	QuotaRemaining *float64   `json:"quota_remaining,omitempty"`
 	QuotaResetTime string     `json:"quota_reset_time,omitempty"`
+	RemovedAt      string     `json:"removed_at,omitempty"`
 }
 
 type modelHealthCheck struct {
@@ -236,6 +238,20 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 	for id := range checks {
 		addID(id)
 	}
+	// Models that disappeared from a credential's upstream catalog recently.
+	removedBy := map[string]map[string]string{} // lower model -> auth id -> time
+	if h.runtime != nil {
+		for _, st := range h.runtime.AntigravityCatalogStatuses() {
+			for _, ch := range st.Removed {
+				addID(ch.Model)
+				k := strings.ToLower(ch.Model)
+				if removedBy[k] == nil {
+					removedBy[k] = map[string]string{}
+				}
+				removedBy[k][st.AuthID] = ch.At
+			}
+		}
+	}
 	if !latestFetch.IsZero() {
 		meta["catalog_fetched_at"] = latestFetch
 	}
@@ -268,6 +284,7 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 		available, cooling, errored := 0, 0, 0
 		var earliestRetry *time.Time
 		retiredMsg := ""
+		removedCount := 0
 		for _, a := range agAuths {
 			cred := modelHealthCredential{Label: credLabel(a), State: "ok"}
 			for _, cat := range catalogs {
@@ -277,6 +294,9 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 						cred.QuotaRemaining, cred.QuotaResetTime = m.QuotaRemaining, m.QuotaResetTime
 					}
 				}
+			}
+			if at, ok := removedBy[key][a.ID]; ok && !cred.InCatalog {
+				cred.State, cred.RemovedAt = "removed", at
 			}
 			st := a.ModelStates[id]
 			if mem := memStates[a.ID][id]; mem != nil && (st == nil || mem.UpdatedAt.After(st.UpdatedAt)) {
@@ -313,6 +333,8 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 				}
 			}
 			switch cred.State {
+			case "removed":
+				removedCount++
 			case "cooling":
 				cooling++
 			case "error":
@@ -359,6 +381,11 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 			}
 		case check != nil && check.Outcome == home.ProbeRejected:
 			e.Status, e.Reason = modelStatusRejected, "上游拒绝 ("+itoa(check.HTTPStatus)+")："+check.Message
+		case removedCount > 0 && !e.InCatalog:
+			e.Status, e.Reason = modelStatusRemoved, "上游已从模型目录移除"
+			if at := latestChange(removedBy[key]); at != "" {
+				e.Reason += "（" + at + "）"
+			}
 		case len(agAuths) > 0 && cooling == len(agAuths):
 			e.Status, e.Reason = modelStatusCooling, "所有凭据冷却中"
 			if earliestRetry != nil {
@@ -488,4 +515,18 @@ func retiredUpstreamMessage(raw string) string {
 		return m
 	}
 	return raw
+}
+
+// latestChange formats the most recent time in a model's per-credential change map.
+func latestChange(m map[string]string) string {
+	var latest time.Time
+	for _, at := range m {
+		if t, err := time.Parse(time.RFC3339, at); err == nil && t.After(latest) {
+			latest = t
+		}
+	}
+	if latest.IsZero() {
+		return ""
+	}
+	return latest.In(shanghai()).Format("01-02 15:04")
 }

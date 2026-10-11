@@ -14,7 +14,6 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
-	log "github.com/sirupsen/logrus"
 )
 
 // Dynamic Antigravity model catalog.
@@ -31,8 +30,6 @@ import (
 // Set HOME_ANTIGRAVITY_DYNAMIC_MODELS=false to fall back to the static list.
 
 const (
-	antigravityDynamicRefreshInterval = 3 * time.Hour
-	antigravityDynamicRetryInterval   = 5 * time.Minute
 	antigravityDefaultModelsBaseURL   = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityModelsEndpointPath     = "/v1internal:fetchAvailableModels"
 	antigravityModelsUserAgent        = "antigravity/1.11.5 windows/amd64"
@@ -52,9 +49,6 @@ type antigravityUpstreamModel struct {
 type antigravityCatalogEntry struct {
 	models    map[string]antigravityUpstreamModel // nil = unknown
 	fetchedAt time.Time
-	failedAt  time.Time
-	inFlight  bool
-	tokenHash string
 	health    *antigravityCatalogHealth
 }
 
@@ -167,98 +161,22 @@ func mergeAntigravityModels(static []*ModelInfo, upstream map[string]antigravity
 }
 
 func (r *Runtime) cachedAntigravityCatalog(a *coreauth.Auth) map[string]antigravityUpstreamModel {
-	token := extractAccessToken(a)
 	antigravityCatalogMu.Lock()
 	entry := antigravityCatalog[a.ID]
-	if entry == nil {
-		entry = &antigravityCatalogEntry{}
-		antigravityCatalog[a.ID] = entry
-	}
-	now := time.Now()
-	stale := entry.models == nil || now.Sub(entry.fetchedAt) > antigravityDynamicRefreshInterval
-	retryOK := now.Sub(entry.failedAt) > antigravityDynamicRetryInterval || entry.tokenHash != token
-	models := entry.models
-	// In cluster mode the in-memory auth is a minimal index without secrets;
-	// the refresh goroutine loads the full credential from PostgreSQL.
-	if stale && retryOK && !entry.inFlight {
-		entry.inFlight = true
-		entry.tokenHash = token
-		go r.refreshAntigravityCatalog(a.ID, a.Clone())
-	}
-	antigravityCatalogMu.Unlock()
-	return models
-}
-
-func (r *Runtime) refreshAntigravityCatalog(authID string, snapshot *coreauth.Auth) {
-	auth := snapshot
-	if r != nil && r.coreManager != nil {
-		if current, ok := r.coreManager.GetByID(authID); ok && current != nil {
-			auth = current
-		}
-	}
 	var models map[string]antigravityUpstreamModel
-	var err error
-	if auth != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		full := auth
-		if extractAccessToken(full) == "" && r != nil && r.clusterAdapter != nil && r.clusterAdapter.Enabled() {
-			if loaded, errLoad := r.clusterAdapter.GetFullAuth(ctx, authID); errLoad == nil && loaded != nil {
-				full = loaded
-			} else if errLoad != nil {
-				err = errLoad
-			}
-		}
-		if err == nil {
-			var raw []byte
-			raw, err = fetchAntigravityCatalogRaw(ctx, full)
-			if err == nil {
-				models, err = parseAntigravityCatalog(raw)
-			}
-			if err == nil {
-				health := parseAntigravityCatalogHealth(raw)
-				health.fetchedAt = time.Now()
-				antigravityCatalogMu.Lock()
-				if e := antigravityCatalog[authID]; e != nil {
-					e.health = health
-				} else {
-					antigravityCatalog[authID] = &antigravityCatalogEntry{health: health}
-				}
-				antigravityCatalogMu.Unlock()
-			}
-		}
-		cancel()
-	}
-	antigravityCatalogMu.Lock()
-	entry := antigravityCatalog[authID]
-	if entry == nil {
-		entry = &antigravityCatalogEntry{}
-		antigravityCatalog[authID] = entry
-	}
-	entry.inFlight = false
-	changed := false
-	if auth == nil && err == nil {
-		err = antigravityStringError("credential not found")
-	}
-	if err != nil {
-		entry.failedAt = time.Now()
-	} else {
-		changed = !sameAntigravityCatalog(entry.models, models)
-		entry.models = models
-		entry.fetchedAt = time.Now()
+	if entry != nil {
+		models = entry.models
 	}
 	antigravityCatalogMu.Unlock()
-	if err != nil {
-		log.Warnf("antigravity model catalog fetch failed for %s: %v", authID, err)
-		return
+	if models == nil && r != nil && r.agCatalog.kick.CompareAndSwap(false, true) {
+		// Unknown credential (new or first start): run one sync pass now
+		// instead of waiting for the next tick.
+		go func() {
+			defer r.agCatalog.kick.Store(false)
+			r.antigravityCatalogTick(context.Background(), "startup")
+		}()
 	}
-	if changed && auth != nil {
-		log.Infof("antigravity model catalog for %s: %d upstream models", authID, len(models))
-		r.registerModelsForAuth(auth)
-		if r.coreManager != nil {
-			r.coreManager.ReconcileRegistryModelStates(context.Background(), auth.ID)
-			r.coreManager.RefreshSchedulerEntry(auth.ID)
-		}
-	}
+	return models
 }
 
 func sameAntigravityCatalog(a, b map[string]antigravityUpstreamModel) bool {

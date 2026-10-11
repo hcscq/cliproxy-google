@@ -220,6 +220,8 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodDelete, "/credentials/:credential_id/cooldown", handler.ClearCredentialCooldown)
 	r.Set(http.MethodGet, "/models/health", handler.GetModelHealth)
 	r.Set(http.MethodPost, "/models/health/retest", handler.RetestModelHealth)
+	r.Set(http.MethodGet, "/models/catalog", handler.GetAntigravityCatalog)
+	r.Set(http.MethodPost, "/models/catalog/refresh", handler.RefreshAntigravityCatalog)
 	r.Set(http.MethodGet, "/quota/credentials", handler.ListQuotaCredentials)
 	r.Set(http.MethodGet, "/quota/credentials/:credential_id", handler.GetQuotaCredential)
 	r.Set(http.MethodPost, "/quota/collect", handler.CollectQuota)
