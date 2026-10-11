@@ -10,11 +10,13 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/ratelimit"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/usageerr"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -66,6 +68,7 @@ type Runtime struct {
 	clusterUsageQueueMu sync.Mutex
 	clusterUsageQueue   *usagePayloadQueue
 	usageStream         *usageStream
+	usageStopping       atomic.Bool // set once usage persistence shuts down
 	clusterUsageDone    chan struct{}
 
 	cancel context.CancelFunc
@@ -540,15 +543,25 @@ func (r *Runtime) PersistClusterUsagePayload(ctx context.Context, payload string
 	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
 		return false, nil
 	}
-	if st := r.getUsageStream(); st != nil && st.Append(ctx, payload, receivedAt) {
-		return true, nil
+	// While shutting down, refuse instead of accepting without persistence:
+	// the proxy keeps the payload and resends it (to this Home's successor).
+	if r.usageStopping.Load() {
+		return false, usageerr.ErrUnavailable
+	}
+	if st := r.getUsageStream(); st != nil {
+		if st.Append(ctx, payload, receivedAt) {
+			return true, nil
+		}
+		if st.isClosed() {
+			return false, usageerr.ErrUnavailable
+		}
 	}
 	queue := r.getClusterUsageQueue()
 	if queue == nil {
 		return true, nil
 	}
 	if ok := queue.Push(payload, receivedAt); !ok {
-		log.Warnf("cluster usage queue is stopped; accepting usage without persistence")
+		return false, usageerr.ErrUnavailable
 	}
 	return true, nil
 }

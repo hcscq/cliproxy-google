@@ -3,6 +3,7 @@ package home
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -198,5 +199,33 @@ func TestUsageStreamCloseFlushesBuffer(t *testing.T) {
 	}
 	if s.Append(context.Background(), `{"i":1}`, time.Now()) {
 		t.Fatal("append after close must fall back")
+	}
+}
+
+// A proxy resends a batch whose LPUSH reply was lost: payloads already
+// appended (same usage_id) must not become a second entry.
+func TestUsageStreamDropsResentUsageID(t *testing.T) {
+	rc := testUsageRedis(t)
+	store := &fakeUsageItemsStore{rows: map[string]string{}}
+	s := newUsageStream(rc, store, "h1")
+	go s.runAppender()
+	defer s.Close(time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	id := fmt.Sprintf("u-%d", time.Now().UnixNano())
+	for i := 0; i < 3; i++ {
+		if !s.Append(ctx, `{"usage_id":"`+id+`"}`, time.Now()) {
+			t.Fatal("append failed")
+		}
+	}
+	if !s.Append(ctx, `{"usage_id":"`+id+`-other"}`, time.Now()) {
+		t.Fatal("append failed")
+	}
+	waitFor(t, 5*time.Second, func() bool { return s.Status(ctx).Deduped == 2 }, "2 deduped")
+	waitFor(t, 5*time.Second, func() bool { return store.count() == 2 }, "2 rows")
+	time.Sleep(300 * time.Millisecond)
+	if n := store.count(); n != 2 {
+		t.Fatalf("rows=%d want 2", n)
 	}
 }

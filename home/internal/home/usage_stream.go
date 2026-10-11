@@ -162,6 +162,12 @@ func (s *usageStream) Append(ctx context.Context, payload string, receivedAt tim
 	}
 }
 
+func (s *usageStream) isClosed() bool {
+	s.appendMu.RLock()
+	defer s.appendMu.RUnlock()
+	return s.closed
+}
+
 // runAppender pipelines buffered payloads into the stream until Close.
 func (s *usageStream) runAppender() {
 	defer close(s.appenderDone)

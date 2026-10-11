@@ -3,7 +3,9 @@ package push
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/usageerr"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,7 +44,13 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 	receivedAt := time.Now().UTC()
 	single := len(args) == 3
 	for _, raw := range args[2:] {
-		if errReply, failed := handleUsagePayload(ctx, env, raw, receivedAt); failed {
+		errReply, failed, retry := handleUsagePayload(ctx, env, raw, receivedAt)
+		if retry {
+			// Not stored durably: fail the whole command so the proxy resends
+			// it; payloads accepted before this one are dropped by usage_id.
+			return errReply
+		}
+		if failed {
 			if single {
 				return errReply
 			}
@@ -57,19 +65,19 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 	return dispatch.Integer(int64(len(args) - 2))
 }
 
-func handleUsagePayload(ctx context.Context, env dispatch.Env, raw string, receivedAt time.Time) (dispatch.Reply, bool) {
+func handleUsagePayload(ctx context.Context, env dispatch.Env, raw string, receivedAt time.Time) (dispatch.Reply, bool, bool) {
 	payload := strings.TrimSpace(raw)
 	if payload == "" || !gjson.Valid(payload) {
-		return dispatch.Err("invalid usage json"), true
+		return dispatch.Err("invalid usage json"), true, false
 	}
 	sanitizedPayload, errSanitize := cluster.SanitizeUsagePayloadSecrets(payload)
 	if errSanitize != nil {
-		return dispatch.Err("invalid usage json"), true
+		return dispatch.Err("invalid usage json"), true, false
 	}
 	payload = sanitizedPayload
 	enrichedPayload, errEnrich := usagePayloadWithCPAIdentity(payload, env)
 	if errEnrich != nil {
-		return dispatch.Err("invalid usage json"), true
+		return dispatch.Err("invalid usage json"), true, false
 	}
 	payload = enrichedPayload
 
@@ -77,19 +85,22 @@ func handleUsagePayload(ctx context.Context, env dispatch.Env, raw string, recei
 	if env.Runtime != nil {
 		env.Runtime.RecordUsagePayload(ctx, payload)
 		persisted, errPersist := env.Runtime.PersistClusterUsagePayload(ctx, payload, receivedAt)
+		if errors.Is(errPersist, usageerr.ErrUnavailable) {
+			return dispatch.Err("usage store unavailable, resend later"), true, true
+		}
 		if errPersist != nil {
 			log.Errorf("usage database write error: %v", errPersist)
 		}
 		if persisted {
-			return dispatch.Reply{}, false
+			return dispatch.Reply{}, false, false
 		}
 	}
 
 	if errAppend := appendUsageLog(payload); errAppend != nil {
 		log.Errorf("usage log write error: %v", errAppend)
-		return dispatch.Err("usage log write failed"), true
+		return dispatch.Err("usage log write failed"), true, false
 	}
-	return dispatch.Reply{}, false
+	return dispatch.Reply{}, false, false
 }
 
 func usagePayloadWithCPAIdentity(payload string, env dispatch.Env) (string, error) {

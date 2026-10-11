@@ -190,6 +190,7 @@ func (r *Runtime) startUsageStream(ctx context.Context) {
 	go func() {
 		// Flush buffered payloads into Redis (or the fallback) on shutdown.
 		<-ctx.Done()
+		r.usageStopping.Store(true)
 		st.Close(5 * time.Second)
 	}()
 	go st.Run(ctx)
@@ -224,6 +225,7 @@ func (r *Runtime) stopClusterUsageWriter() {
 		return
 	}
 
+	r.usageStopping.Store(true)
 	r.clusterUsageQueueMu.Lock()
 	queue := r.clusterUsageQueue
 	done := r.clusterUsageDone
