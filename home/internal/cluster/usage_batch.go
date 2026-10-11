@@ -31,6 +31,7 @@ func (r *Repository) AppendUsageBatch(ctx context.Context, items []UsagePayloadI
 	if errDB != nil {
 		return 0, errDB
 	}
+	db = bulkDBFor(db)
 	ctx = contextOrBackground(ctx)
 	type built struct {
 		record   *UsageRecord

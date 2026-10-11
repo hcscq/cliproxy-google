@@ -103,9 +103,36 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 	} else {
 		log.WithError(errLease).Warn("dedicated lease pool unavailable; coordinator shares the main pool")
 	}
+	if pooler.ViaPooler {
+		// Background bulk writes (request-log batches: one transaction with
+		// thousands of statements) stay on a small direct pool; through the
+		// pooler each statement pays an extra hop and the writer fell behind.
+		if bulk, errBulk := gorm.Open(postgres.Open(directDSN), databaseGORMConfig(cfg.SlowQueryThreshold)); errBulk == nil {
+			if bulkSQL, errSQL := bulk.DB(); errSQL == nil {
+				n := envInt("HOME_PG_BULK_CONNS", 4)
+				bulkSQL.SetMaxOpenConns(n)
+				bulkSQL.SetMaxIdleConns(n)
+				bulkSQL.SetConnMaxIdleTime(10 * time.Minute)
+				bulkSQL.SetConnMaxLifetime(30 * time.Minute)
+				bulkDBs.Store(db, bulk)
+			}
+		} else {
+			log.WithError(errBulk).Warn("dedicated bulk-write pool unavailable; request-log writes use the main pool")
+		}
+	}
 	registerEventWakeCallback(db)
 
 	return db, nil
+}
+
+var bulkDBs sync.Map // *gorm.DB (main) -> *gorm.DB (direct bulk-write pool)
+
+// bulkDBFor returns the direct bulk-write pool for main, or main itself.
+func bulkDBFor(main *gorm.DB) *gorm.DB {
+	if v, ok := bulkDBs.Load(main); ok {
+		return v.(*gorm.DB)
+	}
+	return main
 }
 
 var leaseDBs sync.Map // *gorm.DB (main) -> *gorm.DB (lease pool)

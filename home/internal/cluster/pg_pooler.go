@@ -49,6 +49,7 @@ type PoolStatus struct {
 	PoolerError string       `json:"pooler_error,omitempty"`
 	Main        sql.DBStats  `json:"main"`
 	Lease       *sql.DBStats `json:"lease,omitempty"`
+	Bulk        *sql.DBStats `json:"bulk,omitempty"`
 	PingMS      float64      `json:"ping_ms"`
 	PingError   string       `json:"ping_error,omitempty"`
 	CheckedAt   time.Time    `json:"checked_at"`
@@ -82,6 +83,12 @@ func DatabasePoolStatus(ctx context.Context, db *gorm.DB) PoolStatus {
 		if leaseSQL, err := lease.DB(); err == nil {
 			s := leaseSQL.Stats()
 			st.Lease = &s
+		}
+	}
+	if b := bulkDBFor(db); b != db {
+		if bulkSQL, err := b.DB(); err == nil {
+			s := bulkSQL.Stats()
+			st.Bulk = &s
 		}
 	}
 	return st
