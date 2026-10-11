@@ -65,7 +65,7 @@ spec:
             - {name: work, mountPath: /work}
       containers:
         - name: home
-          image: ghcr.io/hcscq/cliproxy-google-home:sha-1d6ed9bc5a0893ceef5cfc7733d1db9c0b9a5cbe
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-e75d0fb47847469615bf6ef4dacce9c91b6c28b2
           imagePullPolicy: IfNotPresent
           workingDir: /work
           env:
@@ -82,8 +82,8 @@ spec:
                 secretKeyRef: {name: home-bootstrap, key: token}
             # Ephemeral proxy identities without heartbeat for this long are revoked.
             - {name: HOME_EPHEMERAL_NODE_TTL, value: "10m"}
-            # Shared Redis layer (15-redis.yaml). "false" = PostgreSQL/in-memory only.
-            - {name: HOME_REDIS_ENABLED, value: "false"}
+            # Shared Redis layer (15-redis.yaml). "false" = PostgreSQL/in-memory only (deployed: true since phase 2).
+            - {name: HOME_REDIS_ENABLED, value: "true"}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef: {name: redis-auth, key: password, optional: true}
