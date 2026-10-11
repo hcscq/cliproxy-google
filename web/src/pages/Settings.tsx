@@ -180,7 +180,7 @@ function SettingsForm() {
                       )}
                     </>
                   )}
-                  {hint && <span className="hint">{hint}</span>}
+                  {hint && <span className="hint hint-clamp" title={hint} tabIndex={0} onClick={(e) => e.currentTarget.classList.toggle("open")}>{hint}</span>}
                   <span className="hint mono" style={{ opacity: 0.7 }}>
                     {f.path}
                   </span>

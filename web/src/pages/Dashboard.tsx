@@ -79,7 +79,7 @@ export function DashboardPage() {
         />
       </div>
 
-      <div className="grid grid-3" style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)' }}>
+      <div className="grid grid-trend">
         <Card title={tr('请求趋势（24 小时）', 'Requests (24h)')} extra={totals && <span className="faint small">P95 {fmtMs(totals.p95_latency_ms)} · {tr('平均', 'avg')} {fmtMs(totals.avg_latency_ms)}</span>}>
           {usage.error ? <ErrorBox error={usage.error} onRetry={usage.reload} /> : usage.data ? <TrendChart buckets={usage.data.trend} /> : <Loading />}
         </Card>

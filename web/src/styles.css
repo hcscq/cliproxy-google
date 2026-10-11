@@ -303,3 +303,7 @@ tr.row-muted td { opacity: .62; }
   .mh-table .mh-status .ellipsis { display: none; }
   .mh-table .mh-model { max-width: 190px; }
 }
+.grid-trend { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+@media (max-width: 860px) { .grid-trend { grid-template-columns: minmax(0, 1fr); } }
+.hint-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.hint-clamp.open, .hint-clamp:focus { -webkit-line-clamp: unset; }
