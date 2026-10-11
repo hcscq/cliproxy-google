@@ -46,6 +46,9 @@ test('dashboard, nodes, logs and settings load', async ({ page }) => {
   await expect(page.getByTestId('log-view')).toBeVisible();
   await page.getByTestId('nav-settings').click();
   await expect(page.getByText('routing.strategy')).toBeVisible();
+  // Request log storage card (SQLite in e2e: single table + retention).
+  await expect(page.getByTestId('retention-status')).toBeVisible();
+  await expect(page.getByTestId('retention-status')).toContainText(/30/);
   await expect(page.getByText('routing.sticky-sessions.enabled')).toBeVisible();
   await expect(page.getByText('routing.sticky-sessions.key-sources')).toBeVisible();
   await shot(page, '09-settings');

@@ -146,6 +146,21 @@ func (a *RuntimeAdapter) StoreUsagePayload(ctx context.Context, payload string, 
 	return errAppend
 }
 
+// StoreUsagePayloads stores a batch of usage payloads (see AppendUsageBatch).
+func (a *RuntimeAdapter) StoreUsagePayloads(ctx context.Context, payloads []string, receivedAt []time.Time) (int, error) {
+	if !a.Enabled() {
+		return 0, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	a.mu.RLock()
+	homeIP, homePort := a.homeIP, a.homePort
+	a.mu.RUnlock()
+	items := make([]UsagePayloadItem, len(payloads))
+	for i, p := range payloads {
+		items[i] = UsagePayloadItem{Payload: p, Metadata: UsageRuntimeMetadata{HomeIP: homeIP, HomePort: homePort, ReceivedAt: receivedAt[i]}}
+	}
+	return a.repo.AppendUsageBatch(ctx, items)
+}
+
 // StoreAppLogPayload stores a CPA app log payload.
 func (a *RuntimeAdapter) StoreAppLogPayload(ctx context.Context, clientIP string, payload string) error {
 	if !a.Enabled() {

@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logging"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementhttp"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/pluginauth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/protocolmux"
@@ -410,6 +411,7 @@ func run() int {
 	if clusterRepo != nil {
 		clusterRepo.StartScopeCache(runCtx)
 		clusterRepo.StartAffinityJanitor(runCtx)
+		clusterRepo.StartUsageRetention(runCtx, func() int { return cluster.RequestLogRetentionDays(logretention.Configured()) })
 	}
 	userMailService := usermail.NewService(repo, func() *config.Config { return rt.Config() })
 	userMailService.Start(runCtx)

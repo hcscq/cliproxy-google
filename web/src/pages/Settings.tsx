@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAction, useApi, useAsync, useUi } from '../app-context';
 import { useI18n } from '../i18n';
-import { Card, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
+import { Badge, Card, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
+import { fmtBytes } from '../api/client';
+import { fmtNum, fmtTime } from '../format';
 
 type FieldType = 'bool' | 'number' | 'text' | 'select' | 'list';
 interface FieldDef {
@@ -78,6 +80,7 @@ const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
     fields: [
       { path: 'observability.logs.request-log', type: 'bool', zh: '详细请求日志', en: 'Detailed request logs', hintZh: '会记录请求/响应内容，注意隐私与容量。', hintEn: 'Records request/response bodies; mind privacy and size.' },
       { path: 'observability.logs.error-body-max-bytes', type: 'number', def: 65536, zh: '错误响应体保存上限（字节）', en: 'Error body cap (bytes)', hintZh: '请求记录里保存的上游错误响应体最大字节数，超出部分截断并标注原始大小。默认 65536（64KB）。', hintEn: 'Max bytes of an upstream error body stored in the request log; larger bodies are truncated and marked. Default 65536 (64KB).' },
+      { path: 'observability.logs.request-log-retention-days', type: 'number', def: 30, zh: '请求记录保留天数', en: 'Request log retention (days)', hintZh: '超过该天数的请求记录（含错误响应体）会被自动清理；PostgreSQL 下按天分区整块删除。0 = 默认 30 天，负数 = 永久保留。计费流水不受影响。', hintEn: 'Request-log rows older than this are removed automatically (whole daily partitions on PostgreSQL). 0 = default 30 days, negative = keep forever. Billing ledger is not affected.' },
       { path: 'observability.logs.debug', type: 'bool', zh: '调试日志', en: 'Debug logging' },
       { path: 'management.allow-remote', type: 'bool', danger: true, zh: '允许远程管理', en: 'Allow remote management', hintZh: '关闭后通过 Ingress 访问的本面板将立即失效（只能 kubectl port-forward 恢复）。', hintEn: 'Turning this off immediately locks this panel out via Ingress (recover with kubectl port-forward).' },
     ],
@@ -117,7 +120,14 @@ export function SettingsPage() {
           {tr('完整配置 (YAML)', 'Full config (YAML)')}
         </button>
       </div>
-      {tab === 'form' ? <SettingsForm /> : <YamlEditor />}
+      {tab === 'form' ? (
+        <>
+          <SettingsForm />
+          <RequestLogStorage />
+        </>
+      ) : (
+        <YamlEditor />
+      )}
     </div>
   );
 }
@@ -257,6 +267,109 @@ function YamlEditor() {
       }
     >
       <textarea className="textarea" style={{ minHeight: 'calc(100vh - 300px)' }} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} />
+    </Card>
+  );
+}
+
+/** Request-log storage: partitions, size and retention (read-only status). */
+function RequestLogStorage() {
+  const api = useApi();
+  const { tr } = useI18n();
+  const st = useAsync(() => api.usageRetention(), []);
+  const [showAll, setShowAll] = useState(false);
+  if (st.error) return <ErrorBox error={st.error} onRetry={st.reload} />;
+  if (!st.data) return <Loading />;
+  const s = st.data.status;
+  const parts = s.partitions ?? [];
+  const visible = showAll ? parts : parts.slice(0, 8);
+  const retention = s.retention_days > 0 ? tr(`${s.retention_days} 天`, `${s.retention_days} days`) : tr('永久保留', 'Keep forever');
+  return (
+    <Card
+      title={tr('请求记录存储', 'Request log storage')}
+      extra={
+        <button className="btn ghost sm" onClick={st.reload} data-testid="retention-reload">
+          {tr('刷新', 'Refresh')}
+        </button>
+      }
+    >
+      <div className="kv-grid" data-testid="retention-status">
+        <div>
+          <span className="muted">{tr('存储方式', 'Storage')}</span>
+          <div>
+            {s.partitioned ? <Badge kind="ok">{tr('按天分区', 'Daily partitions')}</Badge> : <Badge>{tr('单表（批量删除）', 'Single table (batched delete)')}</Badge>}{' '}
+            <span className="muted">{s.backend}</span>
+          </div>
+        </div>
+        <div>
+          <span className="muted">{tr('保留期', 'Retention')}</span>
+          <div>{retention}</div>
+        </div>
+        <div>
+          <span className="muted">{tr('记录数 / 占用', 'Rows / size')}</span>
+          <div>
+            {fmtNum(s.total_rows)} / {fmtBytes(s.total_bytes)}
+          </div>
+        </div>
+        <div>
+          <span className="muted">{tr('最早记录', 'Oldest row')}</span>
+          <div>{s.oldest_timestamp ? fmtTime(s.oldest_timestamp) : '-'}</div>
+        </div>
+        <div>
+          <span className="muted">{tr('上次清理', 'Last maintenance')}</span>
+          <div>
+            {s.last_maintenance ? fmtTime(s.last_maintenance) : tr('本副本尚未执行', 'Not yet on this replica')}
+            {s.last_error ? (
+              <>
+                {' '}
+                <Badge kind="err">{tr('失败', 'failed')}</Badge>
+              </>
+            ) : null}
+          </div>
+          {(s.last_dropped?.length ?? 0) > 0 || (s.last_deleted ?? 0) > 0 ? (
+            <div className="muted sm">
+              {tr('删除分区', 'Dropped')}: {s.last_dropped?.join(', ') || '-'} · {tr('删除行', 'Deleted rows')}: {fmtNum(s.last_deleted ?? 0)}
+            </div>
+          ) : null}
+          {s.last_error ? <div className="muted sm wrap">{s.last_error}</div> : null}
+        </div>
+      </div>
+      {s.legacy_table ? (
+        <p className="muted sm" data-testid="retention-legacy">
+          {tr(
+            `迁移前的旧表 usage_legacy（${fmtNum(s.legacy_rows ?? 0)} 行）已保留作为备份，确认无误后可手动删除：DROP TABLE usage_legacy;`,
+            `The pre-migration table usage_legacy (${fmtNum(s.legacy_rows ?? 0)} rows) is kept as a backup; drop it manually once verified: DROP TABLE usage_legacy;`,
+          )}
+        </p>
+      ) : null}
+      {parts.length > 0 ? (
+        <div className="table-wrap">
+          <table className="table compact" data-testid="retention-partitions">
+            <thead>
+              <tr>
+                <th>{tr('分区', 'Partition')}</th>
+                <th>{tr('日期 (UTC)', 'Day (UTC)')}</th>
+                <th className="num">{tr('行数', 'Rows')}</th>
+                <th className="num">{tr('大小', 'Size')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((p) => (
+                <tr key={p.name}>
+                  <td className="mono">{p.name}</td>
+                  <td>{p.is_default ? tr('默认分区（范围外数据）', 'Default (out-of-range rows)') : p.from ? p.from.slice(0, 10) : '-'}</td>
+                  <td className="num">{fmtNum(p.rows)}</td>
+                  <td className="num">{fmtBytes(p.bytes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {parts.length > 8 ? (
+            <button className="btn ghost sm" onClick={() => setShowAll(!showAll)}>
+              {showAll ? tr('收起', 'Show less') : tr(`查看全部 ${parts.length} 个分区`, `Show all ${parts.length} partitions`)}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </Card>
   );
 }

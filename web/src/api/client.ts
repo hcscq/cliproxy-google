@@ -389,6 +389,9 @@ export class ApiClient {
   }
 
   // ---- Usage / logs ----------------------------------------------------------
+  usageRetention() {
+    return this.get<{ configured: number; status: UsageRetentionStatus }>('/usage/retention');
+  }
   affinityStats(hours: number) {
     return this.get<{ hours: number; stats: AffinityStats }>('/usage/affinity', { hours });
   }
@@ -1074,4 +1077,41 @@ export function affinitySourceLabel(src: string | undefined, tr: (zh: string, en
     default:
       return tr('无（提示过短 / 未提供会话）', 'none (short prompt / no session)');
   }
+}
+
+export interface UsagePartitionInfo {
+  name: string;
+  from?: string;
+  to?: string;
+  is_default?: boolean;
+  rows: number;
+  bytes: number;
+}
+
+export interface UsageRetentionStatus {
+  backend: string;
+  partitioned: boolean;
+  retention_days: number;
+  oldest_timestamp?: string;
+  total_rows: number;
+  total_bytes: number;
+  legacy_table: boolean;
+  legacy_rows?: number;
+  partitions?: UsagePartitionInfo[];
+  last_maintenance?: string;
+  last_dropped?: string[];
+  last_deleted?: number;
+  last_error?: string;
+}
+
+export function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }

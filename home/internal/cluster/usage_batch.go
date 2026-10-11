@@ -1,0 +1,124 @@
+package cluster
+
+import (
+	"context"
+	"strings"
+
+	log "github.com/sirupsen/logrus"
+	"gorm.io/gorm"
+)
+
+// UsagePayloadItem is one queued usage payload.
+type UsagePayloadItem struct {
+	Payload  string
+	Metadata UsageRuntimeMetadata
+}
+
+// AppendUsageBatch stores many usage payloads with one transaction for the
+// usage rows + billing charges, and one quota upsert per credential (the
+// latest observation wins, as it would sequentially). If the batch
+// transaction fails, rows are retried one by one so a single bad payload
+// cannot drop the others. Returns the number of rows stored.
+func (r *Repository) AppendUsageBatch(ctx context.Context, items []UsagePayloadItem) (int, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return 0, errDB
+	}
+	ctx = contextOrBackground(ctx)
+	type built struct {
+		record   *UsageRecord
+		payload  string
+		metadata UsageRuntimeMetadata
+	}
+	type quotaKey struct{ authIndex, authType string }
+	type quotaResolved struct {
+		uuid, key string
+		version   int64
+		found     bool
+	}
+	quotaCache := map[quotaKey]quotaResolved{}
+	rows := make([]built, 0, len(items))
+	for _, it := range items {
+		if strings.TrimSpace(it.Payload) == "" {
+			continue
+		}
+		record, err := UsageRecordFromPayloadWithRuntime(it.Payload, it.Metadata)
+		if err != nil {
+			log.WithError(err).Warn("usage payload rejected")
+			continue
+		}
+		if record.ParentSessionID != "" && (record.RootSessionID == "" || record.RootSessionID == record.ParentSessionID) {
+			record.RootSessionID = r.resolveRootSessionID(ctx, db, record.SessionID, record.ParentSessionID)
+		}
+		record.QuotaCredentialID, record.QuotaIdentityVersion, record.QuotaIdentityKey = "", 0, ""
+		k := quotaKey{record.AuthIndex, record.AuthType}
+		q, ok := quotaCache[k]
+		if !ok {
+			resolved, identityKey, found, errResolve := resolveQuotaUsageCredential(ctx, db, record.AuthIndex, record.AuthType)
+			if errResolve != nil {
+				log.WithError(errResolve).Warn("usage quota credential resolution ignored")
+			} else if found {
+				q = quotaResolved{uuid: resolved.UUID, key: identityKey, version: quotaCredentialIdentityVersion(resolved), found: true}
+			}
+			quotaCache[k] = q
+		}
+		if q.found {
+			record.QuotaCredentialID, record.QuotaIdentityVersion, record.QuotaIdentityKey = q.uuid, q.version, q.key
+		}
+		rows = append(rows, built{record: record, payload: it.Payload, metadata: it.Metadata})
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	errTx := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		records := make([]*UsageRecord, len(rows))
+		for i := range rows {
+			records[i] = rows[i].record
+		}
+		if err := tx.CreateInBatches(records, 200).Error; err != nil {
+			return err
+		}
+		for _, b := range rows {
+			if err := r.createBillingChargeForUsageTx(ctx, tx, b.record, b.payload); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	stored := len(rows)
+	if errTx != nil {
+		log.WithError(errTx).WithField("rows", len(rows)).Warn("usage batch failed; retrying rows individually")
+		stored = 0
+		for _, b := range rows {
+			b.record.ID = 0
+			if _, err := r.AppendUsageWithRuntime(ctx, b.payload, b.metadata); err != nil {
+				log.WithError(err).Error("usage row write failed")
+				continue
+			}
+			stored++
+		}
+		return stored, nil // individual path already did quota upserts
+	}
+	latest := map[string]built{}
+	order := []string{}
+	for _, b := range rows {
+		id := b.record.QuotaCredentialID
+		if id == "" {
+			continue
+		}
+		if _, seen := latest[id]; !seen {
+			order = append(order, id)
+		}
+		latest[id] = b
+	}
+	for _, id := range order {
+		b := latest[id]
+		if err := upsertQuotaFromUsageRecord(ctx, db, b.record, b.metadata); err != nil {
+			log.WithError(err).Warn("usage quota observation ignored")
+		}
+	}
+	return stored, nil
+}

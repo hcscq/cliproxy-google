@@ -27,6 +27,7 @@ type Repository struct {
 	sessionRootCache   map[string]string
 	scopeOnce          sync.Once
 	scope              *scopeCache
+	leaseDB            *gorm.DB
 	affinityWriterOnce sync.Once
 	affinityQueue      chan RequestAffinityRecord
 }
@@ -64,7 +65,16 @@ func (s APIKeyUpsertStats) RequiresRuntimeRefresh() bool {
 
 // NewRepository creates a new repository.
 func NewRepository(db *gorm.DB) *Repository {
-	return &Repository{db: db}
+	return &Repository{db: db, leaseDB: leaseDBFor(db)}
+}
+
+// leaseRepository returns a repository bound to the dedicated coordinator
+// pool (falls back to itself when there is none, e.g. SQLite).
+func (r *Repository) leaseRepository() *Repository {
+	if r == nil || r.leaseDB == nil {
+		return r
+	}
+	return &Repository{db: r.leaseDB}
 }
 
 // DialectName returns the repository database dialect.

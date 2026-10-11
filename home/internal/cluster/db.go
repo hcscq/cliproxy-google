@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -57,7 +58,34 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 	}
 	configurePostgresPool(sqlDB)
 
+	// A tiny dedicated pool for the coordinator (incarnation heartbeat, leader
+	// election). Request-path work can saturate the main pool under load; the
+	// lease must never wait behind it or the Home gets fenced.
+	if lease, errLease := gorm.Open(postgres.Open(dsn), databaseGORMConfig(cfg.SlowQueryThreshold)); errLease == nil {
+		if leaseSQL, errSQL := lease.DB(); errSQL == nil {
+			n := envInt("HOME_PG_LEASE_CONNS", 3)
+			leaseSQL.SetMaxOpenConns(n)
+			leaseSQL.SetMaxIdleConns(n)
+			leaseSQL.SetConnMaxIdleTime(10 * time.Minute)
+			leaseSQL.SetConnMaxLifetime(30 * time.Minute)
+			registerLeaseDB(db, lease)
+		}
+	} else {
+		log.WithError(errLease).Warn("dedicated lease pool unavailable; coordinator shares the main pool")
+	}
+
 	return db, nil
+}
+
+var leaseDBs sync.Map // *gorm.DB (main) -> *gorm.DB (lease pool)
+
+func registerLeaseDB(main, lease *gorm.DB) { leaseDBs.Store(main, lease) }
+
+func leaseDBFor(main *gorm.DB) *gorm.DB {
+	if v, ok := leaseDBs.Load(main); ok {
+		return v.(*gorm.DB)
+	}
+	return nil
 }
 
 // configurePostgresPool bounds the pool and keeps connections warm. The
@@ -186,6 +214,9 @@ func autoMigratePostgresContext(ctx context.Context, db *gorm.DB, runWhenCurrent
 		runWhenCurrent,
 		postgresSchemaMigrationOperations(db, startedAt, ctx, func(lockedCtx context.Context, tx *gorm.DB, _ int64, requiredVersion int64) error {
 			lockedDB := tx.WithContext(lockedCtx)
+			if errPartition := convertUsageToPartitioned(lockedCtx, lockedDB, defaultRetentionDays); errPartition != nil {
+				return fmt.Errorf("partition request log: %w", errPartition)
+			}
 			if errSchema := autoMigrateSchema(lockedDB); errSchema != nil {
 				return errSchema
 			}

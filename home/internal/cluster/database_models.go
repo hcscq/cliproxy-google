@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 6
+const currentDatabaseVersion = 7
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {

@@ -94,6 +94,11 @@ type Config struct {
 	// request log (0 = default 64 KiB). Larger bodies are truncated and flagged.
 	ErrorBodyMaxBytes int `yaml:"error-body-max-bytes,omitempty" json:"error-body-max-bytes,omitempty"`
 
+	// RequestLogRetentionDays keeps request-log (usage) rows this many days
+	// (0 = default 30, negative = keep forever). On Postgres whole daily
+	// partitions are dropped.
+	RequestLogRetentionDays int `yaml:"request-log-retention-days,omitempty" json:"request-log-retention-days,omitempty"`
+
 	// RedisUsageQueueRetentionSeconds controls how long usage queue items are retained
 	// in memory before database-backed persistence consumes them.
 	// Default: 60. Max: 3600.

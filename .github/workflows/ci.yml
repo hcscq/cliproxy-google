@@ -27,6 +27,20 @@ jobs:
       fail-fast: false
       matrix:
         module: [proxy, home]
+    # Postgres for Home's PG-backed tests (schema migrations, request-log
+    # partitioning, concurrency admission); they are skipped without a DSN.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: hometest
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CLIPROXY_HOME_TEST_POSTGRES_DSN: postgresql://postgres:ci@127.0.0.1:5432/hometest?sslmode=disable
+      HOME_TEST_POSTGRES_DSN: postgresql://postgres:ci@127.0.0.1:5432/hometest?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

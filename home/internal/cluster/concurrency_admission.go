@@ -134,6 +134,12 @@ func withConcurrencyTransaction(ctx context.Context, db *gorm.DB, fn func(*gorm.
 // incarnation row), while fencing transitions that UPDATE these rows still
 // wait for in-flight admissions to commit.
 func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *gorm.DB, lifetime ConnectionLifetime) error {
+	return verifyConcurrencyLifetime(ctx, tx, lifetime, true)
+}
+
+// verifyConcurrencyLifetime checks that the membership and Home that accepted
+// a command are still active, optionally taking FOR SHARE row locks.
+func verifyConcurrencyLifetime(ctx context.Context, tx *gorm.DB, lifetime ConnectionLifetime, lock bool) error {
 	if tx == nil || !lifetime.Controlled || strings.TrimSpace(lifetime.Fingerprint) == "" || lifetime.ConnectedAt.IsZero() {
 		return ErrConcurrencyNodeUnavailable
 	}
@@ -141,8 +147,15 @@ func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *go
 		return ErrConcurrencyNodeUnavailable
 	}
 
+	q := func() *gorm.DB {
+		db := tx.WithContext(contextOrBackground(ctx))
+		if lock {
+			db = db.Clauses(clause.Locking{Strength: "SHARE"})
+		}
+		return db
+	}
 	var membership CPANodeMembershipRecord
-	errMembership := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "SHARE"}).
+	errMembership := q().
 		Where("certificate_fingerprint = ? AND connected_at = ? AND state = ? AND home_ip = ? AND home_port = ? AND home_started_at = ?", strings.TrimSpace(lifetime.Fingerprint), lifetime.ConnectedAt, MembershipStateActive, strings.TrimSpace(lifetime.Home.IP), lifetime.Home.Port, lifetime.Home.StartedAt).
 		First(&membership).Error
 	if errMembership != nil {
@@ -150,7 +163,7 @@ func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *go
 	}
 
 	var home HomeProcessIncarnationRecord
-	errHome := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "SHARE"}).
+	errHome := q().
 		Where("home_ip = ? AND home_port = ? AND started_at = ?", strings.TrimSpace(lifetime.Home.IP), lifetime.Home.Port, lifetime.Home.StartedAt).
 		First(&home).Error
 	if errHome != nil || home.State != HomeIncarnationActive {
@@ -171,6 +184,18 @@ func (r *Repository) AdmitCredentialConcurrency(ctx context.Context, req Concurr
 	db, errDB := r.database()
 	if errDB != nil {
 		return result, errDB
+	}
+	// Fast path: a credential without any positive limit is never accounted,
+	// so the admission needs no transaction and no row locks. Taking FOR SHARE
+	// locks on the membership / Home incarnation rows for every dispatch
+	// starved the FOR UPDATE heartbeats on those rows under sustained load
+	// (writer starvation) until Homes were fenced. Limited credentials keep
+	// the fully locked path below.
+	if limited, errLimited := credentialHasConcurrencyLimit(ctx, db, credentialID, model); errLimited == nil && !limited {
+		if errLifetime := verifyConcurrencyLifetime(ctx, db, req.Lifetime, false); errLifetime != nil {
+			return result, newAdmissionError("concurrency_node_unavailable", errLifetime)
+		}
+		return result, nil
 	}
 	errTransaction := withConcurrencyTransaction(ctx, db, func(tx *gorm.DB) error {
 		if errLifetime := r.LockActiveConcurrencyLifetimeTx(ctx, tx, req.Lifetime); errLifetime != nil {
@@ -211,6 +236,31 @@ func (r *Repository) AdmitCredentialConcurrency(ctx context.Context, req Concurr
 		return nil
 	})
 	return result, errTransaction
+}
+
+// credentialHasConcurrencyLimit reports (without locking) whether the
+// credential has a positive credential-wide or model limit.
+func credentialHasConcurrencyLimit(ctx context.Context, db *gorm.DB, credentialID, model string) (bool, error) {
+	credentialID = strings.TrimSpace(credentialID)
+	if credentialID == "" {
+		return true, nil // let the locked path report the error
+	}
+	policy := CredentialConcurrencyPolicyRecord{}
+	errPolicy := db.WithContext(contextOrBackground(ctx)).Take(&policy, "credential_id = ?", credentialID).Error
+	if errors.Is(errPolicy, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if errPolicy != nil {
+		return true, errPolicy
+	}
+	if positiveLimit(policy.MaxInFlight) > 0 {
+		return true, nil
+	}
+	models, errModels := loadCredentialConcurrencyModels(db.WithContext(contextOrBackground(ctx)), credentialID, false)
+	if errModels != nil {
+		return true, errModels
+	}
+	return positiveLimitValue(models[model]) > 0, nil
 }
 
 func lockConcurrencyPolicyTx(ctx context.Context, tx *gorm.DB, credentialID string) (CredentialConcurrencyPolicyRecord, map[string]int64, error) {

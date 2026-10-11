@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
 	"os"
 	"strings"
 
@@ -110,6 +111,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	r.cfgMu.Lock()
 	r.cfg = cfg
 	errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
+	logretention.Set(cfg.RequestLogRetentionDays)
 	r.authDir = cfg.AuthDir
 	r.cfgMu.Unlock()
 

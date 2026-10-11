@@ -281,6 +281,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPost, "/credentials/bulk", handler.BulkCredentials)
 	r.Set(http.MethodGet, "/groups/summary", handler.GroupsSummary)
 	r.Set(http.MethodGet, "/usage/affinity", handler.AffinityStats)
+	r.Set(http.MethodGet, "/usage/retention", handler.UsageRetention)
 	r.Set(http.MethodGet, "/usage/request-affinity", handler.RequestAffinity)
 	r.Set(http.MethodGet, "/groups/export", handler.ExportGroups)
 	r.Set(http.MethodPost, "/groups/import", handler.ImportGroups)

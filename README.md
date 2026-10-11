@@ -243,6 +243,15 @@ Antigravity / Gemini 在模型容量不足时会返回 503 `UNAVAILABLE` / `MODE
 
 Home 会把上游错误响应体完整保存到请求记录（`usage.fail_body`），上限由 `observability.logs.error-body-max-bytes` 控制（默认 65536 字节，面板“设置 → 日志与管理”可改）。超过上限时只保存前面部分，并记录 `fail_body_truncated=true` 和原始大小 `fail_body_size`，面板会显示“已截断（原始 N 字节）”。新列在 Home 启动时自动添加（PostgreSQL 和 SQLite 都支持，可重复执行）。
 
+## 请求记录存储、保留期与写入（容量阶段 1）
+
+- **按天分区**：PostgreSQL 下请求记录表 `usage` 按 `timestamp` 做 RANGE 分区，每天一个分区 `usage_pYYYYMMDD`，另有默认分区 `usage_p_default` 接收范围外的数据（例如导入的历史）。主键为 `(id, timestamp)`，`id` 序列不变。
+- **保留期**：`observability.logs.request-log-retention-days`（默认 30 天，`0` = 默认，负数 = 永久保留），面板“设置 → 日志与管理”可改。Home 每小时执行一次维护（所有副本都会尝试，用 PG advisory lock 保证同一时刻只有一个副本执行）：提前创建未来 3 天的分区；把落在默认分区里、但已有对应日期分区的数据移过去；整块删除过期分区（不产生表膨胀）。SQLite 下改为分批 `DELETE`。计费流水 `billing_charge` 不受保留期影响。
+- **面板**：“设置”页底部的“请求记录存储”卡片显示存储方式、保留期、行数和占用、最早记录、各分区大小，以及上次维护的时间、结果和错误。
+- **迁移（schema v7）**：已有的普通表会在 Home 启动时的迁移事务里自动转换。步骤：锁表，把旧表改名为 `usage_legacy`，创建分区表，复制数据并核对行数。旧表 `usage_legacy` 作为备份保留，确认无误后可手动执行 `DROP TABLE usage_legacy;` 删除。迁移由全局迁移锁串行执行，其他副本会等待。本地用 53.7 万行（1.8 GB）演练过，耗时见 `/workspace/capacity-report.md`。
+- **批量写入**：Home 收到的用量事件进入队列，单个写线程每批最多 500 条、最多等待 100ms，用一个事务写入用量行和计费记录。配额观测按凭据合并，只写每个凭据的最新一条。批量事务失败时会逐条重试，坏数据不会连累同批的其他记录。进程退出时会先把队列写完（最多 20 秒），滚动更新不会丢失请求记录。
+- **专用心跳连接**：选主和实例心跳使用独立的小连接池（`HOME_PG_LEASE_CONNS`，默认 3），不和请求路径争连接。心跳单次失败只记录警告并重试；只有被 fence，或连续失败超过心跳超时时间，才会退出。主连接池大小可用 `HOME_PG_MAX_OPEN` / `HOME_PG_MAX_IDLE` 调整（默认 40）。
+
 ## 输出长度上限（max_tokens）
 
 默认会把客户端设置的输出上限传给上游 Gemini 模型（Antigravity / AI Studio 路径）。支持的参数有：OpenAI 的 `max_tokens` / `max_completion_tokens`、Claude 的 `max_tokens`、Gemini 的 `generationConfig.maxOutputTokens`。旧版本（继承自上游 CLIProxyAPI）会直接删掉这个参数，原因是 Gemini 的思考 token 也计入 maxOutputTokens，上限设得小时，可能整段都花在思考上，最后没有正文输出。

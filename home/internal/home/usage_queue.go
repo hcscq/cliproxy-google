@@ -58,7 +58,7 @@ func (q *usagePayloadQueue) Pop() (usagePayloadItem, bool) {
 	for q.head >= len(q.items) && !q.closed {
 		q.cond.Wait()
 	}
-	if q.closed {
+	if q.head >= len(q.items) {
 		return usagePayloadItem{}, false
 	}
 
@@ -74,12 +74,50 @@ func (q *usagePayloadQueue) Close() {
 		return
 	}
 
+	// Pending items stay queued so the writer can drain them before exiting
+	// (they used to be discarded on shutdown).
 	q.mu.Lock()
 	q.closed = true
-	q.items = nil
-	q.head = 0
 	q.cond.Broadcast()
 	q.mu.Unlock()
+}
+
+// PopBatch blocks until at least one item is queued (or the queue is closed
+// and drained) and returns up to max items.
+func (q *usagePayloadQueue) PopBatch(max int) ([]usagePayloadItem, bool) {
+	if q == nil {
+		return nil, false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for q.head >= len(q.items) && !q.closed {
+		q.cond.Wait()
+	}
+	n := len(q.items) - q.head
+	if n == 0 {
+		return nil, false
+	}
+	if n > max {
+		n = max
+	}
+	out := make([]usagePayloadItem, n)
+	copy(out, q.items[q.head:q.head+n])
+	for i := q.head; i < q.head+n; i++ {
+		q.items[i] = usagePayloadItem{}
+	}
+	q.head += n
+	q.compactLocked()
+	return out, true
+}
+
+// Len returns the number of queued items.
+func (q *usagePayloadQueue) Len() int {
+	if q == nil {
+		return 0
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.items) - q.head
 }
 
 func (q *usagePayloadQueue) compactLocked() {
@@ -111,13 +149,18 @@ func (r *Runtime) startClusterUsageWriter(ctx context.Context) {
 		return
 	}
 	r.clusterUsageQueue = queue
+	done := make(chan struct{})
+	r.clusterUsageDone = done
 	r.clusterUsageQueueMu.Unlock()
 
 	go func() {
 		<-ctx.Done()
 		queue.Close()
 	}()
-	go r.runClusterUsageWriter(ctx, store, queue)
+	go func() {
+		defer close(done)
+		r.runClusterUsageWriter(ctx, store, queue)
+	}()
 }
 
 func (r *Runtime) stopClusterUsageWriter() {
@@ -127,10 +170,21 @@ func (r *Runtime) stopClusterUsageWriter() {
 
 	r.clusterUsageQueueMu.Lock()
 	queue := r.clusterUsageQueue
+	done := r.clusterUsageDone
 	r.clusterUsageQueue = nil
+	r.clusterUsageDone = nil
 	r.clusterUsageQueueMu.Unlock()
 	if queue != nil {
 		queue.Close()
+	}
+	if done != nil {
+		// Wait for queued usage to be flushed (bounded) so a rolling update
+		// does not lose request-log / billing rows.
+		select {
+		case <-done:
+		case <-time.After(usageWriterDrainLimit + time.Second):
+			log.Warn("usage writer did not finish draining before shutdown")
+		}
 	}
 }
 
@@ -144,21 +198,77 @@ func (r *Runtime) getClusterUsageQueue() *usagePayloadQueue {
 	return r.clusterUsageQueue
 }
 
+// clusterUsageBatchStore is implemented by stores that can write many usage
+// payloads in one transaction.
+type clusterUsageBatchStore interface {
+	StoreUsagePayloads(ctx context.Context, payloads []string, receivedAt []time.Time) (int, error)
+}
+
+const (
+	usageWriterBatchMax   = 500
+	usageWriterLinger     = 100 * time.Millisecond
+	usageWriterDrainLimit = 20 * time.Second
+)
+
 func (r *Runtime) runClusterUsageWriter(ctx context.Context, store clusterUsageStore, queue *usagePayloadQueue) {
 	if store == nil || queue == nil {
 		return
 	}
-
+	batchStore, batched := store.(clusterUsageBatchStore)
+	writeCtx := func() (context.Context, context.CancelFunc) {
+		// Keep writing (drain) after shutdown starts, but bounded.
+		if ctx.Err() != nil {
+			return context.WithTimeout(context.Background(), usageWriterDrainLimit)
+		}
+		return context.WithCancel(ctx)
+	}
 	for {
-		item, ok := queue.Pop()
+		items, ok := queue.PopBatch(usageWriterBatchMax)
 		if !ok {
 			return
 		}
-		if strings.TrimSpace(item.payload) == "" {
+		if batched && len(items) < usageWriterBatchMax && ctx.Err() == nil {
+			// Let a small batch fill a little so bursts become one transaction.
+			time.Sleep(usageWriterLinger)
+			if more, okMore := queue.popNoWait(usageWriterBatchMax - len(items)); okMore {
+				items = append(items, more...)
+			}
+		}
+		payloads := make([]string, 0, len(items))
+		times := make([]time.Time, 0, len(items))
+		for _, item := range items {
+			if strings.TrimSpace(item.payload) == "" {
+				continue
+			}
+			payloads = append(payloads, item.payload)
+			times = append(times, item.receivedAt)
+		}
+		if len(payloads) == 0 {
 			continue
 		}
-		if errStoreUsagePayload := store.StoreUsagePayload(ctx, item.payload, item.receivedAt); errStoreUsagePayload != nil {
-			log.Errorf("usage database async write error: %v", errStoreUsagePayload)
+		wctx, cancel := writeCtx()
+		if batched {
+			if _, err := batchStore.StoreUsagePayloads(wctx, payloads, times); err != nil {
+				log.Errorf("usage database batch write error: %v", err)
+			}
+		} else {
+			for i := range payloads {
+				if err := store.StoreUsagePayload(wctx, payloads[i], times[i]); err != nil {
+					log.Errorf("usage database async write error: %v", err)
+				}
+			}
 		}
+		cancel()
 	}
+}
+
+// popNoWait returns up to max queued items without blocking.
+func (q *usagePayloadQueue) popNoWait(max int) ([]usagePayloadItem, bool) {
+	q.mu.Lock()
+	empty := q.head >= len(q.items)
+	q.mu.Unlock()
+	if empty || max <= 0 {
+		return nil, false
+	}
+	return q.PopBatch(max)
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -63,6 +64,7 @@ type Runtime struct {
 
 	clusterUsageQueueMu sync.Mutex
 	clusterUsageQueue   *usagePayloadQueue
+	clusterUsageDone    chan struct{}
 
 	cancel context.CancelFunc
 
@@ -251,6 +253,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 
 	if cfg != nil {
 		errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
+		logretention.Set(cfg.RequestLogRetentionDays)
 	}
 	runtime := &Runtime{
 		cfg:           cfg,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiClient, ApiError, buildQuery, configPath, generateApiKey, isSupportedProvider, maskSecret, stateFromRedirect } from './client';
+import { ApiClient, ApiError, buildQuery, configPath, fmtBytes, generateApiKey, isSupportedProvider, maskSecret, stateFromRedirect } from './client';
 
 function mockFetch(status: number, body: unknown, contentType = 'application/json') {
   const calls: { url: string; init?: RequestInit }[] = [];
@@ -310,5 +310,15 @@ describe('sticky session client', () => {
     expect(affinitySourceLabel('prefix', tr)).toBe('提示前缀哈希');
     expect(affinitySourceLabel('prompt-cache-key', tr)).toBe('prompt_cache_key');
     expect(affinitySourceLabel(undefined, tr)).toContain('无');
+  });
+});
+
+describe('fmtBytes', () => {
+  it('formats sizes', () => {
+    expect(fmtBytes(0)).toBe('0 B');
+    expect(fmtBytes(512)).toBe('512 B');
+    expect(fmtBytes(1536)).toBe('1.5 KB');
+    expect(fmtBytes(8576 * 1024)).toBe('8.4 MB');
+    expect(fmtBytes(20 * 1024 * 1024)).toBe('20 MB');
   });
 });

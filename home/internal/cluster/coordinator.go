@@ -40,6 +40,7 @@ type CoordinatorOptions struct {
 
 type Coordinator struct {
 	repo              *Repository
+	leaseRepo         *Repository
 	node              NodeIdentity
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
@@ -85,6 +86,7 @@ func NewCoordinator(repo *Repository, node NodeIdentity, opts CoordinatorOptions
 
 	return &Coordinator{
 		repo:              repo,
+		leaseRepo:         repo.leaseRepository(),
 		node:              node,
 		heartbeatInterval: interval,
 		heartbeatTimeout:  timeout,
@@ -226,6 +228,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	heartbeatTicker := time.NewTicker(c.heartbeatInterval)
 	defer heartbeatTicker.Stop()
+	lastOK := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -236,23 +239,46 @@ func (c *Coordinator) Start(ctx context.Context) error {
 				c.setMaster(false)
 				return nil
 			}
-			incarnation, errHeartbeat := c.heartbeatHomeIncarnation(ctx)
-			if errHeartbeat != nil {
-				c.setMaster(false)
-				if ctx.Err() != nil {
-					return nil
-				}
-				return errHeartbeat
+			errBeat := c.heartbeatOnce(ctx)
+			if errBeat == nil {
+				lastOK = time.Now()
+				continue
 			}
-			if errBeat := c.heartbeatAndElect(ctx, incarnation); errBeat != nil {
+			if ctx.Err() != nil {
 				c.setMaster(false)
-				if ctx.Err() != nil {
-					return nil
-				}
+				return nil
+			}
+			// Fencing is final. Anything else (slow DB, pool pressure, a
+			// dropped connection) is retried until the lease would have
+			// expired anyway; one slow heartbeat must not kill the process.
+			if !heartbeatErrorTransient(errBeat) || time.Since(lastOK) >= c.heartbeatTimeout {
+				c.setMaster(false)
 				return errBeat
 			}
+			log.WithError(errBeat).Warn("cluster heartbeat failed; retrying")
 		}
 	}
+}
+
+func (c *Coordinator) heartbeatOnce(ctx context.Context) error {
+	beatCtx, cancel := context.WithTimeout(ctx, maxDuration(c.heartbeatInterval, 2*time.Second))
+	defer cancel()
+	incarnation, errHeartbeat := c.heartbeatHomeIncarnation(beatCtx)
+	if errHeartbeat != nil {
+		return errHeartbeat
+	}
+	return c.heartbeatAndElect(beatCtx, incarnation)
+}
+
+func heartbeatErrorTransient(err error) bool {
+	return !errors.Is(err, ErrHomeIncarnationFenced) && !errors.Is(err, ErrHomeIncarnationInactive) && !errors.Is(err, ErrHomeIncarnationNotFound)
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (c *Coordinator) runLifecycleCleanupLoop(ctx context.Context) {
@@ -387,7 +413,7 @@ func (c *Coordinator) CurrentMaster(ctx context.Context) (*ClusterNodeRecord, er
 // heartbeatAndElect handles a heartbeat and elect.
 func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnationID) error {
 	// Keep validation before state changes so failures leave existing data intact.
-	db, errDB := c.repo.database()
+	db, errDB := c.leaseRepo.database()
 	if errDB != nil {
 		return errDB
 	}
@@ -462,7 +488,7 @@ func (c *Coordinator) heartbeatHomeIncarnation(ctx context.Context) (HomeIncarna
 	if !initialized {
 		return HomeIncarnationID{}, fmt.Errorf("cluster coordinator is not initialized")
 	}
-	if errHeartbeat := c.repo.HeartbeatHomeIncarnation(ctx, incarnation); errHeartbeat != nil {
+	if errHeartbeat := c.leaseRepo.HeartbeatHomeIncarnation(ctx, incarnation); errHeartbeat != nil {
 		return HomeIncarnationID{}, errHeartbeat
 	}
 	return incarnation, nil
