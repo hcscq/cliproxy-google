@@ -12,6 +12,23 @@ type EventWatcher struct {
 	hasLastSeen  bool
 	pollInterval time.Duration
 	onEvent      func(context.Context, ClusterEventRecord) error
+	afterBatch   func(context.Context) error
+	wake         chan struct{}
+}
+
+// SetAfterBatch registers a hook run after each non-empty batch of events, so
+// expensive work (rebuilding the auth scheduler) happens once per batch.
+func (w *EventWatcher) SetAfterBatch(fn func(context.Context) error) { w.afterBatch = fn }
+
+// Wake asks the watcher to poll now instead of waiting for the next tick.
+func (w *EventWatcher) Wake() {
+	if w == nil {
+		return
+	}
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
 }
 
 // NewEventWatcher creates a new event watcher.
@@ -20,6 +37,7 @@ func NewEventWatcher(repo *Repository, pollInterval time.Duration, onEvent func(
 		repo:         repo,
 		pollInterval: pollInterval,
 		onEvent:      onEvent,
+		wake:         make(chan struct{}, 1),
 	}
 }
 
@@ -62,15 +80,23 @@ func (w *EventWatcher) Start(ctx context.Context) error {
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// A wake-up can arrive before the writer's transaction commits, so a
+	// wake-triggered poll is followed by one more shortly after.
+	followUp := time.NewTimer(time.Hour)
+	followUp.Stop()
+	defer followUp.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if errPoll := w.poll(ctx); errPoll != nil {
-				return errPoll
-			}
+		case <-w.wake:
+			followUp.Reset(250 * time.Millisecond)
+		case <-followUp.C:
+		}
+		if errPoll := w.poll(ctx); errPoll != nil {
+			return errPoll
 		}
 	}
 }
@@ -86,6 +112,9 @@ func (w *EventWatcher) poll(ctx context.Context) error {
 			return errEvent
 		}
 		w.lastSeenID = int64(event.ID)
+	}
+	if len(events) > 0 && w.afterBatch != nil {
+		return w.afterBatch(ctx)
 	}
 	return nil
 }

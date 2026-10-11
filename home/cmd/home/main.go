@@ -326,8 +326,24 @@ func run() int {
 		}
 		return coordinator.HomeIncarnation()
 	}))
+	// Auth events only refresh one credential each; the scheduler rebuild
+	// (ReloadAuths) runs once per batch, and before any non-auth event so
+	// ordering relative to config events is unchanged.
+	authReloadPending := false
+	flushAuthReload := func(eventCtx context.Context) error {
+		if !authReloadPending {
+			return nil
+		}
+		authReloadPending = false
+		return rt.ReloadAuths(eventCtx)
+	}
 	eventWatcher = cluster.NewEventWatcherFrom(repo, nodeCfg.EventPollInterval, lastSeenID, func(eventCtx context.Context, event cluster.ClusterEventRecord) error {
 		scope := strings.TrimSpace(event.Scope)
+		if !strings.EqualFold(scope, "auth") {
+			if errFlush := flushAuthReload(eventCtx); errFlush != nil {
+				return errFlush
+			}
+		}
 		if strings.EqualFold(scope, "plugin-store-auth") {
 			_, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
 			if errConfig != nil {
@@ -357,8 +373,10 @@ func run() int {
 		if errApplyEvent := adapter.ApplyEvent(eventCtx, event); errApplyEvent != nil {
 			return errApplyEvent
 		}
-		return rt.ReloadAuths(eventCtx)
+		authReloadPending = true
+		return nil
 	})
+	eventWatcher.SetAfterBatch(flushAuthReload)
 	defer rt.Stop()
 
 	listenAddr, listenPort, errListenAddr := resolveListenAddress(addr, cfg, clusterCfg, clusterExists)
@@ -414,6 +432,9 @@ func run() int {
 		if rc := redisx.Open(clusterCfg.Redis); rc != nil {
 			redisx.SetDefault(rc)
 			defer rc.Close()
+			if eventWatcher != nil {
+				cluster.SubscribeEventWake(runCtx, eventWatcher.Wake)
+			}
 		}
 		go trackLiveHomes(runCtx, clusterRepo, nodeCfg.HeartbeatTimeout)
 	}

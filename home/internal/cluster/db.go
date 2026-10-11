@@ -73,6 +73,7 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 	} else {
 		log.WithError(errLease).Warn("dedicated lease pool unavailable; coordinator shares the main pool")
 	}
+	registerEventWakeCallback(db)
 
 	return db, nil
 }
