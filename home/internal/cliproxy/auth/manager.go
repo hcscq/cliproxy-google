@@ -910,6 +910,34 @@ func (m *Manager) flushResultPersistQueue() {
 }
 
 // List returns the available entries.
+// EnabledProviderKeys returns the distinct lower-cased providers of enabled
+// auths without cloning them (List deep-copies every auth, which made each
+// dispatch O(credentials) in allocations).
+func (m *Manager) EnabledProviderKeys() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := make(map[string]struct{}, 4)
+	out := make([]string, 0, 4)
+	for _, a := range m.auths {
+		if a == nil || a.Disabled {
+			continue
+		}
+		provider := strings.ToLower(strings.TrimSpace(a.Provider))
+		if provider == "" {
+			continue
+		}
+		if _, ok := seen[provider]; ok {
+			continue
+		}
+		seen[provider] = struct{}{}
+		out = append(out, provider)
+	}
+	return out
+}
+
 func (m *Manager) List() []*Auth {
 	if m == nil {
 		return nil

@@ -519,6 +519,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				return
 			}
 			cmd := strings.ToUpper(strings.TrimSpace(args[0]))
+			countRESPCommand(cmd, args)
 			if cmd == "CERTIFICATE" {
 				if authSource != respAuthSourceNone {
 					_ = writer.WriteRedisError("ERR certificate request is only allowed before authentication")

@@ -284,18 +284,20 @@ func homeInFlightTruncateString(value string, maxBytes int) string {
 func packHomeInFlightFrames(freeze executionregistry.Freeze, observedAt time.Time, cfg HomeInFlightPublisherConfig, aggregates []home.InFlightAggregate, details []home.InFlightRequestDetail, detailsTruncated bool) ([]home.InFlightSnapshotFrame, bool, int) {
 	frames := make([]home.InFlightSnapshotFrame, 0, cfg.MaxPartCount)
 	current := homeInFlightPartFrame(freeze, observedAt, cfg.MaxPartCount, detailsTruncated)
+	sz := newInFlightFrameSizer(current, cfg.MaxPartBytes)
 	appendCurrent := func() bool {
 		if len(frames) >= cfg.MaxPartCount {
 			return false
 		}
 		frames = append(frames, current)
 		current = homeInFlightPartFrame(freeze, observedAt, cfg.MaxPartCount, detailsTruncated)
+		sz = newInFlightFrameSizer(current, cfg.MaxPartBytes)
 		return true
 	}
 	for _, aggregate := range aggregates {
 		candidate := current
 		candidate.Aggregates = append(candidate.Aggregates, aggregate)
-		if homeInFlightFrameWithinPartLimit(candidate, cfg.MaxPartBytes) {
+		if sz.fits(candidate, aggregate) {
 			current = candidate
 			continue
 		}
@@ -307,7 +309,7 @@ func packHomeInFlightFrames(freeze executionregistry.Freeze, observedAt time.Tim
 		}
 		candidate = current
 		candidate.Aggregates = append(candidate.Aggregates, aggregate)
-		if !homeInFlightFrameWithinPartLimit(candidate, cfg.MaxPartBytes) {
+		if !sz.fits(candidate, aggregate) {
 			return nil, false, 0
 		}
 		current = candidate
@@ -317,7 +319,7 @@ func packHomeInFlightFrames(freeze executionregistry.Freeze, observedAt time.Tim
 	for _, detail := range details {
 		candidate := current
 		candidate.Details = append(candidate.Details, detail)
-		if homeInFlightFrameWithinPartLimit(candidate, cfg.MaxPartBytes) {
+		if sz.fits(candidate, detail) {
 			current = candidate
 			includedDetails++
 			continue
@@ -330,7 +332,7 @@ func packHomeInFlightFrames(freeze executionregistry.Freeze, observedAt time.Tim
 		}
 		candidate = current
 		candidate.Details = append(candidate.Details, detail)
-		if !homeInFlightFrameWithinPartLimit(candidate, cfg.MaxPartBytes) {
+		if !sz.fits(candidate, detail) {
 			return frames, true, includedDetails
 		}
 		current = candidate
@@ -396,4 +398,47 @@ func homeInFlightOverflow(freeze executionregistry.Freeze, observedAt time.Time,
 		BarrierRevision:     freeze.BarrierRevision,
 		AggregateGroupCount: aggregateGroupCount,
 	}}
+}
+
+// inFlightFrameSizer makes frame packing O(n): each item is marshalled once
+// and its size added to a running upper-bound estimate (item bytes + comma +
+// a fixed allowance for the array/field boilerplate). Only when the estimate
+// gets near the limit is the whole frame marshalled exactly, so decisions are
+// identical to marshalling the candidate frame every time (which was O(n^2)
+// and dominated proxy CPU with thousands of in-flight streams).
+type inFlightFrameSizer struct {
+	max     int
+	exact   int
+	pending int
+}
+
+const inFlightFrameSizerSlack = 64
+
+func newInFlightFrameSizer(frame home.InFlightSnapshotFrame, maxPartBytes int) *inFlightFrameSizer {
+	raw, err := json.Marshal(frame)
+	exact := len(raw)
+	if err != nil {
+		exact = maxPartBytes + 1
+	}
+	return &inFlightFrameSizer{max: maxPartBytes, exact: exact}
+}
+
+// fits reports whether candidate (the current frame plus item) is within the
+// part limit; a true result commits item to the running size.
+func (z *inFlightFrameSizer) fits(candidate home.InFlightSnapshotFrame, item any) bool {
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return false
+	}
+	add := len(raw) + 1
+	if z.exact+z.pending+add+inFlightFrameSizerSlack <= z.max {
+		z.pending += add
+		return true
+	}
+	if !homeInFlightFrameWithinPartLimit(candidate, z.max) {
+		return false
+	}
+	full, _ := json.Marshal(candidate)
+	z.exact, z.pending = len(full), 0
+	return true
 }

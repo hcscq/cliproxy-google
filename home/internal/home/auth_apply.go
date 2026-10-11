@@ -189,24 +189,7 @@ func (r *Runtime) availableProviderKeys() []string {
 		return nil
 	}
 
-	auths := r.coreManager.List()
-	seen := make(map[string]struct{}, len(auths))
-	out := make([]string, 0, len(auths))
-	for _, auth := range auths {
-		if auth == nil || auth.Disabled {
-			continue
-		}
-		provider := strings.ToLower(strings.TrimSpace(auth.Provider))
-		if provider == "" {
-			continue
-		}
-		if _, ok := seen[provider]; ok {
-			continue
-		}
-		seen[provider] = struct{}{}
-		out = append(out, provider)
-	}
-	return out
+	return r.coreManager.EnabledProviderKeys()
 }
 
 // extractAccessToken extracts an access token.

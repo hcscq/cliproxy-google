@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -152,19 +153,63 @@ func (r *Repository) BindAffinity(ctx context.Context, bindingKey, authID, model
 	return err
 }
 
-// RecordRequestAffinity stores a request's sticky-routing outcome (async; best effort).
+// RecordRequestAffinity queues a request's sticky outcome for a batched,
+// bounded background writer (best effort). It never blocks the request path
+// and never spawns per-request goroutines: under load those exhausted the DB
+// pool and starved the leader lease (Home got fenced in capacity tests).
 func (r *Repository) RecordRequestAffinity(requestID, source, outcome, authID, prevAuth string) {
 	if r == nil || r.db == nil || strings.TrimSpace(requestID) == "" {
 		return
 	}
 	rec := RequestAffinityRecord{RequestID: strings.TrimSpace(requestID), Source: source, Outcome: outcome, AuthID: authID, PrevAuth: prevAuth, CreatedAt: time.Now()}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&rec).Error; err != nil {
-			log.WithError(err).Debug("record request affinity failed")
+	r.affinityWriterOnce.Do(func() {
+		r.affinityQueue = make(chan RequestAffinityRecord, affinityQueueSize)
+		go r.runAffinityWriter()
+	})
+	select {
+	case r.affinityQueue <- rec:
+	default:
+		affinityDropped.Add(1)
+	}
+}
+
+const (
+	affinityQueueSize  = 20000
+	affinityBatchSize  = 500
+	affinityFlushEvery = 500 * time.Millisecond
+)
+
+var affinityDropped atomic.Int64
+
+// AffinityRecordsDropped reports outcome rows dropped because the queue was full.
+func AffinityRecordsDropped() int64 { return affinityDropped.Load() }
+
+func (r *Repository) runAffinityWriter() {
+	t := time.NewTicker(affinityFlushEvery)
+	defer t.Stop()
+	batch := make([]RequestAffinityRecord, 0, affinityBatchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
 		}
-	}()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(batch, affinityBatchSize).Error; err != nil {
+			log.WithError(err).Debug("record request affinity batch failed")
+		}
+		cancel()
+		batch = batch[:0]
+	}
+	for {
+		select {
+		case rec := <-r.affinityQueue:
+			batch = append(batch, rec)
+			if len(batch) >= affinityBatchSize {
+				flush()
+			}
+		case <-t.C:
+			flush()
+		}
+	}
 }
 
 // RequestAffinity returns the recorded outcome of one request.

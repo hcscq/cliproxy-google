@@ -27,6 +27,8 @@ type Repository struct {
 	sessionRootCache   map[string]string
 	scopeOnce          sync.Once
 	scope              *scopeCache
+	affinityWriterOnce sync.Once
+	affinityQueue      chan RequestAffinityRecord
 }
 
 type UpsertResult string

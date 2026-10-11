@@ -2,9 +2,11 @@ package cluster
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -53,8 +55,29 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 		}
 		return nil, errPing
 	}
+	configurePostgresPool(sqlDB)
 
 	return db, nil
+}
+
+// configurePostgresPool bounds the pool and keeps connections warm. The
+// database/sql defaults (unlimited open, 2 idle) made every burst open and
+// close hundreds of connections per second. Tunable with HOME_PG_MAX_OPEN /
+// HOME_PG_MAX_IDLE (default 40 each).
+func configurePostgresPool(sqlDB *sql.DB) {
+	maxOpen := envInt("HOME_PG_MAX_OPEN", 40)
+	maxIdle := envInt("HOME_PG_MAX_IDLE", maxOpen)
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+}
+
+func envInt(name string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v > 0 {
+		return v
+	}
+	return def
 }
 
 // OpenSQLite opens a SQLite database.

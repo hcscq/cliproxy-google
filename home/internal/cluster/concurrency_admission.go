@@ -129,6 +129,10 @@ func withConcurrencyTransaction(ctx context.Context, db *gorm.DB, fn func(*gorm.
 }
 
 // LockActiveConcurrencyLifetimeTx locks and verifies the active membership and Home that accepted a command.
+// The locks are FOR SHARE: concurrent admissions on one node / Home do not
+// block each other (FOR UPDATE serialized every dispatch of a Home on its
+// incarnation row), while fencing transitions that UPDATE these rows still
+// wait for in-flight admissions to commit.
 func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *gorm.DB, lifetime ConnectionLifetime) error {
 	if tx == nil || !lifetime.Controlled || strings.TrimSpace(lifetime.Fingerprint) == "" || lifetime.ConnectedAt.IsZero() {
 		return ErrConcurrencyNodeUnavailable
@@ -138,7 +142,7 @@ func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *go
 	}
 
 	var membership CPANodeMembershipRecord
-	errMembership := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).
+	errMembership := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "SHARE"}).
 		Where("certificate_fingerprint = ? AND connected_at = ? AND state = ? AND home_ip = ? AND home_port = ? AND home_started_at = ?", strings.TrimSpace(lifetime.Fingerprint), lifetime.ConnectedAt, MembershipStateActive, strings.TrimSpace(lifetime.Home.IP), lifetime.Home.Port, lifetime.Home.StartedAt).
 		First(&membership).Error
 	if errMembership != nil {
@@ -146,7 +150,7 @@ func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *go
 	}
 
 	var home HomeProcessIncarnationRecord
-	errHome := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).
+	errHome := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "SHARE"}).
 		Where("home_ip = ? AND home_port = ? AND started_at = ?", strings.TrimSpace(lifetime.Home.IP), lifetime.Home.Port, lifetime.Home.StartedAt).
 		First(&home).Error
 	if errHome != nil || home.State != HomeIncarnationActive {
