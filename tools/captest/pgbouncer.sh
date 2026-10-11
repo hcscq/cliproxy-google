@@ -25,5 +25,10 @@ INI
   echo '"postgres" ""' > $D/userlist.txt
   /usr/sbin/pgbouncer -d $D/pgbouncer.ini
 }
-down() { [ -f $D/pgbouncer.pid ] && kill $(cat $D/pgbouncer.pid) 2>/dev/null; sleep 1; }
+down() {  # SIGINT = immediate shutdown (SIGTERM waits for clients)
+  [ -f $D/pgbouncer.pid ] || return 0
+  p=$(cat $D/pgbouncer.pid); kill -INT $p 2>/dev/null
+  for i in $(seq 1 50); do kill -0 $p 2>/dev/null || break; sleep 0.1; done
+  rm -f $D/pgbouncer.pid
+}
 case "$1" in up) up;; down) down;; restart) down; up;; esac
