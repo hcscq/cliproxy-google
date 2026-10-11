@@ -109,6 +109,7 @@ func buildV8Paths() []configPath {
 		{"error-logs-max-files", "observability.logs.error-logs-max-files"},
 		{"error-body-max-bytes", "observability.logs.error-body-max-bytes"},
 		{"request-log-retention-days", "observability.logs.request-log-retention-days"},
+		{"credential-rpm", "routing.rate-limits.credential-rpm"}, {"api-key-rpm", "routing.rate-limits.api-key-rpm"},
 		{"usage-statistics-enabled", "observability.usage.usage-statistics-enabled"},
 		{"redis-usage-queue-retention-seconds", "observability.usage.redis-usage-queue-retention-seconds"}, {"pprof", "observability.pprof"},
 	}

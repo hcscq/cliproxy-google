@@ -99,6 +99,15 @@ type Config struct {
 	// partitions are dropped.
 	RequestLogRetentionDays int `yaml:"request-log-retention-days,omitempty" json:"request-log-retention-days,omitempty"`
 
+	// CredentialRPM caps requests per minute per credential across all Home
+	// replicas (0 = unlimited). A credential at its cap is skipped like one at
+	// its concurrency cap; if every candidate is capped the request gets 429.
+	CredentialRPM int `yaml:"credential-rpm,omitempty" json:"credential-rpm,omitempty"`
+
+	// APIKeyRPM caps requests per minute per client API key across all Home
+	// replicas (0 = unlimited). Over the cap the request gets 429.
+	APIKeyRPM int `yaml:"api-key-rpm,omitempty" json:"api-key-rpm,omitempty"`
+
 	// RedisUsageQueueRetentionSeconds controls how long usage queue items are retained
 	// in memory before database-backed persistence consumes them.
 	// Default: 60. Max: 3600.
