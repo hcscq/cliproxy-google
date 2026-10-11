@@ -65,7 +65,7 @@ spec:
             - {name: work, mountPath: /work}
       containers:
         - name: home
-          image: ghcr.io/hcscq/cliproxy-google-home:sha-848925a2bd84c223af592b950fd2022fa0848ca9
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-b8563237ee80be7fdcb84e0b31c283f05537ffef
           imagePullPolicy: IfNotPresent
           workingDir: /work
           env:
@@ -89,7 +89,7 @@ spec:
             - {name: HOME_USAGE_STREAM, value: "0"}
             # Main PG pool through pgbouncer (12-pgbouncer.yaml); the lease pool stays
             # direct. "" = direct connections.
-            - {name: HOME_PG_POOLER_ADDR, value: ""}
+            - {name: HOME_PG_POOLER_ADDR, value: "pgbouncer.cliproxy.svc.cluster.local:6432"}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef: {name: redis-auth, key: password, optional: true}

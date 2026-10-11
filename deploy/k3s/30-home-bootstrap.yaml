@@ -49,7 +49,7 @@ spec:
             - {name: work, mountPath: /work}
       containers:
         - name: import
-          image: ghcr.io/hcscq/cliproxy-google-home:sha-848925a2bd84c223af592b950fd2022fa0848ca9
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-b8563237ee80be7fdcb84e0b31c283f05537ffef
           workingDir: /work
           args: ["-import", "-config", "/import/config.yaml", "-auth-dir", "/import/auths"]
           volumeMounts:
