@@ -896,7 +896,7 @@ func (r *Runtime) DispatchForAPIKeyWithConcurrency(ctx context.Context, reqModel
 
 type stickyAffinityStore interface {
 	LookupAffinity(ctx context.Context, bindingKey string) (string, bool)
-	BindAffinity(ctx context.Context, bindingKey, authID, model, source string, ttl time.Duration) error
+	BindAffinityFrom(ctx context.Context, bindingKey, authID, prev, model, source string, ttl time.Duration) (string, error)
 	RecordRequestAffinity(requestID, source, outcome, authID, prevAuth string)
 }
 
@@ -941,7 +941,7 @@ func (r *Runtime) dispatchForAPIKey(ctx context.Context, reqModel string, header
 	if hasBinding && !containsTrimmed(excludedAuthIDs, bound) {
 		res, err := r.dispatchForAPIKeyOnce(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, bound, concurrencyCtx)
 		if err == nil && res != nil {
-			_ = store.BindAffinity(ctx, bindingKey, res.AuthID, reqModel, source, ttl)
+			_, _ = store.BindAffinityFrom(ctx, bindingKey, res.AuthID, bound, reqModel, source, ttl)
 			store.RecordRequestAffinity(requestID, source, "hit", res.AuthID, "")
 			return res, nil
 		}
@@ -950,13 +950,22 @@ func (r *Runtime) dispatchForAPIKey(ctx context.Context, reqModel string, header
 	if err != nil || res == nil {
 		return res, err
 	}
-	_ = store.BindAffinity(ctx, bindingKey, res.AuthID, reqModel, source, ttl)
+	observed := ""
+	if hasBinding {
+		observed = bound
+	}
+	winner, _ := store.BindAffinityFrom(ctx, bindingKey, res.AuthID, observed, reqModel, source, ttl)
 	outcome, prev := "new", ""
 	if hasBinding {
 		outcome, prev = "repin", bound
 		if bound == res.AuthID {
 			outcome, prev = "hit", ""
 		}
+	}
+	if winner != "" && winner != res.AuthID {
+		// Another Home bound this conversation first; this request keeps its
+		// already-admitted credential and later requests follow the winner.
+		outcome, prev = "race", winner
 	}
 	store.RecordRequestAffinity(requestID, source, outcome, res.AuthID, prev)
 	return res, nil

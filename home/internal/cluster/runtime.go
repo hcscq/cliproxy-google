@@ -893,6 +893,13 @@ func (a *RuntimeAdapter) BindAffinity(ctx context.Context, bindingKey, authID, m
 }
 
 // RecordRequestAffinity logs a request's sticky outcome.
+func (a *RuntimeAdapter) BindAffinityFrom(ctx context.Context, bindingKey, authID, prev, model, source string, ttl time.Duration) (string, error) {
+	if a == nil || a.repo == nil {
+		return authID, nil
+	}
+	return a.repo.BindAffinityFrom(ctx, bindingKey, authID, prev, model, source, ttl)
+}
+
 func (a *RuntimeAdapter) RecordRequestAffinity(requestID, source, outcome, authID, prevAuth string) {
 	if !a.Enabled() {
 		return

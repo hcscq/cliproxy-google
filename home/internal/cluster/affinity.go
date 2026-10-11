@@ -1,9 +1,13 @@
 package cluster
 
 import (
+	"errors"
+
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/redis/go-redis/v9"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/redisx"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -118,6 +122,20 @@ func (r *Repository) LookupAffinity(ctx context.Context, bindingKey string) (str
 	if r == nil || r.db == nil || bindingKey == "" {
 		return "", false
 	}
+	if rc := redisx.Default(); rc.Healthy() {
+		// Shared store: no per-replica cache, so every Home sees a new or
+		// re-pinned binding immediately.
+		rctx, cancel := rc.Ctx(ctx)
+		v, err := rc.Raw().Get(rctx, rc.Key("aff", bindingKey)).Result()
+		cancel()
+		rc.Observe(err)
+		if err == nil {
+			return v, v != ""
+		}
+		if errors.Is(err, redis.Nil) {
+			return "", false
+		}
+	}
 	now := time.Now()
 	if e, ok := affinityMem.get(bindingKey, now); ok {
 		return e.authID, e.authID != ""
@@ -130,6 +148,41 @@ func (r *Repository) LookupAffinity(ctx context.Context, bindingKey string) (str
 	}
 	affinityMem.put(bindingKey, affinityEntry{authID: rec.AuthID, fetched: now, written: rec.UpdatedAt})
 	return rec.AuthID, true
+}
+
+// bindScript binds atomically: create if absent (first writer wins), refresh
+// when unchanged, replace only if the stored value is still the one the caller
+// saw (ARGV[3]); otherwise keep and return the current winner.
+var bindScript = redis.NewScript(`
+local cur = redis.call('GET', KEYS[1])
+if (not cur) or cur == ARGV[1] or cur == ARGV[3] then
+  redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+  return ARGV[1]
+end
+return cur
+`)
+
+// BindAffinityFrom binds bindingKey to authID given the binding the caller
+// observed (prev, "" if none) and returns the credential the binding now
+// points to. With Redis it is atomic across Home replicas; without Redis it
+// falls back to the PostgreSQL upsert (last writer wins).
+func (r *Repository) BindAffinityFrom(ctx context.Context, bindingKey, authID, prev, model, source string, ttl time.Duration) (string, error) {
+	if r == nil || r.db == nil || bindingKey == "" || authID == "" {
+		return authID, nil
+	}
+	if rc := redisx.Default(); rc.Healthy() {
+		if prev == "" {
+			prev = "\x00" // never equals a stored credential id
+		}
+		rctx, cancel := rc.Ctx(ctx)
+		winner, err := bindScript.Run(rctx, rc.Raw(), []string{rc.Key("aff", bindingKey)}, authID, ttl.Milliseconds(), prev).Text()
+		cancel()
+		rc.Observe(err)
+		if err == nil {
+			return winner, nil
+		}
+	}
+	return authID, r.BindAffinity(ctx, bindingKey, authID, model, source, ttl)
 }
 
 // BindAffinity upserts a binding and extends its TTL. Refreshing an unchanged
