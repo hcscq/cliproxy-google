@@ -30,15 +30,19 @@ import (
 )
 
 const (
-	usageStreamName         = "usage:stream"
-	usageStreamGroup        = "usage-writers"
-	usageStreamBatch        = 500
-	usageStreamBlock        = time.Second
-	usageStreamClaimIdle    = time.Minute
-	usageStreamClaimEvery   = 15 * time.Second
-	usageStreamConsumerIdle = time.Hour
-	usageStreamDefaultMax   = 1_000_000
+	usageStreamName             = "usage:stream"
+	usageStreamGroup            = "usage-writers"
+	usageStreamBatch            = 500
+	usageStreamBlock            = time.Second
+	usageStreamClaimIdleDefault = time.Minute
+	usageStreamClaimEvery       = 15 * time.Second
+	usageStreamConsumerIdle     = time.Hour
+	usageStreamDefaultMax       = 1_000_000
 )
+
+// usageStreamClaimIdle is how long an entry sits unacked on another consumer
+// before it is claimed (var for tests).
+var usageStreamClaimIdle = usageStreamClaimIdleDefault
 
 // usageItemsStore writes usage items (with stream ids) in one batch.
 type usageItemsStore interface {
@@ -129,7 +133,7 @@ func (s *usageStream) Append(ctx context.Context, payload string, receivedAt tim
 }
 
 func (s *usageStream) ensureGroup(ctx context.Context) error {
-	err := s.rc.Raw().XGroupCreateMkStream(ctx, s.key(), usageStreamGroup, "0").Err()
+	err := s.rc.Bulk().XGroupCreateMkStream(ctx, s.key(), usageStreamGroup, "0").Err()
 	if err != nil && strings.Contains(err.Error(), "BUSYGROUP") {
 		return nil
 	}
@@ -209,7 +213,7 @@ func (s *usageStream) readAndFlush(ctx context.Context, start string, redelivere
 		block = -1 // no BLOCK for pending reads
 	}
 	rctx, cancel := context.WithTimeout(ctx, usageStreamBlock+3*time.Second)
-	res, err := s.rc.Raw().XReadGroup(rctx, &redis.XReadGroupArgs{
+	res, err := s.rc.Bulk().XReadGroup(rctx, &redis.XReadGroupArgs{
 		Group: usageStreamGroup, Consumer: s.consumer,
 		Streams: []string{s.key(), start}, Count: usageStreamBatch, Block: block,
 	}).Result()
@@ -231,7 +235,7 @@ func (s *usageStream) readAndFlush(ctx context.Context, start string, redelivere
 			return 0, ctx.Err()
 		}
 		rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		more, errMore := s.rc.Raw().XReadGroup(rctx, &redis.XReadGroupArgs{
+		more, errMore := s.rc.Bulk().XReadGroup(rctx, &redis.XReadGroupArgs{
 			Group: usageStreamGroup, Consumer: s.consumer,
 			Streams: []string{s.key(), ">"}, Count: int64(usageStreamBatch - len(msgs)), Block: -1,
 		}).Result()
@@ -247,7 +251,7 @@ func (s *usageStream) readAndFlush(ctx context.Context, start string, redelivere
 
 func (s *usageStream) claimAndFlush(ctx context.Context) (int, error) {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	msgs, _, err := s.rc.Raw().XAutoClaim(cctx, &redis.XAutoClaimArgs{
+	msgs, _, err := s.rc.Bulk().XAutoClaim(cctx, &redis.XAutoClaimArgs{
 		Stream: s.key(), Group: usageStreamGroup, Consumer: s.consumer,
 		MinIdle: usageStreamClaimIdle, Start: "0", Count: usageStreamBatch,
 	}).Result()
@@ -263,13 +267,13 @@ func (s *usageStream) claimAndFlush(ctx context.Context) (int, error) {
 func (s *usageStream) pruneConsumers(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	cs, err := s.rc.Raw().XInfoConsumers(cctx, s.key(), usageStreamGroup).Result()
+	cs, err := s.rc.Bulk().XInfoConsumers(cctx, s.key(), usageStreamGroup).Result()
 	if err != nil {
 		return
 	}
 	for _, c := range cs {
 		if c.Name != s.consumer && c.Pending == 0 && c.Idle >= usageStreamConsumerIdle {
-			_ = s.rc.Raw().XGroupDelConsumer(cctx, s.key(), usageStreamGroup, c.Name).Err()
+			_ = s.rc.Bulk().XGroupDelConsumer(cctx, s.key(), usageStreamGroup, c.Name).Err()
 		}
 	}
 }
@@ -309,7 +313,7 @@ func (s *usageStream) flush(ctx context.Context, msgs []redis.XMessage, redelive
 		s.flushed.Add(int64(stored))
 	}
 	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	pipe := s.rc.Raw().TxPipeline()
+	pipe := s.rc.Bulk().TxPipeline()
 	pipe.XAck(actx, s.key(), usageStreamGroup, ids...)
 	pipe.XDel(actx, s.key(), ids...)
 	_, err := pipe.Exec(actx)
@@ -341,10 +345,10 @@ func (s *usageStream) Status(ctx context.Context) UsageStreamStatus {
 	}
 	cctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	if n, err := s.rc.Raw().XLen(cctx, s.key()).Result(); err == nil {
+	if n, err := s.rc.Bulk().XLen(cctx, s.key()).Result(); err == nil {
 		st.Length = n
 	}
-	if gs, err := s.rc.Raw().XInfoGroups(cctx, s.key()).Result(); err == nil {
+	if gs, err := s.rc.Bulk().XInfoGroups(cctx, s.key()).Result(); err == nil {
 		for _, g := range gs {
 			if g.Name == usageStreamGroup {
 				st.Pending, st.Consumers = g.Pending, g.Consumers

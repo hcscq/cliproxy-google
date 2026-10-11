@@ -72,6 +72,7 @@ func (c *Config) ApplyEnv() {
 // return ErrUnavailable immediately instead of waiting on timeouts.
 type Client struct {
 	rdb     redis.UniversalClient
+	bulk    redis.UniversalClient // longer timeouts, for background bulk work
 	prefix  string
 	timeout time.Duration
 	healthy atomic.Bool
@@ -85,36 +86,10 @@ func Open(cfg Config) *Client {
 	if !cfg.Enabled || (strings.TrimSpace(cfg.Addr) == "" && len(cfg.SentinelAddrs) == 0) {
 		return nil
 	}
-	var rdb redis.UniversalClient
-	if len(cfg.SentinelAddrs) > 0 {
-		rdb = redis.NewFailoverClient(&redis.FailoverOptions{
-			MasterName:       cfg.MasterName,
-			SentinelAddrs:    cfg.SentinelAddrs,
-			Password:         cfg.Password,
-			SentinelPassword: cfg.Password,
-			DB:               cfg.DB,
-			DialTimeout:      500 * time.Millisecond,
-			ReadTimeout:      cfg.OpTimeout,
-			WriteTimeout:     cfg.OpTimeout,
-			PoolSize:         64,
-			MinIdleConns:     4,
-			MaxRetries:       0,
-		})
-	} else {
-		rdb = redis.NewClient(&redis.Options{
-			Addr:         cfg.Addr,
-			Password:     cfg.Password,
-			DB:           cfg.DB,
-			DialTimeout:  500 * time.Millisecond,
-			ReadTimeout:  cfg.OpTimeout,
-			WriteTimeout: cfg.OpTimeout,
-			PoolSize:     64,
-			MinIdleConns: 4,
-			MaxRetries:   0,
-		})
-	}
+	rdb := newRedisClient(cfg, cfg.OpTimeout, 64, 4)
+	bulk := newRedisClient(cfg, 5*time.Second, 8, 0)
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Client{rdb: rdb, prefix: cfg.KeyPrefix, timeout: cfg.OpTimeout, stop: cancel}
+	c := &Client{rdb: rdb, bulk: bulk, prefix: cfg.KeyPrefix, timeout: cfg.OpTimeout, stop: cancel}
 	c.probe(ctx)
 	go c.monitor(ctx)
 	mode := "standalone " + cfg.Addr
@@ -195,6 +170,9 @@ func (c *Client) Close() error {
 		return nil
 	}
 	c.stop()
+	if c.bulk != nil {
+		_ = c.bulk.Close()
+	}
 	return c.rdb.Close()
 }
 
@@ -203,3 +181,41 @@ var defaultClient atomic.Pointer[Client]
 
 func SetDefault(c *Client) { defaultClient.Store(c) }
 func Default() *Client     { return defaultClient.Load() }
+
+func newRedisClient(cfg Config, timeout time.Duration, pool, minIdle int) redis.UniversalClient {
+	if len(cfg.SentinelAddrs) > 0 {
+		return redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:       cfg.MasterName,
+			SentinelAddrs:    cfg.SentinelAddrs,
+			Password:         cfg.Password,
+			SentinelPassword: cfg.Password,
+			DB:               cfg.DB,
+			DialTimeout:      500 * time.Millisecond,
+			ReadTimeout:      timeout,
+			WriteTimeout:     timeout,
+			PoolSize:         pool,
+			MinIdleConns:     minIdle,
+			MaxRetries:       0,
+		})
+	}
+	return redis.NewClient(&redis.Options{
+		Addr:         cfg.Addr,
+		Password:     cfg.Password,
+		DB:           cfg.DB,
+		DialTimeout:  500 * time.Millisecond,
+		ReadTimeout:  timeout,
+		WriteTimeout: timeout,
+		PoolSize:     pool,
+		MinIdleConns: minIdle,
+		MaxRetries:   0,
+	})
+}
+
+// Bulk returns a client with multi-second timeouts for background bulk work
+// (stream consumers); request paths must use Raw.
+func (c *Client) Bulk() redis.UniversalClient {
+	if c.bulk != nil {
+		return c.bulk
+	}
+	return c.rdb
+}
