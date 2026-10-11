@@ -753,6 +753,11 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 		}
 	}
 
+	if strings.HasPrefix(strings.ToLower(modelName), "gpt-oss") {
+		// gpt-oss emits its reasoning after the answer; Gemini responses carry
+		// positional signature carriers and are left untouched.
+		responseJSON = claudeThinkingFirst(responseJSON)
+	}
 	return responseJSON
 }
 
@@ -767,4 +772,37 @@ func claudeMessageID(id string) string {
 		return id
 	}
 	return "msg_" + id
+}
+
+// claudeThinkingFirst moves thinking blocks ahead of text/tool_use blocks.
+// Claude clients expect thinking first; some upstream models (e.g. gpt-oss)
+// emit their reasoning after the answer.
+func claudeThinkingFirst(responseJSON []byte) []byte {
+	content := gjson.GetBytes(responseJSON, "content")
+	if !content.IsArray() {
+		return responseJSON
+	}
+	var thinking, other []string
+	seenOther, needsMove := false, false
+	for _, block := range content.Array() {
+		// Signature carriers (empty thinking text) are positional and stay put.
+		switch {
+		case block.Get("type").String() == "thinking" && block.Get("thinking").String() != "" && !strings.HasPrefix(block.Get("signature").String(), "cpa-"):
+			thinking = append(thinking, block.Raw)
+			if seenOther {
+				needsMove = true
+			}
+		default:
+			seenOther = true
+			other = append(other, block.Raw)
+		}
+	}
+	if !needsMove {
+		return responseJSON
+	}
+	out, err := sjson.SetRawBytes(responseJSON, "content", []byte("["+strings.Join(append(thinking, other...), ",")+"]"))
+	if err != nil {
+		return responseJSON
+	}
+	return out
 }

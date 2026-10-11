@@ -43,6 +43,10 @@ type antigravityUpstreamModel struct {
 	DisplayName string
 	MaxTokens   int
 	MaxOutput   int
+	// Optional thinking hints from the catalog (absent on many entries).
+	SupportsThinking *bool
+	MinThinking      int
+	ThinkingBudget   int
 }
 
 type antigravityCatalogEntry struct {
@@ -146,6 +150,7 @@ func mergeAntigravityModels(static []*ModelInfo, upstream map[string]antigravity
 			info.OutputTokenLimit = u.MaxOutput
 			info.MaxCompletionTokens = u.MaxOutput
 		}
+		info.Thinking = antigravityDynamicThinking(u)
 		if strings.Contains(id, "gemini") {
 			info.SupportedGenerationMethods = []string{"generateContent", "countTokens", "streamGenerateContent"}
 		}
@@ -299,12 +304,16 @@ func parseAntigravityCatalog(data []byte) (map[string]antigravityUpstreamModel, 
 			continue
 		}
 		var meta struct {
-			DisplayName     string `json:"displayName"`
-			MaxTokens       int    `json:"maxTokens"`
-			MaxOutputTokens int    `json:"maxOutputTokens"`
+			DisplayName       string `json:"displayName"`
+			MaxTokens         int    `json:"maxTokens"`
+			MaxOutputTokens   int    `json:"maxOutputTokens"`
+			SupportsThinking  *bool  `json:"supportsThinking"`
+			MinThinkingBudget int    `json:"minThinkingBudget"`
+			ThinkingBudget    int    `json:"thinkingBudget"`
 		}
 		_ = json.Unmarshal(raw, &meta)
-		out[strings.ToLower(id)] = antigravityUpstreamModel{ID: id, DisplayName: strings.TrimSpace(meta.DisplayName), MaxTokens: meta.MaxTokens, MaxOutput: meta.MaxOutputTokens}
+		out[strings.ToLower(id)] = antigravityUpstreamModel{ID: id, DisplayName: strings.TrimSpace(meta.DisplayName), MaxTokens: meta.MaxTokens, MaxOutput: meta.MaxOutputTokens,
+			SupportsThinking: meta.SupportsThinking, MinThinking: meta.MinThinkingBudget, ThinkingBudget: meta.ThinkingBudget}
 	}
 	return out, nil
 }
@@ -320,3 +329,48 @@ type antigravityStringError string
 func (e antigravityStringError) Error() string { return string(e) }
 
 const errAntigravityNoToken = antigravityStringError("credential has no access token")
+
+// antigravityDynamicThinking derives thinking capabilities for a model that is
+// only known from the upstream catalog. Without them the proxy treats the model
+// as "no thinking support" and strips reasoning_effort / thinking /
+// thinkingConfig from every request. Order: an explicit catalog
+// supportsThinking=false; a static definition with the same id (e.g. the Gemini
+// API entry for gemini-2.5-flash); catalog budget hints; Gemini family defaults.
+func antigravityDynamicThinking(u antigravityUpstreamModel) *registry.ThinkingSupport {
+	if u.SupportsThinking != nil && !*u.SupportsThinking {
+		return nil
+	}
+	if static := registry.LookupStaticModelInfo(u.ID); static != nil && static.Thinking != nil {
+		t := *static.Thinking
+		t.Levels = append([]string(nil), static.Thinking.Levels...)
+		return &t
+	}
+	id := strings.ToLower(u.ID)
+	maxBudget := 24576
+	if u.MaxOutput > 0 && u.MaxOutput-1 < maxBudget {
+		maxBudget = u.MaxOutput - 1
+	}
+	switch {
+	case strings.HasPrefix(id, "gemini-2.5"):
+		minBudget := 128
+		if u.MinThinking > 0 {
+			minBudget = u.MinThinking
+		}
+		// Flash and Flash-Lite can turn thinking off; Pro cannot.
+		return &registry.ThinkingSupport{Min: minBudget, Max: maxBudget, ZeroAllowed: !strings.Contains(id, "pro"), DynamicAllowed: true}
+	case strings.HasPrefix(id, "gemini-3") || strings.HasPrefix(id, "gemini-pro") || strings.HasPrefix(id, "gemini-flash"):
+		if u.MaxOutput > 0 {
+			maxBudget = u.MaxOutput - 1
+		} else {
+			maxBudget = 32768
+		}
+		return &registry.ThinkingSupport{Min: 128, Max: maxBudget, DynamicAllowed: true, Levels: []string{"low", "medium", "high"}}
+	case u.SupportsThinking != nil && *u.SupportsThinking:
+		minBudget := u.MinThinking
+		if minBudget <= 0 {
+			minBudget = 1
+		}
+		return &registry.ThinkingSupport{Min: minBudget, Max: maxBudget, DynamicAllowed: true}
+	}
+	return nil
+}
