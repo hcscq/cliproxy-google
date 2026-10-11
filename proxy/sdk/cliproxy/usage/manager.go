@@ -44,6 +44,10 @@ type Record struct {
 	Source            string
 	// ReasoningEffort stores the translated upstream thinking level for request event logs.
 	ReasoningEffort string
+	// ThinkingParams are the exact thinking parameters sent upstream (e.g. "budget=8192").
+	ThinkingParams string
+	// ThinkingNote explains an adjusted "thinking off" request ("" if not adjusted).
+	ThinkingNote string
 	// ServiceTier stores the client-requested service tier.
 	ServiceTier string
 	// RequestServiceTier is a deprecated input-only alias retained for existing

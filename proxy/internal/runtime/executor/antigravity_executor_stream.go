@@ -435,7 +435,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			terminalDelivered = true
 		}
 	}(httpResp)
-	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+	return &cliproxyexecutor.StreamResult{Headers: withThinkingNote(httpResp.Header.Clone(), reporter), Chunks: out}, nil
 }
 
 func (e *AntigravityExecutor) executeCompactionStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {

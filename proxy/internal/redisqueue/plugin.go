@@ -152,6 +152,8 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		IsFork:              clientRequestMetadata.IsFork,
 		IsCompaction:        clientRequestMetadata.IsCompaction,
 		ReasoningEffort:     reasoningEffort,
+		ThinkingParams:      strings.TrimSpace(record.ThinkingParams),
+		ThinkingNote:        strings.TrimSpace(record.ThinkingNote),
 		ServiceTier:         serviceTier,
 		ResponseServiceTier: responseServiceTier,
 		ResponseModel:       responseModel,
@@ -182,6 +184,8 @@ type queuedUsageDetail struct {
 	IsFork              bool                     `json:"is_fork,omitempty"`
 	IsCompaction        bool                     `json:"is_compaction,omitempty"`
 	ReasoningEffort     string                   `json:"reasoning_effort"`
+	ThinkingParams      string                   `json:"thinking_params,omitempty"`
+	ThinkingNote        string                   `json:"thinking_note,omitempty"`
 	ServiceTier         string                   `json:"service_tier"`
 	ResponseServiceTier string                   `json:"response_service_tier,omitempty"`
 	ResponseModel       string                   `json:"response_model,omitempty"`

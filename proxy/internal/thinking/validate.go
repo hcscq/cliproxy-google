@@ -192,6 +192,16 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 			config.Level = ThinkingLevel(support.Levels[0])
 		}
 	}
+	if config.Mode == ModeNone && toFormat != "claude" {
+		switch support.OffMode {
+		case OffModeZero, OffModeZeroReduced:
+			config.Budget, config.Level, config.ExplicitZero = 0, "", true
+		case OffModeOmit:
+			config.Budget, config.Level, config.ExplicitZero = 0, "", false
+		case OffModeMinimal:
+			config.Budget, config.Level, config.ExplicitZero = 0, LevelMinimal, false
+		}
+	}
 
 	return &config, nil
 }

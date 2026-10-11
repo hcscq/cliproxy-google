@@ -542,3 +542,19 @@ func generateStableSessionID(payload []byte) string {
 	}
 	return generateSessionID()
 }
+
+// ThinkingAdjustedHeader tells clients that a request to turn thinking off was
+// honoured only partially on this model (value: what was sent instead).
+const ThinkingAdjustedHeader = "X-Thinking-Adjusted"
+
+func withThinkingNote(h http.Header, reporter *helps.UsageReporter) http.Header {
+	note := reporter.ThinkingNote()
+	if note == "" {
+		return h
+	}
+	if h == nil {
+		h = make(http.Header)
+	}
+	h.Set(ThinkingAdjustedHeader, note)
+	return h
+}

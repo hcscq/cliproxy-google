@@ -103,6 +103,12 @@ func (a *Applier) applyLevelFormat(body []byte, config thinking.ThinkingConfig) 
 	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.include_thoughts")
 
 	if config.Mode == thinking.ModeNone {
+		if config.ExplicitZero {
+			// The model accepts an explicit zero budget (measured per model);
+			// send it rather than relying on the model's default.
+			result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.thinkingBudget", 0)
+			return result, nil
+		}
 		if config.Budget == 0 && config.Level == "" {
 			// With the amount fully disabled, visibility is irrelevant. Restoring
 			// includeThoughts alone would recreate thinkingConfig and let a

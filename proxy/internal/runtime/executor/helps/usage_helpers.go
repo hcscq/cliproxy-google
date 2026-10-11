@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"io"
 	"net/http"
 	"reflect"
@@ -29,6 +30,9 @@ type UsageReporter struct {
 	requestID           string
 	traceID             string
 	provider            string
+	requested           string
+	thinkingParams      string
+	thinkingNote        string
 	baseURL             string
 	executorType        string
 	model               string
@@ -127,6 +131,7 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 		source:          resolveUsageSource(auth, apiKey),
 		authType:        resolveUsageAuthType(auth),
 		reasoning:       usage.ReasoningEffortFromContext(ctx),
+		requested:       usage.ReasoningEffortFromContext(ctx),
 		serviceTier:     usage.ServiceTierFromContext(ctx),
 		generate:        usage.GenerateFromContext(ctx),
 		stream:          usage.StreamFromContext(ctx),
@@ -337,6 +342,21 @@ func (r *UsageReporter) SetTranslatedReasoningEffort(payload []byte, format stri
 		return
 	}
 	r.reasoning = thinking.ExtractTranslatedReasoningEffort(payload, format)
+	r.thinkingParams = thinking.ExactThinkingParams(payload, format)
+	var support *registry.ThinkingSupport
+	if info := registry.LookupModelInfo(r.model, r.provider); info != nil {
+		support = info.Thinking
+	}
+	r.thinkingNote = thinking.OffAdjustmentNote(r.requested, r.thinkingParams, support)
+}
+
+// ThinkingNote returns why a "thinking off" request was adjusted ("" if it was not).
+// Executors surface it to clients as the X-Thinking-Adjusted response header.
+func (r *UsageReporter) ThinkingNote() string {
+	if r == nil {
+		return ""
+	}
+	return r.thinkingNote
 }
 
 func (r *UsageReporter) TrackHTTPClient(client *http.Client) *http.Client {
@@ -626,6 +646,8 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		AccessTokenSHA256:   r.accessTokenFingerprint(),
 		AuthType:            r.authType,
 		ReasoningEffort:     r.reasoning,
+		ThinkingParams:      r.thinkingParams,
+		ThinkingNote:        r.thinkingNote,
 		ServiceTier:         r.serviceTier,
 		ResponseServiceTier: strings.TrimSpace(detail.ResponseServiceTier),
 		ResponseModel:       responseModel,

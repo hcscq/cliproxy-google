@@ -75,7 +75,24 @@ type ThinkingConfig struct {
 	Budget int
 	// Level is the thinking level, only effective when Mode is ModeLevel
 	Level ThinkingLevel
+	// ExplicitZero (ModeNone) sends thinkingBudget=0 instead of omitting the
+	// thinking config, for models whose upstream accepts 0.
+	ExplicitZero bool
 }
+
+// Per-model ways to honour "thinking off" (registry.ThinkingSupport.OffMode).
+const (
+	// OffModeZero: upstream accepts thinkingBudget=0 and the model then does not think.
+	OffModeZero = "zero"
+	// OffModeZeroReduced: upstream accepts thinkingBudget=0 but the model still
+	// thinks a little; it is the closest to off, reported as an adjustment.
+	OffModeZeroReduced = "zero-reduced"
+	// OffModeOmit: upstream rejects 0 but the model does not think by default,
+	// so omitting the thinking config is off.
+	OffModeOmit = "omit"
+	// OffModeMinimal: upstream rejects 0; thinkingLevel=minimal is the closest.
+	OffModeMinimal = "minimal"
+)
 
 // SuffixResult represents the result of parsing a model name for thinking suffix.
 //
