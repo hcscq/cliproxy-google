@@ -95,25 +95,61 @@ function Chip({ kind, title }: { kind: ChipKind; title: string }) {
   );
 }
 
+export type CredBucket = 'ok' | 'cooling' | 'error' | 'removed' | 'other';
+const BUCKET_ORDER: CredBucket[] = ['ok', 'cooling', 'error', 'removed', 'other'];
+const BUCKET_LABEL: Record<CredBucket, [string, string]> = {
+  ok: ['可用', 'ok'],
+  cooling: ['冷却', 'cooling'],
+  error: ['错误', 'error'],
+  removed: ['已移除', 'removed'],
+  other: ['其他', 'other'],
+};
+
+/** Counts credentials per state; every credential lands in exactly one bucket. */
+export function credBuckets(creds: ModelHealth['credentials']): { bucket: CredBucket; count: number }[] {
+  const n: Record<CredBucket, number> = { ok: 0, cooling: 0, error: 0, removed: 0, other: 0 };
+  for (const c of creds) {
+    const b = (BUCKET_ORDER as string[]).includes(c.state) ? (c.state as CredBucket) : 'other';
+    n[b]++;
+  }
+  return BUCKET_ORDER.filter((b) => n[b] > 0).map((b) => ({ bucket: b, count: n[b] }));
+}
+
+/** Fixed-height credential summary: usable/total plus one segmented bar (width ∝ count per state).
+ *  Height never depends on the number of credentials; full per-credential list is in the tooltip and the drawer. */
 function CredSummary({ m }: { m: ModelHealth }) {
   const { tr } = useI18n();
-  const ok = m.credentials.filter((c) => c.state === 'ok').length;
   const total = m.credentials.length;
-  const tip = m.credentials
-    .map((c) => `${c.label}: ${c.state}${c.http_status ? ` ${c.http_status}` : ''}${c.quota_remaining !== undefined ? ` · ${tr('额度', 'quota')} ${Math.round(c.quota_remaining * 100)}%` : ''}`)
-    .join('\n');
+  const buckets = credBuckets(m.credentials);
+  const ok = buckets.find((b) => b.bucket === 'ok')?.count ?? 0;
+  const counts = buckets.map((b) => `${tr(BUCKET_LABEL[b.bucket][0], BUCKET_LABEL[b.bucket][1])} ${b.count}`).join(' · ');
+  const tip =
+    counts +
+    '\n' +
+    m.credentials
+      .map((c) => `${c.label}: ${c.state}${c.http_status ? ` ${c.http_status}` : ''}${c.quota_remaining !== undefined ? ` · ${tr('额度', 'quota')} ${Math.round(c.quota_remaining * 100)}%` : ''}`)
+      .join('\n') +
+    '\n' +
+    tr('点击模型名查看各凭据详情', 'Click the model for per-credential details');
   return (
     <span className="cred-sum" title={tip}>
       <span className={ok === total ? 'ok-text' : ok === 0 ? 'err-text' : 'warn-text'}>
         {ok}/{total}
       </span>
-      <span className="mini-bars">
-        {m.credentials.map((c) => (
-          <span key={c.label} className={`mini-bar ${c.state}`}>
-            <span style={{ width: `${Math.round((c.quota_remaining ?? (c.state === 'ok' ? 1 : 0)) * 100)}%` }} />
-          </span>
+      <span className="seg-bar" role="img" aria-label={counts}>
+        {buckets.map((b) => (
+          <span key={b.bucket} className={`seg ${b.bucket}`} style={{ flexGrow: b.count }} />
         ))}
       </span>
+      {buckets.some((b) => b.bucket !== 'ok') && (
+        <span className="seg-counts small faint">
+          {buckets
+            .filter((b) => b.bucket !== 'ok')
+            .map((b) => (
+              <span key={b.bucket} className={`seg-count ${b.bucket}`}>{b.count}</span>
+            ))}
+        </span>
+      )}
     </span>
   );
 }
@@ -188,7 +224,7 @@ export function ModelHealthTab() {
               <span><Chip kind="leaving" title="" /> {tr('上游标记即将下线', 'Marked "Leaving soon" upstream')}</span>
               <span><Chip kind="switch" title="" /> {tr('上游建议的替代模型不在当前账号目录中', 'Suggested replacement not in this account\'s catalog')}</span>
               <span><Chip kind="text" title="" /> {tr('仅支持文本输入', 'Text input only')}</span>
-              <span><span className="mini-bar ok"><span style={{ width: '70%' }} /></span> {tr('凭据列：可用数 / 总数，条形为各凭据剩余额度', 'Credentials: usable/total, bars = remaining quota')}</span>
+              <span><span className="seg-bar"><span className="seg ok" style={{ flexGrow: 6 }} /><span className="seg cooling" style={{ flexGrow: 3 }} /><span className="seg error" style={{ flexGrow: 1 }} /></span> {tr('凭据列：可用数 / 总数；条按状态分段（绿 可用 / 黄 冷却 / 红 错误·移除 / 灰 其他），右侧为非可用数；悬停看逐个凭据', 'Credentials: usable/total; bar segmented by state (green ok / amber cooling / red error·removed / grey other); hover for each credential')}</span>
             </div>
           </div>
         )}

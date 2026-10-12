@@ -289,7 +289,13 @@ tr.row-muted td { opacity: .62; }
 .chip-hidden { background: var(--bg-sunken); color: var(--text-3); }
 .ok-text { color: var(--ok); } .warn-text { color: var(--warn); } .err-text { color: var(--err); }
 .cred-sum { display: inline-flex; align-items: center; gap: 8px; cursor: help; font-variant-numeric: tabular-nums; }
-.mini-bars { display: inline-flex; flex-direction: column; gap: 2px; }
+.seg-bar { display: inline-flex; width: 72px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-sunken); gap: 1px; flex: none; vertical-align: middle; }
+.seg { display: block; min-width: 3px; height: 100%; background: var(--faint, #999); }
+.seg.ok { background: var(--ok); } .seg.cooling { background: var(--warn); } .seg.error, .seg.removed { background: var(--err); }
+.seg.removed { opacity: .55; }
+.seg-counts { display: inline-flex; gap: 4px; font-variant-numeric: tabular-nums; }
+.seg-count.cooling { color: var(--warn); } .seg-count.error, .seg-count.removed { color: var(--err); }
+.cred-sum { white-space: nowrap; }
 .mini-bar { display: inline-block; width: 46px; height: 4px; border-radius: 2px; background: var(--bg-sunken); overflow: hidden; vertical-align: middle; }
 .mini-bar > span { display: block; height: 100%; background: var(--ok); }
 .mini-bar.cooling > span { background: var(--warn); } .mini-bar.error > span { background: var(--err); }

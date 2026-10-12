@@ -35,3 +35,19 @@ describe('catalog labels', () => {
     expect(shortReason(m as never, zh)).toContain('从上游目录移除');
   });
 });
+
+import { credBuckets } from './ModelHealth';
+describe('credential buckets', () => {
+  it('counts every credential once, scales to hundreds', () => {
+    const creds = Array.from({ length: 300 }, (_, i) => ({ label: `c${i}`, in_catalog: true, state: ['ok', 'cooling', 'error', 'weird'][i % 4] }));
+    const b = credBuckets(creds);
+    expect(b).toEqual([
+      { bucket: 'ok', count: 75 },
+      { bucket: 'cooling', count: 75 },
+      { bucket: 'error', count: 75 },
+      { bucket: 'other', count: 75 },
+    ]);
+    expect(b.reduce((a, x) => a + x.count, 0)).toBe(300);
+    expect(credBuckets([])).toEqual([]);
+  });
+});
