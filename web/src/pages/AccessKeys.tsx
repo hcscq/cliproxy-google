@@ -136,8 +136,10 @@ export function AccessKeysPage() {
                       <input type="checkbox" checked={sel.has(k.id)} onChange={() => sel.toggle(k.id)} aria-label="select" />
                     </td>
                     <td>
-                      <div>{k.display_name || <span className="faint">{tr('未命名', 'Unnamed')}</span>}</div>
-                      <div className="faint small">ID {k.id}</div>
+                      <div className="cell-title">{k.display_name || <span className="faint">{tr('未命名', 'Unnamed')}</span>}</div>
+                      <div className="cell-sub">
+                        <span className="mono" title={tr('密钥 ID', 'Key ID')}>#{k.id}</span>
+                      </div>
                     </td>
                     <td>
                       <div className="row" style={{ gap: 6 }}>

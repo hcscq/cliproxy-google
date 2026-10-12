@@ -23,7 +23,7 @@ export function DashboardPage() {
   const { t, tr, lang } = useI18n();
   const topo = useAsync(() => api.topology(), [], 15000);
   const creds = useAsync(() => api.credentials(), [], 30000);
-  const quota = useAsync(() => api.quotaCredentials({ limit: 100 }), [], 60000);
+  const quota = useAsync(() => api.quotaCredentialsAll(), [], 60000);
   const usage = useAsync(() => api.usageOverview({ interval: 'hour' }), [], 60000);
   const failures = useAsync(() => api.requestEvents({ status: 'failed', limit: 5 }), [], 60000);
 

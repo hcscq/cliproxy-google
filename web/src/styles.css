@@ -352,3 +352,13 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .kv-grid > div > .muted:first-child { display: block; font-size: 12px; margin-bottom: 2px; }
 .muted.sm, .sm { font-size: 12px; }
 .wrap { white-space: pre-wrap; word-break: break-word; }
+
+/* ---- table cell typography: title + secondary meta line, small pills ---- */
+.cell-title { font-weight: 500; color: var(--text); line-height: 1.35; }
+.cell-sub { margin-top: 2px; font-size: 12px; line-height: 1.3; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.cell-sub .mono { font-size: 11.5px; }
+.pill-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.pill { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 11.5px; font-weight: 500; line-height: 1; white-space: nowrap; }
+.pill-group { background: var(--primary-soft); color: var(--primary); }
+.pill-group::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .8; }
+.pill-tag { background: transparent; color: var(--text-2); border: 1px solid var(--border); }

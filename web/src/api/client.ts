@@ -195,6 +195,22 @@ export class ApiClient {
   quotaCredentials(query?: Query) {
     return this.get<QuotaList>('/quota/credentials', query);
   }
+  /** All quota snapshots. The server caps `limit` at 200, so page with offset. */
+  async quotaCredentialsAll(query?: Query): Promise<QuotaList> {
+    const pageSize = 200;
+    const first = await this.quotaCredentials({ ...query, limit: pageSize, offset: 0 });
+    const items = [...(first.items ?? [])];
+    while (items.length < (first.total ?? 0) && items.length < 20000) {
+      const next = await this.quotaCredentials({ ...query, limit: pageSize, offset: items.length });
+      if (!next.items?.length) break;
+      items.push(...next.items);
+    }
+    return { ...first, items };
+  }
+  /** Ask Home to re-probe quota now (empty ids = every eligible credential). */
+  collectQuota(credentialIds?: string[]) {
+    return this.post<{ accepted: number; running: boolean }>('/quota/collect', credentialIds?.length ? { credential_ids: credentialIds } : {});
+  }
   importVertex(file: File, location?: string) {
     const form = new FormData();
     form.append('file', file, file.name);

@@ -39,7 +39,7 @@ export function CredentialsPage() {
   useEffect(() => setPage(1), [filter]);
   const creds = useAsync(() => api.searchCredentials({ ...filter, page, page_size: size }), [filter, page, size], 20000);
   const groups = useGroupLookup();
-  const quota = useAsync(() => api.quotaCredentials({ limit: 500 }), [], 60000);
+  const quota = useAsync(() => api.quotaCredentialsAll(), [], 60000);
   const sel = useSelection<string>();
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<CredentialSearchItem | null>(null);
@@ -143,7 +143,26 @@ export function CredentialsPage() {
                 <th>{tr('账号', 'Account')}</th>
                 <th>{t('provider')}</th>
                 <th>{t('status')}</th>
-                <th className="hide-sm">{t('quota')}</th>
+                <th className="hide-sm">
+                  <span className="row" style={{ gap: 6 }}>
+                    {t('quota')}
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      data-testid="quota-refresh"
+                      disabled={busy === 'quota-refresh'}
+                      title={tr('立即重新探测全部凭据额度（Home 后台约每 30 分钟自动探测）', 'Re-probe quota for all credentials now (Home also probes ~every 30 min)')}
+                      onClick={() =>
+                        run('quota-refresh', async () => {
+                          const r = await api.collectQuota();
+                          toast(tr(`已触发 ${r.accepted} 个凭据的额度探测`, `Quota probe started for ${r.accepted} credential(s)`));
+                          setTimeout(() => void quota.reload(), 4000);
+                        })
+                      }
+                    >
+                      {busy === 'quota-refresh' ? <Spinner /> : tr('刷新', 'Refresh')}
+                    </button>
+                  </span>
+                </th>
                 <th className="hide-sm">{t('priority')}</th>
                 <th className="hide-sm">{t('updated')}</th>
                 <th style={{ textAlign: 'right' }}>{t('enabled')}</th>
@@ -156,22 +175,22 @@ export function CredentialsPage() {
                     <input type="checkbox" checked={sel.has(c.id)} onChange={() => sel.toggle(c.id)} aria-label="select" />
                   </td>
                   <td>
-                    <div className="ellipsis" style={{ maxWidth: 320 }} title={c.label || c.email || c.name}>
+                    <div className="cell-title ellipsis" style={{ maxWidth: 320 }} title={c.label || c.email || c.name}>
                       {c.label || c.email || c.name}
                     </div>
-                    <div className="faint small mono ellipsis" style={{ maxWidth: 320 }}>
-                      {c.note ? `📝 ${c.note}` : c.id}
+                    <div className="cell-sub ellipsis" style={{ maxWidth: 320 }} title={c.note || c.id}>
+                      {c.note ? c.note : <span className="mono">{c.id.slice(0, 8)}</span>}
                     </div>
                     {((c.group_ids?.length ?? 0) > 0 || (c.tags?.length ?? 0) > 0) && (
-                      <div className="scope-chips small" style={{ marginTop: 3 }}>
+                      <div className="pill-row">
                         {(c.group_ids ?? []).slice(0, 4).map((id) => (
-                          <span key={`g${id}`} className="tag" title={tr('所属凭据分组', 'Credential group')}>
-                            🔑 {groups.cgNames.get(id) ?? `#${id}`}
+                          <span key={`g${id}`} className="pill pill-group" title={tr('所属凭据分组', 'Credential group')}>
+                            {groups.cgNames.get(id) ?? `#${id}`}
                           </span>
                         ))}
                         {(c.group_ids?.length ?? 0) > 4 && <span className="faint">+{(c.group_ids?.length ?? 0) - 4}</span>}
                         {(c.tags ?? []).map((tg) => (
-                          <span key={`t${tg}`} className="tag tag-soft" title={tr('标签', 'Tag')}>
+                          <span key={`t${tg}`} className="pill pill-tag" title={tr('标签', 'Tag')}>
                             #{tg}
                           </span>
                         ))}
@@ -194,7 +213,7 @@ export function CredentialsPage() {
                     </div>
                   </td>
                   <td className="hide-sm">
-                    <QuotaWindows item={quotaById.get(c.id)} compact />
+                    <QuotaWindows item={quotaById.get(c.id)} compact error={quota.error} loading={!quota.data && !quota.error} />
                   </td>
                   <td className="hide-sm">{c.priority ?? <span className="faint">0</span>}</td>
                   <td className="hide-sm nowrap faint small">{fmtRelative(c.updated_at, lang)}</td>

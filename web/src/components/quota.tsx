@@ -38,9 +38,28 @@ export function QuotaStatusBadge({ item }: { item?: QuotaItem }) {
 }
 
 /** Compact quota windows (e.g. Antigravity "Gemini Models" weekly %). */
-export function QuotaWindows({ item, compact }: { item?: QuotaItem; compact?: boolean }) {
+export function QuotaWindows({ item, compact, error, loading }: { item?: QuotaItem; compact?: boolean; error?: unknown; loading?: boolean }) {
   const { tr, lang } = useI18n();
-  if (!item || !item.primary_windows?.length) return <span className="faint small">{tr('暂无额度数据', 'No quota data')}</span>;
+  if (!item || !item.primary_windows?.length) {
+    if (loading) return <span className="faint small">{tr('加载中…', 'Loading…')}</span>;
+    if (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return (
+        <span className="err-text small" title={msg}>
+          {tr('额度接口请求失败', 'Quota API request failed')}
+        </span>
+      );
+    }
+    let why: [string, string] = ['暂无额度数据：Home 尚未探测该凭据，可点表头“刷新”', 'No quota data yet: Home has not probed this credential — use Refresh in the header'];
+    if (item?.quota_status === 'unsupported') why = ['该凭据类型上游不提供额度接口', 'Upstream exposes no quota API for this credential type'];
+    else if (item?.collection_status === 'failed' || item?.quota_status === 'error') why = ['额度探测失败，详见凭据详情', 'Quota probe failed — see credential details'];
+    else if (item) why = ['上游本次未返回额度窗口', 'Upstream returned no quota windows on the last probe'];
+    return (
+      <span className="faint small" title={tr(why[0], why[1])}>
+        {item?.quota_status === 'unsupported' ? tr('不支持', 'Unsupported') : tr('暂无额度数据', 'No quota data')}
+      </span>
+    );
+  }
   return (
     <div className="stack" style={{ gap: compact ? 6 : 10, minWidth: compact ? 180 : undefined }}>
       {item.primary_windows.map((w) => {
