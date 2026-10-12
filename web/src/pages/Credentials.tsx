@@ -156,11 +156,11 @@ export function CredentialsPage() {
             <colgroup>
               <col style={{ width: 36 }} />
               <col style={{ width: 86 }} />
-              <col />
+              <col style={{ width: 230 }} />
               <col style={{ width: 100 }} />
               <col style={{ width: 124 }} />
-              <col style={{ width: 172 }} />
-              <col className="hide-sm" style={{ width: 200 }} />
+              <col style={{ width: 180 }} />
+              <col className="hide-sm" style={{ minWidth: 200 }} />
               <col className="hide-sm" style={{ width: 68 }} />
               <col className="hide-sm" style={{ width: 88 }} />
               <col style={{ width: 72 }} />
