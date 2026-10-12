@@ -609,6 +609,15 @@ func (s *Service) runHomeSubscriber(homeCtx context.Context, parentCtx context.C
 		if retry {
 			releaseCancel()
 			<-releaseDone
+			if home.IsHomeReassignedError(errRun) {
+				// Planned move: the old Home is alive; let its in-flight
+				// dispatches answer so the move stays a clean takeover.
+				idleCtx, cancelIdle := context.WithTimeout(context.WithoutCancel(parentCtx), 2*time.Second)
+				if !client.WaitDispatchIdle(idleCtx) {
+					log.Warn("home move: dispatches still in flight after 2s; closing anyway")
+				}
+				cancelIdle()
+			}
 			client.Close()
 
 			settleBound := time.Duration(cancelBound.Load())

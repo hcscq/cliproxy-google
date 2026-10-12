@@ -152,6 +152,23 @@ type clusterNodesEnvelope struct {
 // Home the leader assigned it to (same graceful path as a Home failover).
 var errHomeReassigned = errors.New("home assignment changed; reconnecting to assigned home")
 
+// WaitDispatchIdle waits (bounded by ctx) until no auth dispatch RPC is in
+// flight. Used before closing a client on a planned move so that no dispatch
+// is cut mid-flight: a cut one is ambiguous and forbids membership takeover.
+func (c *Client) WaitDispatchIdle(ctx context.Context) bool {
+	if c == nil {
+		return true
+	}
+	for c.dispatchInFlight.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return true
+}
+
 // IsHomeReassignedError reports whether a lifetime ended for a reassignment.
 func IsHomeReassignedError(err error) bool { return errors.Is(err, errHomeReassigned) }
 
@@ -230,6 +247,7 @@ type Client struct {
 	heartbeatOK       atomic.Bool
 	dispatchFenced    atomic.Bool
 	ambiguousDispatch atomic.Bool
+	dispatchInFlight  atomic.Int64 // auth dispatch RPCs issued and not yet answered
 	// casUnsupported latches when Home does not implement the CAS command.
 	// It is deliberately NOT carried across NewLifetime: CAS support is a
 	// property of the Home deployment, so re-probing once per client lifetime
@@ -1538,6 +1556,8 @@ func (c *Client) rPopAuth(ctx context.Context, requestedModel string, sessionID 
 	if c.dispatchFenced.Load() {
 		return nil, ErrDispatchFenced
 	}
+	c.dispatchInFlight.Add(1)
+	defer c.dispatchInFlight.Add(-1)
 	conn := cmd.Conn()
 	defer func() {
 		if errClose := conn.Close(); errClose != nil {
