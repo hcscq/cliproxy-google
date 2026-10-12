@@ -100,9 +100,45 @@ type egressState struct {
 	mu     sync.Mutex
 	repo   EgressRepo
 	status map[string]*EgressStatus // by proxy URL
+	// pins caches each credential's full-auth proxy_url / pause flag; the manager's
+	// minimal projections omit them. Refreshed from Postgres every egressPinRefresh.
+	pins   map[string]egressPin
+	pinsAt time.Time
 }
 
 // SetEgressRepo enables sticky egress management.
+type egressPin struct {
+	proxy  string
+	paused bool
+}
+
+const egressPinRefresh = 5 * time.Minute
+
+func (r *Runtime) egressPinFor(ctx context.Context, a *coreauth.Auth, refresh bool) (egressPin, bool) {
+	r.egress.mu.Lock()
+	pin, ok := r.egress.pins[a.ID]
+	r.egress.mu.Unlock()
+	if ok && !refresh {
+		return pin, true
+	}
+	full := r.fullAuth(ctx, a.ID)
+	if full == nil {
+		return pin, ok
+	}
+	pin = egressPin{proxy: strings.TrimSpace(full.ProxyURL), paused: full.Disabled && metaString(full, EgressPausedReasonKey) == egressPausedDown}
+	r.setPin(a.ID, pin)
+	return pin, true
+}
+
+func (r *Runtime) setPin(id string, pin egressPin) {
+	r.egress.mu.Lock()
+	if r.egress.pins == nil {
+		r.egress.pins = map[string]egressPin{}
+	}
+	r.egress.pins[id] = pin
+	r.egress.mu.Unlock()
+}
+
 func (r *Runtime) SetEgressRepo(repo EgressRepo) {
 	r.egress.mu.Lock()
 	r.egress.repo = repo
@@ -280,42 +316,69 @@ func (r *Runtime) egressRound(ctx context.Context, specs []EgressSpec) {
 	}
 	auths := r.coreManager.List()
 	sort.Slice(auths, func(i, j int) bool { return auths[i].ID < auths[j].ID })
-	counts := map[string]int{}
-	for _, a := range auths {
-		if isAntigravity(a) && a.ProxyURL != "" {
-			counts[a.ProxyURL]++
-		}
+	r.egress.mu.Lock()
+	refresh := now.Sub(r.egress.pinsAt) >= egressPinRefresh
+	if refresh {
+		r.egress.pinsAt = now
 	}
+	r.egress.mu.Unlock()
+	pins := map[string]egressPin{}
+	counts := map[string]int{}
 	for _, a := range auths {
 		if !isAntigravity(a) {
 			continue
 		}
-		if strings.TrimSpace(a.ProxyURL) == "" {
+		pin, ok := r.egressPinFor(ctx, a, refresh)
+		if !ok {
+			continue
+		}
+		pins[a.ID] = pin
+		if pin.proxy != "" {
+			counts[pin.proxy]++
+		}
+	}
+	for _, a := range auths {
+		pin, ok := pins[a.ID]
+		if !ok {
+			continue
+		}
+		if pin.proxy == "" {
 			spec, ok := pickEgress(specs, status, counts)
 			if !ok {
 				continue // no healthy egress: leave unassigned, try next round
 			}
 			if r.assignEgress(ctx, a.ID, spec, now) {
 				counts[spec.ProxyURL]++
+				r.setPin(a.ID, egressPin{proxy: spec.ProxyURL})
+				if st := status[spec.ProxyURL]; st != nil {
+					st.Credentials++
+				}
+			} else {
+				r.egressPinFor(ctx, a, true)
 			}
 			continue
 		}
-		spec, ours := known[a.ProxyURL]
+		spec, ours := known[pin.proxy]
 		if !ours {
 			continue // manual proxy: respected, not managed
 		}
-		st := status[a.ProxyURL]
+		st := status[pin.proxy]
 		if st != nil {
 			st.Credentials++
 		}
-		paused := a.Disabled && metaString(a, EgressPausedReasonKey) == egressPausedDown
 		switch {
 		case st != nil && !st.Healthy && !a.Disabled:
-			r.setEgressPause(ctx, a.ID, spec, true, now)
+			if r.setEgressPause(ctx, a.ID, spec, true, now) {
+				r.setPin(a.ID, egressPin{proxy: pin.proxy, paused: true})
+			}
 			st.Paused++
-		case paused && (st == nil || st.Healthy):
-			r.setEgressPause(ctx, a.ID, spec, false, now)
-		case paused:
+		case pin.paused && (st == nil || st.Healthy):
+			if r.setEgressPause(ctx, a.ID, spec, false, now) {
+				r.setPin(a.ID, egressPin{proxy: pin.proxy})
+			} else {
+				r.egressPinFor(ctx, a, true)
+			}
+		case pin.paused:
 			st.Paused++
 		}
 	}
@@ -359,17 +422,17 @@ func (r *Runtime) assignEgress(ctx context.Context, id string, spec EgressSpec, 
 	return true
 }
 
-func (r *Runtime) setEgressPause(ctx context.Context, id string, spec EgressSpec, pause bool, now time.Time) {
+func (r *Runtime) setEgressPause(ctx context.Context, id string, spec EgressSpec, pause bool, now time.Time) bool {
 	full := r.fullAuth(ctx, id)
 	if full == nil {
-		return
+		return false
 	}
 	if full.Metadata == nil {
 		full.Metadata = map[string]any{}
 	}
 	if pause {
 		if full.Disabled {
-			return
+			return false
 		}
 		full.Disabled = true
 		full.Status = coreauth.StatusDisabled
@@ -378,7 +441,7 @@ func (r *Runtime) setEgressPause(ctx context.Context, id string, spec EgressSpec
 		full.Metadata[EgressPausedReasonKey] = egressPausedDown
 	} else {
 		if !full.Disabled || metaString(full, EgressPausedReasonKey) != egressPausedDown {
-			return
+			return false
 		}
 		full.Disabled = false
 		full.Status = coreauth.StatusActive
@@ -389,9 +452,10 @@ func (r *Runtime) setEgressPause(ctx context.Context, id string, spec EgressSpec
 	full.UpdatedAt = now
 	if _, err := r.coreManager.Update(ctx, full); err != nil {
 		log.WithError(err).Warnf("egress: pause=%v %s failed", pause, id)
-		return
+		return false
 	}
 	log.Warnf("egress: %s (%s) paused=%v (egress %s %s)", id, full.Label, pause, spec.Name, spec.IP)
+	return true
 }
 
 // EgressStatuses returns the latest egress list (from KV, any replica).
