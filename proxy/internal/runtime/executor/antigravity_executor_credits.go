@@ -352,6 +352,18 @@ func newAntigravityStatusErr(statusCode int, body []byte) statusErr {
 	}
 	return err
 }
+
+// newAntigravityStatusErrWithHeaders is newAntigravityStatusErr that also honours an upstream
+// Retry-After header when the body carries no RetryInfo/quota reset hint.
+func newAntigravityStatusErrWithHeaders(statusCode int, body []byte, headers http.Header) statusErr {
+	err := newAntigravityStatusErr(statusCode, body)
+	if statusCode == http.StatusTooManyRequests && err.retryAfter == nil && headers != nil {
+		if retryAfter, ok := helps.ParseRetryAfterHeader(headers.Get("Retry-After")); ok {
+			err.retryAfter = retryAfter
+		}
+	}
+	return err
+}
 func (e *AntigravityExecutor) maybeRefreshAntigravityCreditsHint(ctx context.Context, auth *cliproxyauth.Auth, accessToken string) {
 	if e == nil || auth == nil || !antigravityCreditsRetryEnabled(e.cfg) || antigravityCoolingDisabled(auth, e.cfg) {
 		return

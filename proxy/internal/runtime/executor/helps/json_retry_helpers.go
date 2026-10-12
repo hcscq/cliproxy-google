@@ -2,6 +2,7 @@ package helps
 
 import (
 	"fmt"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -46,13 +47,18 @@ func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 			if detail.Get("@type").String() != "type.googleapis.com/google.rpc.ErrorInfo" {
 				continue
 			}
-			quotaResetDelay := detail.Get("metadata.quotaResetDelay").String()
-			if quotaResetDelay == "" {
-				continue
+			if quotaResetDelay := detail.Get("metadata.quotaResetDelay").String(); quotaResetDelay != "" {
+				if duration, err := time.ParseDuration(quotaResetDelay); err == nil {
+					return &duration, nil
+				}
 			}
-			duration, err := time.ParseDuration(quotaResetDelay)
-			if err == nil {
-				return &duration, nil
+			// Absolute reset time, e.g. "2026-10-12T05:00:00Z".
+			if stamp := detail.Get("metadata.quotaResetTimeStamp").String(); stamp != "" {
+				if reset, err := time.Parse(time.RFC3339, stamp); err == nil {
+					if duration := time.Until(reset); duration > 0 {
+						return &duration, nil
+					}
+				}
 			}
 		}
 	}
@@ -77,4 +83,22 @@ func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 	}
 
 	return nil, fmt.Errorf("no RetryInfo found")
+}
+
+// ParseRetryAfterHeader parses an HTTP Retry-After header (delta-seconds or HTTP-date).
+func ParseRetryAfterHeader(value string) (*time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, false
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		duration := time.Duration(seconds) * time.Second
+		return &duration, true
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		if duration := time.Until(at); duration > 0 {
+			return &duration, true
+		}
+	}
+	return nil, false
 }
