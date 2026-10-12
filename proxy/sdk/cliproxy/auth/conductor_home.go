@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -984,7 +985,7 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 		}
 	}
 
-	bundle := m.HomeDispatchBundle()
+	bundle := m.waitHomeDispatchBundle(ctx)
 	if bundle == nil || bundle.client == nil || bundle.registry == nil {
 		return nil, &Error{Code: "home_unavailable", Message: "home dispatch bundle unavailable", HTTPStatus: http.StatusServiceUnavailable}
 	}
@@ -1525,4 +1526,42 @@ func withAffinityHeaders(ctx context.Context, cfg *internalconfig.Config, header
 		out.Set(affinity.HeaderSource, source)
 	}
 	return out
+}
+
+// homeSwitchHold bounds how long a dispatch waits for a usable Home while the
+// proxy switches Home (HOME_SWITCH_HOLD, default 10s; same as the HTTP hold).
+var homeSwitchHold = func() time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv("HOME_SWITCH_HOLD"))); err == nil && d >= 0 {
+		return d
+	}
+	return 10 * time.Second
+}()
+
+// waitHomeDispatchBundle returns the dispatch bundle once its client is
+// healthy. A request admitted just before a Home switch would otherwise fail
+// with 503 although the next Home is milliseconds away.
+func (m *Manager) waitHomeDispatchBundle(ctx context.Context) *HomeDispatchBundle {
+	usable := func(b *HomeDispatchBundle) bool {
+		return b != nil && b.client != nil && b.registry != nil && b.client.HeartbeatOK()
+	}
+	bundle := m.HomeDispatchBundle()
+	if usable(bundle) || homeSwitchHold <= 0 {
+		return bundle
+	}
+	deadline := time.NewTimer(homeSwitchHold)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return bundle
+		case <-deadline.C:
+			return m.HomeDispatchBundle()
+		case <-tick.C:
+			if b := m.HomeDispatchBundle(); usable(b) {
+				return b
+			}
+		}
+	}
 }
