@@ -593,6 +593,7 @@ export interface Credential {
   next_retry_after?: string;
   model_cooldowns?: ModelCooldown[];
   credential_scope_error?: boolean;
+  tried_models_all_cooling?: boolean;
   created_at?: string;
   updated_at?: string;
   in_flight?: number | null;

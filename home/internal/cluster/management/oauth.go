@@ -563,7 +563,7 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 		"status":         auth.Status,
 		"status_message": auth.StatusMessage,
 		"disabled":       auth.Disabled,
-		"unavailable":    auth.Unavailable,
+		"unavailable":    auth.Unavailable && !onlyModelScopedCooldown(auth),
 		"runtime_only":   auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true"),
 		"source":         "db",
 		"prefix":         prefixFromAuth(auth),
@@ -603,7 +603,44 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	if credentialScopeError(auth, time.Now()) {
 		entry["credential_scope_error"] = true
 	}
+	if auth.Unavailable && onlyModelScopedCooldown(auth) {
+		// Every model tried so far is cooling, but each cooldown is model-scoped
+		// (e.g. per-model 429 quota). Untried models can still work, so this is not a
+		// whole-credential outage.
+		entry["tried_models_all_cooling"] = true
+	}
 	return entry
+}
+
+// onlyModelScopedCooldown reports whether auth.Unavailable is just the aggregate of
+// per-model cooldowns rather than a credential-level failure.
+func onlyModelScopedCooldown(auth *coreauth.Auth) bool {
+	if auth == nil || len(auth.ModelStates) == 0 {
+		return false
+	}
+	if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" {
+		return false
+	}
+	if auth.LastError != nil && (auth.LastError.HTTPStatus == 401 || auth.LastError.HTTPStatus == 403) {
+		return false
+	}
+	for _, st := range auth.ModelStates {
+		if st != nil && st.Status == coreauth.StatusDisabled {
+			continue
+		}
+		if st == nil {
+			continue
+		}
+		if st.LastError != nil && (st.LastError.HTTPStatus == 401 || st.LastError.HTTPStatus == 403) {
+			return false
+		}
+		// The aggregate only goes unavailable when every model state is cooling; if one
+		// is not, the unavailability was set at credential level.
+		if !st.Unavailable {
+			return false
+		}
+	}
+	return true
 }
 
 // modelCooldownEntries lists models that are cooling down or recently failed on
@@ -652,7 +689,7 @@ func credentialScopeError(auth *coreauth.Auth, now time.Time) bool {
 	if auth == nil || auth.Disabled {
 		return false
 	}
-	if auth.Unavailable && (auth.NextRetryAfter.IsZero() || auth.NextRetryAfter.After(now)) {
+	if auth.Unavailable && !onlyModelScopedCooldown(auth) && (auth.NextRetryAfter.IsZero() || auth.NextRetryAfter.After(now)) {
 		return true
 	}
 	if auth.LastError != nil && (auth.LastError.HTTPStatus == 401 || auth.LastError.HTTPStatus == 403) && len(auth.ModelStates) == 0 {

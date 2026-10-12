@@ -76,6 +76,39 @@ export function credentialStatus(
   );
 }
 
+function cooldownReason(m: { http_status?: number; quota_exceeded?: boolean; status_message?: string }, tr: ReturnType<typeof useI18n>["tr"]) {
+  if (m.http_status === 429 || m.quota_exceeded) return tr("额度耗尽 429", "quota exhausted 429");
+  if (m.http_status === 503) return tr("上游无容量 503", "no capacity 503");
+  if (m.http_status) return `HTTP ${m.http_status}`;
+  return m.status_message ? m.status_message.slice(0, 60) : tr("错误", "error");
+}
+
+function remaining(iso?: string) {
+  if (!iso) return "";
+  const s = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000));
+  if (s >= 3600) return `${Math.floor(s / 3600)}h${Math.round((s % 3600) / 60)}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m${s % 60}s`;
+  return `${s}s`;
+}
+
+/** Hover text for the status cell: the real reason and remaining cooldown per model. */
+export function statusTooltip(c: Credential, tr: ReturnType<typeof useI18n>["tr"]): string | undefined {
+  const lines: string[] = [];
+  if (c.credential_scope_error || c.unavailable) {
+    lines.push(tr("整个凭据不可用", "Whole credential unavailable") + (c.next_retry_after ? ` · ${tr("剩余", "remaining")} ${remaining(c.next_retry_after)}` : ""));
+    if (c.status_message) lines.push(c.status_message.replace(/\s+/g, " ").slice(0, 160));
+  }
+  const cooling = coolingModels(c);
+  if (cooling.length > 0) {
+    if (c.tried_models_all_cooling)
+      lines.push(tr("已尝试过的模型都在冷却（按模型限额），未尝试的模型仍可用", "All models tried so far are cooling (per-model limits); untried models still work"));
+    for (const m of cooling)
+      lines.push(`${m.model}: ${cooldownReason(m, tr)}${m.next_retry_after ? ` · ${tr("剩余", "remaining")} ${remaining(m.next_retry_after)}` : ""}`);
+  }
+  if (lines.length === 0) return c.status_message || undefined;
+  return lines.join("\n");
+}
+
 // checkbox, ID, account, groups, provider, status, quota, priority, updated, enabled
 const CRED_COLUMNS: FlexCol[] = [
   { min: 36 },
@@ -437,15 +470,7 @@ export function CredentialsPage() {
                     <td>
                       <span
                         className="cell-status"
-                        title={
-                          coolingModels(c).length > 0
-                            ? `${tr("冷却中的模型", "Cooling models")}: ${coolingModels(
-                                c,
-                              )
-                                .map((m) => m.model)
-                                .join(", ")}`
-                            : c.status_message || undefined
-                        }
+                        title={statusTooltip(c, tr)}
                       >
                         {credentialStatus(c, t, tr)}
                       </span>
