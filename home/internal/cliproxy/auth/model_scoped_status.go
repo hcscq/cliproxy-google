@@ -67,8 +67,14 @@ func (m *Manager) NormalizeModelScopedErrorStatuses(ctx context.Context) int {
 		if !LegacyModelScopedErrorStatus(a, now) {
 			continue
 		}
-		a.Status = StatusActive
-		if _, err := m.Update(ctx, a); err == nil {
+		mutation, err := m.mutateCooldownState(ctx, a.ID, now.UTC(), false, func(auth *Auth) bool {
+			if !LegacyModelScopedErrorStatus(auth, now) {
+				return false
+			}
+			auth.Status = StatusActive
+			return true
+		})
+		if err == nil && mutation.changed {
 			n++
 		}
 	}

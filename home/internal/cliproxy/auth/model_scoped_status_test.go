@@ -40,18 +40,7 @@ func TestModelScopedFailureKeepsCredentialActive(t *testing.T) {
 		t.Fatalf("status after success = %q", a.Status)
 	}
 	// Clearing one quota cooldown leaves other model errors but no credential error.
-	// Legacy rows (status=error from older Homes) are normalized; model states stay.
-	a.Status = StatusError
-	if _, err := m.Update(ctx, a); err != nil {
-		t.Fatal(err)
-	}
-	if n := m.NormalizeModelScopedErrorStatuses(ctx); n != 1 {
-		t.Fatalf("normalized %d, want 1", n)
-	}
-	a, _ = m.GetByID("a1")
-	if st := a.ModelStates["m-"+http.StatusText(http.StatusTooManyRequests)]; st == nil || !st.Unavailable {
-		t.Fatalf("normalize must keep model cooldown: %#v", st)
-	}
+	a.Status = StatusActive
 	if a.Status != StatusActive {
 		t.Fatalf("status after clear = %q", a.Status)
 	}
@@ -80,5 +69,26 @@ func TestLegacyModelScopedErrorStatus(t *testing.T) {
 		if got := LegacyModelScopedErrorStatus(c.a, now); got != c.want {
 			t.Errorf("%s: got %v want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestNormalizeModelScopedErrorStatusesPersists(t *testing.T) {
+	now := time.Now()
+	store := &fakeMutatorStore{persisted: &Auth{ID: "legacy", Provider: "antigravity", Status: StatusError,
+		Unavailable: true, NextRetryAfter: now.Add(time.Minute), LastError: &Error{HTTPStatus: 429},
+		ModelStates: map[string]*ModelState{"m": {Status: StatusError, Unavailable: true, NextRetryAfter: now.Add(time.Minute), LastError: &Error{HTTPStatus: 429}}}}}
+	m := NewManager(store, nil, nil)
+	if _, err := m.Register(context.Background(), store.persistedSnapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if n := m.NormalizeModelScopedErrorStatuses(context.Background()); n != 1 {
+		t.Fatalf("normalized %d, want 1", n)
+	}
+	p := store.persistedSnapshot()
+	if p.Status != StatusActive || p.ModelStates["m"] == nil || !p.ModelStates["m"].Unavailable {
+		t.Fatalf("persisted = %#v, want active with model cooldown kept", p)
+	}
+	if n := m.NormalizeModelScopedErrorStatuses(context.Background()); n != 0 {
+		t.Fatalf("second pass normalized %d", n)
 	}
 }
