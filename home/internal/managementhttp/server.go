@@ -280,6 +280,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPost, "/users/:id/period-limits/reset", handler.ResetUserPeriodLimits)
 	r.Set(http.MethodGet, "/credentials/search", handler.SearchCredentials)
 	r.Set(http.MethodPost, "/credentials/bulk", handler.BulkCredentials)
+	r.Set(http.MethodPost, "/credentials/import/refresh-tokens", handler.ImportRefreshTokens)
 	r.Set(http.MethodGet, "/groups/summary", handler.GroupsSummary)
 	r.Set(http.MethodGet, "/usage/affinity", handler.AffinityStats)
 	r.Set(http.MethodGet, "/usage/retention", handler.UsageRetention)

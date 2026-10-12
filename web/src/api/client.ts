@@ -165,6 +165,9 @@ export class ApiClient {
     files.forEach((f, i) => form.append(`file${i}`, f, f.name));
     return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form });
   }
+  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean }) {
+    return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[] }>('/credentials/import/refresh-tokens', body);
+  }
   uploadCredentialJSON(json: string) {
     return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json });
   }
@@ -1200,3 +1203,24 @@ export interface InfraStatus {
 
 /** Non-secret result of a completed OAuth login (reported by any Home replica). */
 export type OAuthResult = { already_completed?: boolean; credential_id?: string; email?: string; updated_existing?: boolean };
+
+export interface RTImportResult {
+  index: number;
+  source?: string;
+  token_hint?: string;
+  status: 'created' | 'updated' | 'would_create' | 'would_update' | 'failed' | 'skipped' | string;
+  code?: string;
+  reason?: string;
+  warning?: string;
+  credential_id?: string;
+  email?: string;
+  project_id?: string;
+  matched_by?: string;
+}
+export interface RTImportSummary {
+  total: number;
+  created: number;
+  updated: number;
+  failed: number;
+  skipped: number;
+}

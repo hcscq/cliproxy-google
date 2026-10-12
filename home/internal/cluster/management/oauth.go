@@ -99,7 +99,10 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 
 // UploadAuthFile handles upload auth file.
 func (h *Handler) UploadAuthFile(c *gin.Context) {
-	// Validate request inputs before mutating persisted state.
+	// Antigravity payloads with a refresh token go through enrichment + dedupe;
+	// other payloads are stored as before. Multi-file uploads continue past bad
+	// files and return a per-file report.
+	dryRun := strings.EqualFold(strings.TrimSpace(c.Query("dry_run")), "true") || strings.TrimSpace(c.Query("dry_run")) == "1"
 	if strings.HasPrefix(strings.ToLower(c.ContentType()), "multipart/form-data") {
 		headers, errHeaders := multipartHeaders(c)
 		if errHeaders != nil {
@@ -110,21 +113,128 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 			respondError(c, http.StatusBadRequest, "no files uploaded", nil)
 			return
 		}
+		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
+		defer cancel()
+		results := make([]RTImportResult, 0, len(headers))
 		uploaded := make([]string, 0, len(headers))
-		for _, header := range headers {
-			name, errStore := h.storeUploadedOAuth(c, header)
+		var agEntries []rtImportEntry
+		var agPos []int
+		for i, header := range headers {
+			name := ""
+			if header != nil {
+				name = filepath.Base(header.Filename)
+			}
+			res := RTImportResult{Index: i, Source: name}
+			data, errRead := readUploadedJSON(header)
+			if errRead != nil {
+				res.Status, res.Code, res.Reason = "failed", "invalid_file", errRead.Error()
+				results = append(results, res)
+				continue
+			}
+			if many, ok := antigravityArrayPayload(data); ok {
+				for k := range many {
+					many[k].Source = fmt.Sprintf("%s #%d", name, k+1)
+					agEntries = append(agEntries, many[k])
+					agPos = append(agPos, len(results))
+					results = append(results, RTImportResult{Index: len(results), Source: many[k].Source})
+				}
+				continue
+			}
+			if entry, ok := antigravityPayloadNeedsImport(data); ok {
+				entry.Index, entry.Source = i, name
+				agEntries = append(agEntries, entry)
+				agPos = append(agPos, len(results))
+				results = append(results, res)
+				continue
+			}
+			if dryRun {
+				res.Status = "would_create"
+				results = append(results, res)
+				continue
+			}
+			stored, errStore := h.storeOAuthPayloadWithContext(ctx, data, header.Filename)
 			if errStore != nil {
-				respondError(c, http.StatusBadRequest, "upload_failed", errStore)
+				res.Status, res.Code, res.Reason = "failed", "upload_failed", shortReason(errStore.Error())
+			} else {
+				res.Status, res.CredentialID = "created", strings.TrimSuffix(stored, ".json")
+				uploaded = append(uploaded, stored)
+			}
+			results = append(results, res)
+		}
+		if len(agEntries) > 0 {
+			agResults, _, errImport := h.importAntigravityEntries(ctx, agEntries, rtImportOptions{DryRun: dryRun})
+			if errImport != nil {
+				respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 				return
 			}
-			uploaded = append(uploaded, name)
+			for k, r := range agResults {
+				results[agPos[k]] = r
+				if r.Status == "created" || r.Status == "updated" {
+					uploaded = append(uploaded, r.CredentialID+".json")
+				}
+			}
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "uploaded": len(uploaded), "files": uploaded})
+		summary := RTImportSummary{Total: len(results)}
+		for _, r := range results {
+			switch r.Status {
+			case "created", "would_create":
+				summary.Created++
+			case "updated", "would_update":
+				summary.Updated++
+			case "failed":
+				summary.Failed++
+			case "skipped":
+				summary.Skipped++
+			}
+		}
+		status, code := "ok", http.StatusOK
+		if summary.Failed > 0 {
+			status = "partial"
+			if summary.Failed == summary.Total {
+				status, code = "failed", http.StatusBadRequest
+			}
+		}
+		c.JSON(code, gin.H{"status": status, "dry_run": dryRun, "uploaded": len(uploaded), "files": uploaded, "summary": summary, "results": results})
 		return
 	}
 	body, errRead := io.ReadAll(c.Request.Body)
 	if errRead != nil {
 		respondError(c, http.StatusBadRequest, "invalid body", errRead)
+		return
+	}
+	if many, ok := antigravityArrayPayload(body); ok {
+		if len(many) > rtImportMaxItemsPerRequest*5 {
+			respondError(c, http.StatusRequestEntityTooLarge, "too_many_items", fmt.Errorf("at most %d entries per upload", rtImportMaxItemsPerRequest*5))
+			return
+		}
+		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
+		defer cancel()
+		results, summary, errImport := h.importAntigravityEntries(ctx, many, rtImportOptions{DryRun: dryRun})
+		if errImport != nil {
+			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": dryRun, "summary": summary, "results": results})
+		return
+	}
+	if entry, ok := antigravityPayloadNeedsImport(bytes.TrimSpace(body)); ok {
+		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 2*time.Minute)
+		defer cancel()
+		results, _, errImport := h.importAntigravityEntries(ctx, []rtImportEntry{entry}, rtImportOptions{DryRun: dryRun})
+		if errImport != nil {
+			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
+			return
+		}
+		r := results[0]
+		if r.Status == "failed" || r.Status == "skipped" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "upload_failed", "code": r.Code, "message": r.Reason, "result": r})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": dryRun, "name": r.CredentialID + ".json", "result": r})
+		return
+	}
+	if dryRun {
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": true})
 		return
 	}
 	name, errStore := h.storeOAuthPayload(c, body, "")
@@ -133,6 +243,33 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "name": name})
+}
+
+// readUploadedJSON reads one uploaded .json file.
+func readUploadedJSON(header *multipart.FileHeader) ([]byte, error) {
+	if header == nil {
+		return nil, fmt.Errorf("file is required")
+	}
+	if !strings.HasSuffix(strings.ToLower(filepath.Base(header.Filename)), ".json") {
+		return nil, fmt.Errorf("file must be .json")
+	}
+	src, errOpen := header.Open()
+	if errOpen != nil {
+		return nil, errOpen
+	}
+	defer func() { _ = src.Close() }()
+	data, errRead := io.ReadAll(io.LimitReader(src, 4<<20))
+	if errRead != nil {
+		return nil, errRead
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty file")
+	}
+	if !json.Valid(data) {
+		return nil, fmt.Errorf("file is not valid JSON")
+	}
+	return data, nil
 }
 
 // DeleteAuthFile deletes an auth file.

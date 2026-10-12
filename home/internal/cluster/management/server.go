@@ -26,6 +26,7 @@ type Handler struct {
 	modelsDevHTTPClient   *http.Client
 	pluginStoreAuth       *pluginauth.Service
 	quotaRecollect        QuotaRecollectTrigger
+	agEnricher            antigravityEnricher
 }
 
 // NewHandler creates a new handler.

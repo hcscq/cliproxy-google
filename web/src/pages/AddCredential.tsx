@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi, useUi } from '../app-context';
-import { stateFromRedirect, type OAuthResult } from '../api/client';
+import { stateFromRedirect, type OAuthResult, type RTImportResult } from '../api/client';
 import { useI18n } from '../i18n';
 import { CopyButton, Modal, Spinner } from '../components/ui';
 import { IconExternal, IconUpload } from '../components/icons';
 
-type Tab = 'oauth' | 'upload' | 'paste' | 'vertex';
+type Tab = 'oauth' | 'tokens' | 'upload' | 'paste' | 'vertex';
 
 export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('oauth');
   const tabs: [Tab, string][] = [
     ['oauth', t('antigravityLogin')],
+    ['tokens', 'Refresh Token 批量导入'],
     ['upload', t('uploadJson')],
     ['paste', t('pasteJson')],
     ['vertex', t('vertexSa')],
@@ -26,6 +27,7 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
         ))}
       </div>
       {tab === 'oauth' && <OAuthFlow onDone={onAdded} />}
+      {tab === 'tokens' && <RefreshTokenImport onDone={onAdded} />}
       {tab === 'upload' && <UploadFiles onDone={onAdded} />}
       {tab === 'paste' && <PasteJson onDone={onAdded} />}
       {tab === 'vertex' && <VertexImport onDone={onAdded} />}
@@ -353,6 +355,158 @@ function VertexImport({ onDone }: { onDone: () => void }) {
           {tr('导入', 'Import')}
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Split pasted text into chunks the server accepts (<=50 entries per request). */
+export function chunkTokenInput(text: string): { text?: string; items?: unknown[] }[] {
+  const t = text.trim();
+  if (!t) return [];
+  if (t.startsWith('[')) {
+    try {
+      const arr = JSON.parse(t) as unknown[];
+      if (Array.isArray(arr)) {
+        const out = [];
+        for (let i = 0; i < arr.length; i += 50) out.push({ items: arr.slice(i, i + 50) });
+        return out;
+      }
+    } catch {
+      /* fall through to line mode */
+    }
+  }
+  const lines = t.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  const out = [];
+  for (let i = 0; i < lines.length; i += 50) out.push({ text: lines.slice(i, i + 50).join('\n') });
+  return out;
+}
+
+const RT_STATUS: Record<string, [string, 'ok' | 'warn' | 'err' | 'primary']> = {
+  created: ['新建', 'ok'],
+  updated: ['已更新', 'primary'],
+  would_create: ['将新建', 'ok'],
+  would_update: ['将更新', 'primary'],
+  failed: ['失败', 'err'],
+  skipped: ['跳过', 'warn'],
+};
+
+function RefreshTokenImport({ onDone }: { onDone: () => void }) {
+  const api = useApi();
+  const { toast, toastError } = useUi();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [results, setResults] = useState<RTImportResult[] | null>(null);
+  const [lastDry, setLastDry] = useState(true);
+  const chunks = chunkTokenInput(text);
+  const count = chunks.reduce((a, c) => a + (c.items?.length ?? c.text?.split('\n').length ?? 0), 0);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const run = async (dry: boolean) => {
+    setBusy(true);
+    setResults(null);
+    setLastDry(dry);
+    const all: RTImportResult[] = [];
+    let offset = 0;
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        setProgress(`${i + 1} / ${chunks.length}`);
+        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry });
+        res.results.forEach((r) => all.push({ ...r, index: r.index + offset }));
+        offset += res.results.length;
+        setResults([...all]);
+      }
+      const n = (s: string) => all.filter((r) => r.status === s).length;
+      toast(
+        dry
+          ? `预检完成：将新建 ${n('would_create')}，将更新 ${n('would_update')}，失败 ${n('failed')}`
+          : `导入完成：新建 ${n('created')}，更新 ${n('updated')}，失败 ${n('failed')}`,
+        n('failed') ? 'err' : 'ok',
+      );
+      if (!dry && (n('created') || n('updated'))) onDone();
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(false);
+      setProgress('');
+    }
+  };
+  return (
+    <div className="stack">
+      <p className="muted" style={{ margin: 0 }}>
+        每行一个：<code>email----refresh_token</code> 或仅 <code>refresh_token</code>；也可粘贴 JSON 数组（字符串或含 refresh_token 的对象）。
+        导入时会刷新令牌、获取邮箱与 project_id；同邮箱或同 token 的已有凭据只更新令牌，保留分组与备注。新凭据自动加入 default 分组并立即探测额度。
+      </p>
+      <textarea
+        className="textarea mono"
+        style={{ minHeight: 200 }}
+        placeholder={'alice@gmail.com----1//0g...\nbob@gmail.com----1//0e...\n\n或 [{"refresh_token":"1//..."}, ...]'}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        spellCheck={false}
+        data-testid="rt-import-text"
+      />
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn" disabled={busy} onClick={() => fileRef.current?.click()}>
+          从文件读取（.txt / .json）
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".txt,.json,text/plain,application/json"
+          hidden
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (f) setText(await f.text());
+            e.target.value = '';
+          }}
+        />
+        <span className="faint small">识别到 {count} 条</span>
+        <span className="spacer" />
+        {progress && <span className="faint small">批次 {progress}</span>}
+        <button className="btn" disabled={!count || busy} onClick={() => void run(true)} data-testid="rt-import-dry">
+          {busy && lastDry && <Spinner />}
+          预检（不保存）
+        </button>
+        <button className="btn btn-primary" disabled={!count || busy} onClick={() => void run(false)} data-testid="rt-import-run">
+          {busy && !lastDry && <Spinner />}
+          导入
+        </button>
+      </div>
+      {results && (
+        <div className="table-wrap scroll-list" style={{ maxHeight: 280 }}>
+          <table className="table compact">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>结果</th>
+                <th>邮箱</th>
+                <th>Token</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r) => {
+                const [label, kind] = RT_STATUS[r.status] ?? [r.status, 'warn'];
+                return (
+                  <tr key={r.index}>
+                    <td className="faint">{r.index + 1}</td>
+                    <td>
+                      <span className={`badge ${kind}`}>{label}</span>
+                    </td>
+                    <td className="ellipsis" style={{ maxWidth: 220 }} title={r.email}>
+                      {r.email || '—'}
+                    </td>
+                    <td className="mono faint">{r.token_hint}</td>
+                    <td className="small ellipsis" style={{ maxWidth: 320 }} title={[r.reason, r.warning, r.matched_by && `匹配：${r.matched_by}`].filter(Boolean).join('\n')}>
+                      {r.reason || r.warning || (r.matched_by ? `匹配已有凭据（${r.matched_by === 'email' ? '邮箱' : 'token'}）` : r.project_id ? `project ${r.project_id}` : '')}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
