@@ -227,10 +227,10 @@ export class ApiClient {
     return this.get<{ status: string; url: string; state: string; user_code?: string }>('/oauth/auth-url', { provider });
   }
   oauthStatus(state: string) {
-    return this.get<{ status: 'ok' | 'wait' | 'error'; error?: string }>('/oauth/status', { state });
+    return this.get<OAuthResult & { status: 'ok' | 'wait' | 'error'; error?: string }>('/oauth/status', { state });
   }
   oauthSubmitCallback(redirectUrl: string, state?: string, provider?: string) {
-    return this.post<{ status: string }>('/oauth/callback', { redirect_url: redirectUrl, state, provider });
+    return this.post<OAuthResult & { status: string }>('/oauth/callback', { redirect_url: redirectUrl, state, provider });
   }
   oauthCancel(state: string) {
     return this.del<{ status: string; cancelled: boolean }>('/oauth/session', { state });
@@ -1183,3 +1183,6 @@ export interface InfraStatus {
     ping_error?: string;
   };
 }
+
+/** Non-secret result of a completed OAuth login (reported by any Home replica). */
+export type OAuthResult = { already_completed?: boolean; credential_id?: string; email?: string; updated_existing?: boolean };

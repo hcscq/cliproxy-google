@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi, useUi } from '../app-context';
-import { stateFromRedirect } from '../api/client';
+import { stateFromRedirect, type OAuthResult } from '../api/client';
 import { useI18n } from '../i18n';
 import { CopyButton, Modal, Spinner } from '../components/ui';
 import { IconExternal, IconUpload } from '../components/icons';
@@ -52,17 +52,26 @@ function OAuthFlow({ onDone }: { onDone: () => void }) {
     return () => stopPoll();
   }, []);
 
+  const finish = (res: OAuthResult) => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    stopPoll();
+    setPhase('done');
+    if (res.updated_existing) {
+      toast(tr(`账号 ${res.email ?? ''} 已存在，已更新其令牌（未新增重复凭据）`, `Account ${res.email ?? ''} already exists; its tokens were updated (no duplicate added)`));
+    } else {
+      toast(tr('Antigravity 账号已添加', 'Antigravity account added'));
+    }
+    onDone();
+  };
+
   const startPoll = (state: string) => {
     stopPoll();
     pollRef.current = window.setInterval(async () => {
       try {
         const st = await api.oauthStatus(state);
         if (st.status === 'ok' && !doneRef.current) {
-          doneRef.current = true;
-          stopPoll();
-          setPhase('done');
-          toast(tr('Antigravity 账号已添加', 'Antigravity account added'));
-          onDone();
+          finish(st);
         } else if (st.status === 'error') {
           stopPoll();
           setPhase('error');
@@ -99,8 +108,9 @@ function OAuthFlow({ onDone }: { onDone: () => void }) {
     setSubmitting(true);
     setError(undefined);
     try {
-      await api.oauthSubmitCallback(redirect.trim(), session.state, 'antigravity');
-      setPhase('exchanging');
+      const res = await api.oauthSubmitCallback(redirect.trim(), session.state, 'antigravity');
+      if (res.already_completed) finish(res);
+      else setPhase('exchanging');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

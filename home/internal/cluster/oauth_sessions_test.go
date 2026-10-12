@@ -35,7 +35,7 @@ func TestCompleteOAuthSessionCreatesShortLivedTombstone(t *testing.T) {
 	if len(completed.Data) != 0 {
 		t.Fatalf("completed session data = %q, want cleared", string(completed.Data))
 	}
-	wantExpiry := completedAt.Add(time.Minute)
+	wantExpiry := completedAt.Add(oauthCompletedSessionTTL)
 	if completed.ExpiresAt.Before(wantExpiry.Add(-time.Second)) || completed.ExpiresAt.After(wantExpiry.Add(time.Second)) {
 		t.Fatalf("completed expiry = %s, want about %s", completed.ExpiresAt, wantExpiry)
 	}
