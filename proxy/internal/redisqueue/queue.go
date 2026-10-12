@@ -122,8 +122,9 @@ func SetRetentionSeconds(value int) {
 	} else if normalized > maxRetentionSeconds {
 		normalized = maxRetentionSeconds
 	}
-	if env := envInt64("PROXY_USAGE_RETENTION_SECONDS", 0); env > normalized {
-		normalized = min(env, maxRetentionSeconds)
+	// Floor (PROXY_USAGE_RETENTION_SECONDS, default 600): older Homes send 60.
+	if floor := envInt64("PROXY_USAGE_RETENTION_SECONDS", defaultRetentionSeconds); floor > normalized {
+		normalized = min(floor, maxRetentionSeconds)
 	}
 	retentionSeconds.Store(normalized)
 }
