@@ -1,32 +1,94 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useAction, useApi, useAsync, useUi } from '../app-context';
-import { coolingModels, credentialUsable, isSupportedProvider, type Credential, type CredentialGroupSummary, type CredentialQuery, type CredentialSearchItem, type ModelInfo, type QuotaItem } from '../api/client';
-import { CredentialFilterBar, PageNav, SelectionBar, useSelection } from '../components/picker';
-import { downloadBlob, fmtRelative, fmtTime } from '../format';
-import { useI18n } from '../i18n';
-import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Modal, Spinner, Switch } from '../components/ui';
-import { QuotaStatusBadge, QuotaWindows } from '../components/quota';
-import { IconDownload, IconPlus, IconRefresh, IconTrash } from '../components/icons';
-import { AddCredentialModal } from './AddCredential';
-import { GroupChecklist, useGroupLookup } from './Groups';
+import { useEffect, useMemo, useState } from "react";
+import { useAction, useApi, useAsync, useUi } from "../app-context";
+import {
+  coolingModels,
+  credentialUsable,
+  isSupportedProvider,
+  type Credential,
+  type CredentialGroupSummary,
+  type CredentialQuery,
+  type CredentialSearchItem,
+  type ModelInfo,
+  type QuotaItem,
+} from "../api/client";
+import {
+  CredentialFilterBar,
+  PageNav,
+  SelectionBar,
+  useSelection,
+} from "../components/picker";
+import { downloadBlob, fmtRelative, fmtTime } from "../format";
+import { useI18n } from "../i18n";
+import {
+  Badge,
+  Card,
+  Drawer,
+  Empty,
+  ErrorBox,
+  Loading,
+  Modal,
+  Spinner,
+  Switch,
+} from "../components/ui";
+import { useFlexColumns, type FlexCol } from "../components/flexCols";
+import { QuotaStatusBadge, QuotaWindows } from "../components/quota";
+import {
+  IconDownload,
+  IconPlus,
+  IconRefresh,
+  IconTrash,
+} from "../components/icons";
+import { AddCredentialModal } from "./AddCredential";
+import { GroupChecklist, useGroupLookup } from "./Groups";
 
-export function credentialStatus(c: Credential, t: ReturnType<typeof useI18n>['t'], tr: ReturnType<typeof useI18n>['tr']) {
-  if (c.disabled) return <Badge>{t('disabled')}</Badge>;
-  if (c.unavailable || c.credential_scope_error) return <Badge kind="warn" dot>{tr('整体冷却/不可用', 'Cooling down')}</Badge>;
+export function credentialStatus(
+  c: Credential,
+  t: ReturnType<typeof useI18n>["t"],
+  tr: ReturnType<typeof useI18n>["tr"],
+) {
+  if (c.disabled) return <Badge>{t("disabled")}</Badge>;
+  if (c.unavailable || c.credential_scope_error)
+    return (
+      <Badge kind="warn" dot>
+        {tr("整体冷却/不可用", "Cooling down")}
+      </Badge>
+    );
   const cooling = coolingModels(c).length;
   if (credentialUsable(c) && cooling > 0)
     return (
       <Badge kind="warn" dot>
-        {tr(`可用 · ${cooling} 个模型冷却`, `Active · ${cooling} model(s) cooling`)}
+        {tr(
+          `可用 · ${cooling} 个模型冷却`,
+          `Active · ${cooling} model(s) cooling`,
+        )}
       </Badge>
     );
-  if (credentialUsable(c) && (c.status === 'active' || c.status === 'error')) return <Badge kind="ok" dot>{tr('可用', 'Active')}</Badge>;
+  if (credentialUsable(c) && (c.status === "active" || c.status === "error"))
+    return (
+      <Badge kind="ok" dot>
+        {tr("可用", "Active")}
+      </Badge>
+    );
   return (
     <Badge kind="err" dot>
-      {c.status || 'unknown'}
+      {c.status || "unknown"}
     </Badge>
   );
 }
+
+// checkbox, ID, account, groups, provider, status, quota, priority, updated, enabled
+const CRED_COLUMNS: FlexCol[] = [
+  { min: 36 },
+  { min: 80, max: 100, weight: 0.3 },
+  { min: 180, max: 280, weight: 2 },
+  { min: 90, max: 140, weight: 0.6 },
+  { min: 100, max: 130, weight: 0.4 },
+  { min: 150, max: 200, weight: 1 },
+  { min: 200, weight: 3 },
+  { min: 64 },
+  { min: 88 },
+  { min: 72 },
+];
 
 export function CredentialsPage() {
   const api = useApi();
@@ -37,17 +99,36 @@ export function CredentialsPage() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(50);
   useEffect(() => setPage(1), [filter]);
-  const creds = useAsync(() => api.searchCredentials({ ...filter, page, page_size: size }), [filter, page, size], 20000);
+  const creds = useAsync(
+    () => api.searchCredentials({ ...filter, page, page_size: size }),
+    [filter, page, size],
+    20000,
+  );
   const groups = useGroupLookup();
+  const credCols = useFlexColumns<HTMLDivElement>(CRED_COLUMNS);
   const quota = useAsync(() => api.quotaCredentialsAll(), [], 60000);
   const sel = useSelection<string>();
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<CredentialSearchItem | null>(null);
-  const [bulk, setBulk] = useState<null | 'add_to_group' | 'remove_from_group' | 'add_tags' | 'remove_tags'>(null);
+  const [bulk, setBulk] = useState<
+    null | "add_to_group" | "remove_from_group" | "add_tags" | "remove_tags"
+  >(null);
 
-  const items = useMemo(() => (creds.data?.items ?? []).filter((c) => isSupportedProvider(c.provider)), [creds.data]);
-  const quotaById = useMemo(() => new Map<string, QuotaItem>((quota.data?.items ?? []).map((q) => [q.credential_id, q])), [quota.data]);
-  const current = selected ? (items.find((c) => c.id === selected.id) ?? selected) : undefined;
+  const items = useMemo(
+    () =>
+      (creds.data?.items ?? []).filter((c) => isSupportedProvider(c.provider)),
+    [creds.data],
+  );
+  const quotaById = useMemo(
+    () =>
+      new Map<string, QuotaItem>(
+        (quota.data?.items ?? []).map((q) => [q.credential_id, q]),
+      ),
+    [quota.data],
+  );
+  const current = selected
+    ? (items.find((c) => c.id === selected.id) ?? selected)
+    : undefined;
   const reloadAll = async () => {
     await creds.reload();
     await groups.reload();
@@ -56,13 +137,19 @@ export function CredentialsPage() {
   const toggle = (c: Credential, enabled: boolean) =>
     run(`toggle-${c.id}`, async () => {
       await api.setCredentialDisabled(c.id, !enabled);
-      toast(enabled ? tr('已启用', 'Enabled') : tr('已禁用', 'Disabled'));
+      toast(enabled ? tr("已启用", "Enabled") : tr("已禁用", "Disabled"));
       await creds.reload();
     });
-  const bulkToggle = (action: 'enable' | 'disable') =>
+  const bulkToggle = (action: "enable" | "disable") =>
     run(`bulk-${action}`, async () => {
       const r = await api.bulkCredentials({ ids: sel.list(), action });
-      toast(tr(`已${action === 'enable' ? '启用' : '禁用'} ${r.updated ?? 0} 个${r.unchanged ? `（${r.unchanged} 个无需变更）` : ''}`, `${action}d ${r.updated ?? 0}${r.unchanged ? ` (${r.unchanged} unchanged)` : ''}`), r.failed?.length ? 'err' : 'ok');
+      toast(
+        tr(
+          `已${action === "enable" ? "启用" : "禁用"} ${r.updated ?? 0} 个${r.unchanged ? `（${r.unchanged} 个无需变更）` : ""}`,
+          `${action}d ${r.updated ?? 0}${r.unchanged ? ` (${r.unchanged} unchanged)` : ""}`,
+        ),
+        r.failed?.length ? "err" : "ok",
+      );
       await reloadAll();
     });
 
@@ -70,75 +157,150 @@ export function CredentialsPage() {
     <div className="stack">
       <div className="page-head">
         <div>
-          <h1>{t('credentials')}</h1>
-          <p>{tr('Antigravity OAuth、AI Studio 与 Vertex 服务账号凭据。支持服务端筛选、跨页多选与批量操作；点击一行查看详情。', 'Antigravity OAuth, AI Studio and Vertex credentials. Server-side filters, cross-page multi-select and bulk actions; click a row for details.')}</p>
+          <h1>{t("credentials")}</h1>
+          <p>
+            {tr(
+              "Antigravity OAuth、AI Studio 与 Vertex 服务账号凭据。支持服务端筛选、跨页多选与批量操作；点击一行查看详情。",
+              "Antigravity OAuth, AI Studio and Vertex credentials. Server-side filters, cross-page multi-select and bulk actions; click a row for details.",
+            )}
+          </p>
         </div>
         <div className="toolbar">
           <button
             className="btn"
-            disabled={busy === 'refresh-all' || !creds.data?.all}
+            disabled={busy === "refresh-all" || !creds.data?.all}
             onClick={() =>
-              run('refresh-all', async () => {
+              run("refresh-all", async () => {
                 const res = await api.refreshAllCredentials();
                 const failed = res.results?.filter((r) => !r.success) ?? [];
-                toast(failed.length ? tr(`${failed.length} 个刷新失败`, `${failed.length} refresh(es) failed`) : tr('全部刷新完成', 'All refreshed'), failed.length ? 'err' : 'ok');
+                toast(
+                  failed.length
+                    ? tr(
+                        `${failed.length} 个刷新失败`,
+                        `${failed.length} refresh(es) failed`,
+                      )
+                    : tr("全部刷新完成", "All refreshed"),
+                  failed.length ? "err" : "ok",
+                );
                 await creds.reload();
               })
             }
           >
-            {busy === 'refresh-all' ? <Spinner /> : <IconRefresh />}
-            {tr('全部刷新令牌', 'Refresh all tokens')}
+            {busy === "refresh-all" ? <Spinner /> : <IconRefresh />}
+            {tr("全部刷新令牌", "Refresh all tokens")}
           </button>
           <button
             className="btn"
             data-testid="quota-refresh"
-            disabled={busy === 'quota-refresh'}
-            title={tr('立即重新探测全部凭据额度（Home 后台约每 30 分钟自动探测）', 'Re-probe quota for all credentials now (Home also probes ~every 30 min)')}
+            disabled={busy === "quota-refresh"}
+            title={tr(
+              "立即重新探测全部凭据额度（Home 后台约每 30 分钟自动探测）",
+              "Re-probe quota for all credentials now (Home also probes ~every 30 min)",
+            )}
             onClick={() =>
-              run('quota-refresh', async () => {
+              run("quota-refresh", async () => {
                 const r = await api.collectQuota();
-                toast(tr(`已触发 ${r.accepted} 个凭据的额度探测`, `Quota probe started for ${r.accepted} credential(s)`));
+                toast(
+                  tr(
+                    `已触发 ${r.accepted} 个凭据的额度探测`,
+                    `Quota probe started for ${r.accepted} credential(s)`,
+                  ),
+                );
                 setTimeout(() => void quota.reload(), 4000);
               })
             }
           >
-            {busy === 'quota-refresh' ? <Spinner /> : <IconRefresh />}
-            {tr('刷新额度', 'Refresh quota')}
+            {busy === "quota-refresh" ? <Spinner /> : <IconRefresh />}
+            {tr("刷新额度", "Refresh quota")}
           </button>
-          <button className="btn btn-primary" onClick={() => setAdding(true)} data-testid="add-credential">
+          <button
+            className="btn btn-primary"
+            onClick={() => setAdding(true)}
+            data-testid="add-credential"
+          >
             <IconPlus />
-            {t('addCredential')}
+            {t("addCredential")}
           </button>
         </div>
       </div>
 
       <Card
         bodyClass="table-wrap"
-        title={<CredentialFilterBar value={filter} onChange={setFilter} facets={creds.data?.facets} groups={groups.data?.credential_groups} />}
-        extra={<span className="faint small nowrap">{tr(`${creds.data?.total ?? 0} / ${creds.data?.all ?? 0} 个`, `${creds.data?.total ?? 0} / ${creds.data?.all ?? 0}`)}</span>}
+        title={
+          <CredentialFilterBar
+            value={filter}
+            onChange={setFilter}
+            facets={creds.data?.facets}
+            groups={groups.data?.credential_groups}
+          />
+        }
+        extra={
+          <span className="faint small nowrap">
+            {tr(
+              `${creds.data?.total ?? 0} / ${creds.data?.all ?? 0} 个`,
+              `${creds.data?.total ?? 0} / ${creds.data?.all ?? 0}`,
+            )}
+          </span>
+        }
       >
-        <SelectionBar selected={sel.size} total={creds.data?.total ?? 0} pageIds={items.map((c) => c.id)} sel={sel} loadAllIds={async () => (await api.credentialIds(filter)).ids}>
+        <SelectionBar
+          selected={sel.size}
+          total={creds.data?.total ?? 0}
+          pageIds={items.map((c) => c.id)}
+          sel={sel}
+          loadAllIds={async () => (await api.credentialIds(filter)).ids}
+        >
           {sel.size > 0 && (
-            <div className="row bulk-actions" style={{ gap: 6 }} data-testid="bulk-actions">
-              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('add_to_group')} data-testid="bulk-add-group">
-                {tr('加入分组', 'Add to group')}
+            <div
+              className="row bulk-actions"
+              style={{ gap: 6 }}
+              data-testid="bulk-actions"
+            >
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() => setBulk("add_to_group")}
+                data-testid="bulk-add-group"
+              >
+                {tr("加入分组", "Add to group")}
               </button>
-              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('remove_from_group')}>
-                {tr('移出分组', 'Remove from group')}
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() => setBulk("remove_from_group")}
+              >
+                {tr("移出分组", "Remove from group")}
               </button>
-              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('add_tags')} data-testid="bulk-add-tags">
-                {tr('加标签', 'Add tags')}
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() => setBulk("add_tags")}
+                data-testid="bulk-add-tags"
+              >
+                {tr("加标签", "Add tags")}
               </button>
-              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulk('remove_tags')}>
-                {tr('去标签', 'Remove tags')}
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() => setBulk("remove_tags")}
+              >
+                {tr("去标签", "Remove tags")}
               </button>
-              <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkToggle('enable')}>
-                {busy === 'bulk-enable' && <Spinner />}
-                {tr('启用', 'Enable')}
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() => void bulkToggle("enable")}
+              >
+                {busy === "bulk-enable" && <Spinner />}
+                {tr("启用", "Enable")}
               </button>
-              <button className="btn btn-sm btn-danger" disabled={!!busy} onClick={() => void bulkToggle('disable')}>
-                {busy === 'bulk-disable' && <Spinner />}
-                {tr('禁用', 'Disable')}
+              <button
+                className="btn btn-sm btn-danger"
+                disabled={!!busy}
+                onClick={() => void bulkToggle("disable")}
+              >
+                {busy === "bulk-disable" && <Spinner />}
+                {tr("禁用", "Disable")}
               </button>
             </div>
           )}
@@ -150,96 +312,184 @@ export function CredentialsPage() {
         ) : !creds.data ? (
           <Loading />
         ) : items.length === 0 ? (
-          <Empty>{creds.data.all ? tr('没有匹配的凭据', 'No matching credentials') : tr('还没有凭据，点击右上角“添加凭据”。', 'No credentials yet — click "Add credential".')}</Empty>
+          <Empty>
+            {creds.data.all
+              ? tr("没有匹配的凭据", "No matching credentials")
+              : tr(
+                  "还没有凭据，点击右上角“添加凭据”。",
+                  'No credentials yet — click "Add credential".',
+                )}
+          </Empty>
         ) : (
-          <table className="table cred-table" data-testid="credentials-table">
-            <colgroup>
-              <col style={{ width: 36 }} />
-              <col style={{ width: 86 }} />
-              <col style={{ width: 230 }} />
-              <col style={{ width: 100 }} />
-              <col style={{ width: 124 }} />
-              <col style={{ width: 180 }} />
-              <col className="hide-sm" style={{ minWidth: 200 }} />
-              <col className="hide-sm" style={{ width: 68 }} />
-              <col className="hide-sm" style={{ width: 88 }} />
-              <col style={{ width: 72 }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th style={{ width: 28 }} />
-                <th>ID</th>
-                <th>{tr('账号', 'Account')}</th>
-                <th>{tr('分组', 'Groups')}</th>
-                <th>{t('provider')}</th>
-                <th>{t('status')}</th>
-                <th className="hide-sm">{t('quota')}</th>
-                <th className="hide-sm">{t('priority')}</th>
-                <th className="hide-sm">{t('updated')}</th>
-                <th style={{ textAlign: 'right' }}>{t('enabled')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((c) => (
-                <tr key={c.id} className={`clickable ${sel.has(c.id) ? 'row-selected' : ''}`} onClick={() => setSelected(c)}>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={sel.has(c.id)} onChange={() => sel.toggle(c.id)} aria-label="select" />
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <span
-                      className="mono id-cell"
-                      title={`${c.id}\n${tr('点击复制', 'Click to copy')}`}
-                      onClick={() => void navigator.clipboard?.writeText(c.id).then(() => toast(tr('已复制 ID', 'ID copied')))}
-                    >
-                      {c.id.slice(0, 8)}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="cell-title ellipsis" title={[c.label || c.email || c.name, c.note && `${tr('备注', 'Note')}: ${c.note}`].filter(Boolean).join('\n')}>
-                      {c.label || c.email || c.name}
-                      {c.note && <span className="faint small"> · 📝</span>}
-                    </div>
-                  </td>
-                  <td>
-                    {(() => {
-                      const gs = (c.group_ids ?? []).map((id) => groups.cgNames.get(id) ?? `#${id}`);
-                      const tags = (c.tags ?? []).map((tg) => `#${tg}`);
-                      if (!gs.length && !tags.length) return <span className="faint small">—</span>;
-                      const hover = [gs.length ? `${tr('分组', 'Groups')}: ${gs.join(', ')}` : '', tags.length ? `${tr('标签', 'Tags')}: ${tags.join(', ')}` : ''].filter(Boolean).join('\n');
-                      const extra = Math.max(gs.length - 1, 0) + tags.length;
-                      return (
-                        <span className="pill-row nowrap-row" style={{ marginTop: 0 }} title={hover}>
-                          {gs.length ? <span className="pill pill-group">{gs[0]}</span> : <span className="pill pill-tag">{tags[0]}</span>}
-                          {(gs.length ? extra : extra - 1) > 0 && <span className="pill pill-tag">+{gs.length ? extra : extra - 1}</span>}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td title={c.provider}>
-                    <Badge kind="primary">{c.provider}</Badge>
-                  </td>
-                  <td>
-                    <span
-                      className="cell-status"
-                      title={coolingModels(c).length > 0 ? `${tr('冷却中的模型', 'Cooling models')}: ${coolingModels(c).map((m) => m.model).join(', ')}` : c.status_message || undefined}
-                    >
-                      {credentialStatus(c, t, tr)}
-                    </span>
-                  </td>
-                  <td className="hide-sm wrap-ok">
-                    <QuotaWindows item={quotaById.get(c.id)} compact error={quota.error} loading={!quota.data && !quota.error} />
-                  </td>
-                  <td className="hide-sm">{c.priority ?? <span className="faint">0</span>}</td>
-                  <td className="hide-sm faint small" title={c.updated_at ?? ''}>{fmtRelative(c.updated_at, lang)}</td>
-                  <td className="actions" onClick={(e) => e.stopPropagation()}>
-                    <Switch checked={!c.disabled} disabled={busy === `toggle-${c.id}`} onChange={(v) => toggle(c, v)} />
-                  </td>
+          <div ref={credCols.ref}>
+            <table
+              className="table cred-table"
+              data-testid="credentials-table"
+              style={{ minWidth: credCols.minTotal }}
+            >
+              <colgroup>
+                {credCols.widths.map((w, i) => (
+                  <col
+                    key={i}
+                    className={i >= 6 && i <= 8 ? "hide-sm" : undefined}
+                    style={{ width: w }}
+                  />
+                ))}
+              </colgroup>
+              <thead>
+                <tr>
+                  <th style={{ width: 28 }} />
+                  <th>ID</th>
+                  <th>{tr("账号", "Account")}</th>
+                  <th>{tr("分组", "Groups")}</th>
+                  <th>{t("provider")}</th>
+                  <th>{t("status")}</th>
+                  <th className="hide-sm">{t("quota")}</th>
+                  <th className="hide-sm">{t("priority")}</th>
+                  <th className="hide-sm">{t("updated")}</th>
+                  <th style={{ textAlign: "right" }}>{t("enabled")}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {items.map((c) => (
+                  <tr
+                    key={c.id}
+                    className={`clickable ${sel.has(c.id) ? "row-selected" : ""}`}
+                    onClick={() => setSelected(c)}
+                  >
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={sel.has(c.id)}
+                        onChange={() => sel.toggle(c.id)}
+                        aria-label="select"
+                      />
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <span
+                        className="mono id-cell"
+                        title={`${c.id}\n${tr("点击复制", "Click to copy")}`}
+                        onClick={() =>
+                          void navigator.clipboard
+                            ?.writeText(c.id)
+                            .then(() => toast(tr("已复制 ID", "ID copied")))
+                        }
+                      >
+                        {c.id.slice(0, 8)}
+                      </span>
+                    </td>
+                    <td>
+                      <div
+                        className="cell-title ellipsis"
+                        title={[
+                          c.label || c.email || c.name,
+                          c.note && `${tr("备注", "Note")}: ${c.note}`,
+                        ]
+                          .filter(Boolean)
+                          .join("\n")}
+                      >
+                        {c.label || c.email || c.name}
+                        {c.note && <span className="faint small"> · 📝</span>}
+                      </div>
+                    </td>
+                    <td>
+                      {(() => {
+                        const gs = (c.group_ids ?? []).map(
+                          (id) => groups.cgNames.get(id) ?? `#${id}`,
+                        );
+                        const tags = (c.tags ?? []).map((tg) => `#${tg}`);
+                        if (!gs.length && !tags.length)
+                          return <span className="faint small">—</span>;
+                        const hover = [
+                          gs.length
+                            ? `${tr("分组", "Groups")}: ${gs.join(", ")}`
+                            : "",
+                          tags.length
+                            ? `${tr("标签", "Tags")}: ${tags.join(", ")}`
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join("\n");
+                        const extra = Math.max(gs.length - 1, 0) + tags.length;
+                        return (
+                          <span
+                            className="pill-row nowrap-row"
+                            style={{ marginTop: 0 }}
+                            title={hover}
+                          >
+                            {gs.length ? (
+                              <span className="pill pill-group">{gs[0]}</span>
+                            ) : (
+                              <span className="pill pill-tag">{tags[0]}</span>
+                            )}
+                            {(gs.length ? extra : extra - 1) > 0 && (
+                              <span className="pill pill-tag">
+                                +{gs.length ? extra : extra - 1}
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td title={c.provider}>
+                      <Badge kind="primary">{c.provider}</Badge>
+                    </td>
+                    <td>
+                      <span
+                        className="cell-status"
+                        title={
+                          coolingModels(c).length > 0
+                            ? `${tr("冷却中的模型", "Cooling models")}: ${coolingModels(
+                                c,
+                              )
+                                .map((m) => m.model)
+                                .join(", ")}`
+                            : c.status_message || undefined
+                        }
+                      >
+                        {credentialStatus(c, t, tr)}
+                      </span>
+                    </td>
+                    <td className="hide-sm wrap-ok">
+                      <QuotaWindows
+                        item={quotaById.get(c.id)}
+                        compact
+                        error={quota.error}
+                        loading={!quota.data && !quota.error}
+                      />
+                    </td>
+                    <td className="hide-sm">
+                      {c.priority ?? <span className="faint">0</span>}
+                    </td>
+                    <td
+                      className="hide-sm faint small"
+                      title={c.updated_at ?? ""}
+                    >
+                      {fmtRelative(c.updated_at, lang)}
+                    </td>
+                    <td
+                      className="actions"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Switch
+                        checked={!c.disabled}
+                        disabled={busy === `toggle-${c.id}`}
+                        onChange={(v) => toggle(c, v)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-        <PageNav page={page} pageSize={size} total={creds.data?.total ?? 0} onPage={setPage} onPageSize={(n) => (setSize(n), setPage(1))} />
+        <PageNav
+          page={page}
+          pageSize={size}
+          total={creds.data?.total ?? 0}
+          onPage={setPage}
+          onPageSize={(n) => (setSize(n), setPage(1))}
+        />
       </Card>
 
       {bulk && (
@@ -291,7 +541,7 @@ function BulkCredentialModal({
   onClose,
   onDone,
 }: {
-  action: 'add_to_group' | 'remove_from_group' | 'add_tags' | 'remove_tags';
+  action: "add_to_group" | "remove_from_group" | "add_tags" | "remove_tags";
   ids: string[];
   groups: CredentialGroupSummary[];
   tagFacets: string[];
@@ -303,27 +553,55 @@ function BulkCredentialModal({
   const { toast } = useUi();
   const { busy, run } = useAction();
   const [groupId, setGroupId] = useState(0);
-  const [tags, setTags] = useState('');
-  const isGroup = action.endsWith('group');
+  const [tags, setTags] = useState("");
+  const isGroup = action.endsWith("group");
   const titles: Record<typeof action, [string, string]> = {
-    add_to_group: [`将 ${ids.length} 个凭据加入分组`, `Add ${ids.length} credentials to a group`],
-    remove_from_group: [`将 ${ids.length} 个凭据移出分组`, `Remove ${ids.length} credentials from a group`],
-    add_tags: [`为 ${ids.length} 个凭据添加标签`, `Tag ${ids.length} credentials`],
-    remove_tags: [`从 ${ids.length} 个凭据移除标签`, `Untag ${ids.length} credentials`],
+    add_to_group: [
+      `将 ${ids.length} 个凭据加入分组`,
+      `Add ${ids.length} credentials to a group`,
+    ],
+    remove_from_group: [
+      `将 ${ids.length} 个凭据移出分组`,
+      `Remove ${ids.length} credentials from a group`,
+    ],
+    add_tags: [
+      `为 ${ids.length} 个凭据添加标签`,
+      `Tag ${ids.length} credentials`,
+    ],
+    remove_tags: [
+      `从 ${ids.length} 个凭据移除标签`,
+      `Untag ${ids.length} credentials`,
+    ],
   };
-  const tagList = tags.split(/[,，\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const tagList = tags
+    .split(/[,，\s]+/)
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
   const valid = isGroup ? groupId > 0 : tagList.length > 0;
   const apply = () =>
-    run('apply', async () => {
-      const r = await api.bulkCredentials(isGroup ? { ids, action, group_id: groupId } : { ids, action, tags: tagList });
+    run("apply", async () => {
+      const r = await api.bulkCredentials(
+        isGroup
+          ? { ids, action, group_id: groupId }
+          : { ids, action, tags: tagList },
+      );
       if (r.result) {
         toast(
-          action === 'add_to_group'
-            ? tr(`已加入 ${r.result.added} 个${r.result.unchanged ? `（${r.result.unchanged} 个原本就在组内）` : ''}`, `Added ${r.result.added}${r.result.unchanged ? ` (${r.result.unchanged} already in)` : ''}`)
-            : tr(`已移出 ${r.result.removed} 个（规则匹配的成员需修改规则）`, `Removed ${r.result.removed} (rule members follow the rule)`),
+          action === "add_to_group"
+            ? tr(
+                `已加入 ${r.result.added} 个${r.result.unchanged ? `（${r.result.unchanged} 个原本就在组内）` : ""}`,
+                `Added ${r.result.added}${r.result.unchanged ? ` (${r.result.unchanged} already in)` : ""}`,
+              )
+            : tr(
+                `已移出 ${r.result.removed} 个（规则匹配的成员需修改规则）`,
+                `Removed ${r.result.removed} (rule members follow the rule)`,
+              ),
         );
       } else {
-        toast(tr(`已更新 ${r.updated ?? 0} 个`, `Updated ${r.updated ?? 0}`), r.failed?.length ? 'err' : 'ok');
+        toast(
+          tr(`已更新 ${r.updated ?? 0} 个`, `Updated ${r.updated ?? 0}`),
+          r.failed?.length ? "err" : "ok",
+        );
       }
       await onDone();
     });
@@ -335,82 +613,160 @@ function BulkCredentialModal({
       footer={
         <>
           <button className="btn" onClick={onClose}>
-            {tr('取消', 'Cancel')}
+            {tr("取消", "Cancel")}
           </button>
-          <button className="btn btn-primary" disabled={!valid || !!busy} onClick={() => void apply()} data-testid="bulk-apply">
+          <button
+            className="btn btn-primary"
+            disabled={!valid || !!busy}
+            onClick={() => void apply()}
+            data-testid="bulk-apply"
+          >
             {busy && <Spinner />}
-            {tr('应用', 'Apply')}
+            {tr("应用", "Apply")}
           </button>
         </>
       }
     >
       {isGroup ? (
         <div className="stack">
-          <select className="select" value={groupId} onChange={(e) => setGroupId(Number(e.target.value))} data-testid="bulk-group">
-            <option value={0}>{tr('选择凭据分组…', 'Choose a credential group…')}</option>
+          <select
+            className="select"
+            value={groupId}
+            onChange={(e) => setGroupId(Number(e.target.value))}
+            data-testid="bulk-group"
+          >
+            <option value={0}>
+              {tr("选择凭据分组…", "Choose a credential group…")}
+            </option>
             {groups.map((g) => (
               <option key={g.id} value={g.id}>
-                {g.channel_name} · {tr(`${g.total} 个成员`, `${g.total} members`)}
+                {g.channel_name} ·{" "}
+                {tr(`${g.total} 个成员`, `${g.total} members`)}
               </option>
             ))}
           </select>
           {target && target.keys > 0 && (
             <div className="alert warn small">
-              {tr(`有 ${target.keys} 个访问密钥绑定此分组，变更会立即影响它们可使用的凭据（无回退）。`, `${target.keys} keys are bound to this group; the change affects them immediately (no fallback).`)}
+              {tr(
+                `有 ${target.keys} 个访问密钥绑定此分组，变更会立即影响它们可使用的凭据（无回退）。`,
+                `${target.keys} keys are bound to this group; the change affects them immediately (no fallback).`,
+              )}
             </div>
           )}
-          <p className="hint">{tr('在一个事务中完成；已在组内的凭据会被跳过。', 'Runs in one transaction; existing members are skipped.')}</p>
+          <p className="hint">
+            {tr(
+              "在一个事务中完成；已在组内的凭据会被跳过。",
+              "Runs in one transaction; existing members are skipped.",
+            )}
+          </p>
         </div>
       ) : (
         <div className="field">
-          <label>{tr('标签（逗号分隔，小写）', 'Tags (comma separated)')}</label>
-          <input className="input" list="bulk-tags" value={tags} autoFocus onChange={(e) => setTags(e.target.value)} placeholder="vip, eu" data-testid="bulk-tags" />
+          <label>
+            {tr("标签（逗号分隔，小写）", "Tags (comma separated)")}
+          </label>
+          <input
+            className="input"
+            list="bulk-tags"
+            value={tags}
+            autoFocus
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="vip, eu"
+            data-testid="bulk-tags"
+          />
           <datalist id="bulk-tags">
             {tagFacets.map((t) => (
               <option key={t} value={t} />
             ))}
           </datalist>
-          <span className="hint">{tr('标签可用于筛选，以及凭据分组的自动加入规则。', 'Tags drive filters and credential-group auto-join rules.')}</span>
+          <span className="hint">
+            {tr(
+              "标签可用于筛选，以及凭据分组的自动加入规则。",
+              "Tags drive filters and credential-group auto-join rules.",
+            )}
+          </span>
         </div>
       )}
     </Modal>
   );
 }
 
-function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred: CredentialSearchItem; quota?: QuotaItem; onClose: () => void; onChanged: () => Promise<void>; onDeleted: () => Promise<void> }) {
+function CredentialDrawer({
+  cred,
+  quota,
+  onClose,
+  onChanged,
+  onDeleted,
+}: {
+  cred: CredentialSearchItem;
+  quota?: QuotaItem;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+  onDeleted: () => Promise<void>;
+}) {
   const api = useApi();
   const { t, tr } = useI18n();
   const { toast, confirm } = useUi();
   const { busy, run } = useAction();
   const [form, setForm] = useState({
-    priority: cred.priority?.toString() ?? '',
-    prefix: cred.prefix ?? '',
-    proxy_url: cred.proxy_url ?? '',
-    note: cred.note ?? '',
-    requestRetry: cred['request-retry']?.toString() ?? '',
-    cooling: cred['disable-cooling'] === undefined ? 'inherit' : cred['disable-cooling'] ? 'off' : 'on',
+    priority: cred.priority?.toString() ?? "",
+    prefix: cred.prefix ?? "",
+    proxy_url: cred.proxy_url ?? "",
+    note: cred.note ?? "",
+    requestRetry: cred["request-retry"]?.toString() ?? "",
+    cooling:
+      cred["disable-cooling"] === undefined
+        ? "inherit"
+        : cred["disable-cooling"]
+          ? "off"
+          : "on",
   });
-  const models = useAsync<ModelInfo[]>(() => api.credentialModels(cred.id).then((r) => r.models ?? []), [cred.id]);
+  const models = useAsync<ModelInfo[]>(
+    () => api.credentialModels(cred.id).then((r) => r.models ?? []),
+    [cred.id],
+  );
 
   const save = () =>
-    run('save', async () => {
+    run("save", async () => {
       const fields: Record<string, unknown> = {
         prefix: form.prefix.trim(),
         proxy_url: form.proxy_url.trim(),
         note: form.note.trim(),
-        'request-retry': form.requestRetry.trim() === '' ? null : Number(form.requestRetry),
-        'disable-cooling': form.cooling === 'inherit' ? null : form.cooling === 'off',
+        "request-retry":
+          form.requestRetry.trim() === "" ? null : Number(form.requestRetry),
+        "disable-cooling":
+          form.cooling === "inherit" ? null : form.cooling === "off",
       };
-      if (form.priority.trim() !== '') fields.priority = Number(form.priority);
+      if (form.priority.trim() !== "") fields.priority = Number(form.priority);
       await api.updateCredentialFields(cred.id, fields);
-      toast(t('saved'));
+      toast(t("saved"));
       await onChanged();
     });
 
-  const actions: { id: string; label: string; fn: () => Promise<unknown>; done: string }[] = [
-    { id: 'refresh', label: t('refreshToken'), fn: () => api.refreshCredential(cred.id), done: tr('令牌已刷新', 'Token refreshed') },
-    { id: 'quota', label: t('fetchQuota'), fn: () => api.fetchQuota(cred.id), done: tr('已开始查询额度，稍后自动更新', 'Quota collection queued') },
-    { id: 'cooldown', label: t('resetCooldown'), fn: () => api.resetCooldown(cred.id), done: tr('冷却已清除', 'Cooldown cleared') },
+  const actions: {
+    id: string;
+    label: string;
+    fn: () => Promise<unknown>;
+    done: string;
+  }[] = [
+    {
+      id: "refresh",
+      label: t("refreshToken"),
+      fn: () => api.refreshCredential(cred.id),
+      done: tr("令牌已刷新", "Token refreshed"),
+    },
+    {
+      id: "quota",
+      label: t("fetchQuota"),
+      fn: () => api.fetchQuota(cred.id),
+      done: tr("已开始查询额度，稍后自动更新", "Quota collection queued"),
+    },
+    {
+      id: "cooldown",
+      label: t("resetCooldown"),
+      fn: () => api.resetCooldown(cred.id),
+      done: tr("冷却已清除", "Cooldown cleared"),
+    },
   ];
 
   return (
@@ -421,25 +777,30 @@ function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred
           {credentialStatus(cred, t, tr)}
           <QuotaStatusBadge item={quota} />
         </div>
-        {cred.credential_scope_error && cred.status_message && <div className="alert warn small">{cred.status_message}</div>}
+        {cred.credential_scope_error && cred.status_message && (
+          <div className="alert warn small">{cred.status_message}</div>
+        )}
         <ModelCooldownList cred={cred} />
 
         <dl className="kv small">
           <dt>ID</dt>
           <dd className="mono">{cred.id}</dd>
-          <dt>{tr('文件名', 'File')}</dt>
+          <dt>{tr("文件名", "File")}</dt>
           <dd className="mono">{cred.name}</dd>
-          <dt>{tr('来源', 'Source')}</dt>
-          <dd>{cred.source ?? '—'}</dd>
-          <dt>{t('created')}</dt>
+          <dt>{tr("来源", "Source")}</dt>
+          <dd>{cred.source ?? "—"}</dd>
+          <dt>{t("created")}</dt>
           <dd>{fmtTime(cred.created_at)}</dd>
-          <dt>{t('updated')}</dt>
+          <dt>{t("updated")}</dt>
           <dd>{fmtTime(cred.updated_at)}</dd>
           {quota?.observed_at && (
             <>
-              <dt>{tr('额度采集', 'Quota observed')}</dt>
+              <dt>{tr("额度采集", "Quota observed")}</dt>
               <dd>
-                {fmtTime(quota.observed_at)} {quota.freshness === 'stale' && <Badge kind="warn">{tr('已过期', 'stale')}</Badge>}
+                {fmtTime(quota.observed_at)}{" "}
+                {quota.freshness === "stale" && (
+                  <Badge kind="warn">{tr("已过期", "stale")}</Badge>
+                )}
               </dd>
             </>
           )}
@@ -466,100 +827,178 @@ function CredentialDrawer({ cred, quota, onClose, onChanged, onDeleted }: { cred
           <button
             className="btn btn-sm"
             onClick={() =>
-              run('download', async () => {
+              run("download", async () => {
                 const blob = await api.downloadCredential(cred.id);
-                downloadBlob(blob, cred.name.endsWith('.json') ? cred.name : `${cred.name}.json`);
+                downloadBlob(
+                  blob,
+                  cred.name.endsWith(".json") ? cred.name : `${cred.name}.json`,
+                );
               })
             }
           >
             <IconDownload />
-            {t('download')}
+            {t("download")}
           </button>
         </div>
 
         <div>
-          <h3 style={{ marginBottom: 8 }}>{t('quota')}</h3>
+          <h3 style={{ marginBottom: 8 }}>{t("quota")}</h3>
           <QuotaWindows item={quota} />
         </div>
 
         <CredentialGroupsEditor cred={cred} onChanged={onChanged} />
 
         <div>
-          <h3 style={{ marginBottom: 8 }}>{tr('路由设置', 'Routing settings')}</h3>
+          <h3 style={{ marginBottom: 8 }}>
+            {tr("路由设置", "Routing settings")}
+          </h3>
           <div className="form-grid">
             <div className="field">
-              <label>{t('priority')}</label>
-              <input className="input" type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} placeholder="0" />
-              <span className="hint">{tr('数值越大越优先被选择', 'Higher values are picked first')}</span>
+              <label>{t("priority")}</label>
+              <input
+                className="input"
+                type="number"
+                value={form.priority}
+                onChange={(e) => setForm({ ...form, priority: e.target.value })}
+                placeholder="0"
+              />
+              <span className="hint">
+                {tr("数值越大越优先被选择", "Higher values are picked first")}
+              </span>
             </div>
             <div className="field">
-              <label>{t('prefix')}</label>
-              <input className="input" value={form.prefix} onChange={(e) => setForm({ ...form, prefix: e.target.value })} placeholder="team-a" />
-              <span className="hint">{tr('设置后通过 “前缀/模型” 访问', 'Models become "prefix/model"')}</span>
+              <label>{t("prefix")}</label>
+              <input
+                className="input"
+                value={form.prefix}
+                onChange={(e) => setForm({ ...form, prefix: e.target.value })}
+                placeholder="team-a"
+              />
+              <span className="hint">
+                {tr(
+                  "设置后通过 “前缀/模型” 访问",
+                  'Models become "prefix/model"',
+                )}
+              </span>
             </div>
             <div className="field">
-              <label>{tr('额外重试轮数', 'Request retry')}</label>
-              <input className="input" type="number" min={0} value={form.requestRetry} onChange={(e) => setForm({ ...form, requestRetry: e.target.value })} placeholder={tr('继承全局', 'inherit')} />
+              <label>{tr("额外重试轮数", "Request retry")}</label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={form.requestRetry}
+                onChange={(e) =>
+                  setForm({ ...form, requestRetry: e.target.value })
+                }
+                placeholder={tr("继承全局", "inherit")}
+              />
             </div>
             <div className="field">
-              <label>{tr('冷却', 'Cooldown')}</label>
-              <select className="select" value={form.cooling} onChange={(e) => setForm({ ...form, cooling: e.target.value })}>
-                <option value="inherit">{tr('继承全局设置', 'Inherit global')}</option>
-                <option value="on">{tr('出错时冷却', 'Cool down on errors')}</option>
-                <option value="off">{tr('不冷却', 'Never cool down')}</option>
+              <label>{tr("冷却", "Cooldown")}</label>
+              <select
+                className="select"
+                value={form.cooling}
+                onChange={(e) => setForm({ ...form, cooling: e.target.value })}
+              >
+                <option value="inherit">
+                  {tr("继承全局设置", "Inherit global")}
+                </option>
+                <option value="on">
+                  {tr("出错时冷却", "Cool down on errors")}
+                </option>
+                <option value="off">{tr("不冷却", "Never cool down")}</option>
               </select>
             </div>
             <div className="field full">
-              <label>{t('proxyUrl')}</label>
-              <input className="input" value={form.proxy_url} onChange={(e) => setForm({ ...form, proxy_url: e.target.value })} placeholder="socks5://user:pass@host:1080" />
+              <label>{t("proxyUrl")}</label>
+              <input
+                className="input"
+                value={form.proxy_url}
+                onChange={(e) =>
+                  setForm({ ...form, proxy_url: e.target.value })
+                }
+                placeholder="socks5://user:pass@host:1080"
+              />
             </div>
             <div className="field full">
-              <label>{t('note')}</label>
-              <input className="input" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+              <label>{t("note")}</label>
+              <input
+                className="input"
+                value={form.note}
+                onChange={(e) => setForm({ ...form, note: e.target.value })}
+              />
             </div>
           </div>
           <div className="row" style={{ marginTop: 12 }}>
-            <button className="btn btn-primary" disabled={busy === 'save'} onClick={save}>
-              {busy === 'save' && <Spinner />}
-              {t('save')}
+            <button
+              className="btn btn-primary"
+              disabled={busy === "save"}
+              onClick={save}
+            >
+              {busy === "save" && <Spinner />}
+              {t("save")}
             </button>
           </div>
         </div>
 
         <div>
           <h3 style={{ marginBottom: 8 }}>
-            {tr('可用模型', 'Models')} {models.data && <span className="faint">({models.data.length})</span>}
+            {tr("可用模型", "Models")}{" "}
+            {models.data && (
+              <span className="faint">({models.data.length})</span>
+            )}
           </h3>
-          {models.error ? <ErrorBox error={models.error} /> : !models.data ? <Loading /> : models.data.length ? models.data.map((m) => <span key={m.id} className="tag" title={m.display_name}>{m.id}</span>) : <span className="faint">—</span>}
+          {models.error ? (
+            <ErrorBox error={models.error} />
+          ) : !models.data ? (
+            <Loading />
+          ) : models.data.length ? (
+            models.data.map((m) => (
+              <span key={m.id} className="tag" title={m.display_name}>
+                {m.id}
+              </span>
+            ))
+          ) : (
+            <span className="faint">—</span>
+          )}
         </div>
 
-        <div className="card" style={{ borderColor: 'var(--err)' }}>
+        <div className="card" style={{ borderColor: "var(--err)" }}>
           <div className="card-body row">
             <div className="spacer">
-              <b>{t('dangerZone')}</b>
-              <div className="faint small">{tr('删除后无法恢复（可先下载备份）。', 'Deletion is permanent (download a backup first).')}</div>
+              <b>{t("dangerZone")}</b>
+              <div className="faint small">
+                {tr(
+                  "删除后无法恢复（可先下载备份）。",
+                  "Deletion is permanent (download a backup first).",
+                )}
+              </div>
             </div>
             <button
               className="btn btn-danger"
               data-testid="delete-credential"
               onClick={async () => {
                 const ok = await confirm({
-                  title: tr('删除凭据', 'Delete credential'),
-                  body: tr(`将永久删除 ${cred.label || cred.name}。`, `This permanently deletes ${cred.label || cred.name}.`),
+                  title: tr("删除凭据", "Delete credential"),
+                  body: tr(
+                    `将永久删除 ${cred.label || cred.name}。`,
+                    `This permanently deletes ${cred.label || cred.name}.`,
+                  ),
                   danger: true,
-                  confirmText: t('delete'),
-                  typeToConfirm: 'DELETE',
+                  confirmText: t("delete"),
+                  typeToConfirm: "DELETE",
                 });
                 if (!ok) return;
-                await run('delete', async () => {
+                await run("delete", async () => {
                   await api.deleteCredential(cred.id);
-                  toast(tr('已删除', 'Deleted'));
+                  toast(tr("已删除", "Deleted"));
                   await onDeleted();
                 });
               }}
             >
               <IconTrash />
-              {t('delete')}
+              {t("delete")}
             </button>
           </div>
         </div>
@@ -574,13 +1013,18 @@ function ModelCooldownList({ cred }: { cred: Credential }) {
   if (!items.length) return null;
   return (
     <div className="stack" style={{ gap: 6 }} data-testid="model-cooldowns">
-      <div className="small strong">{tr('按模型的冷却 / 最近错误（仅影响对应模型）', 'Per-model cooldown / recent errors (only that model is affected)')}</div>
+      <div className="small strong">
+        {tr(
+          "按模型的冷却 / 最近错误（仅影响对应模型）",
+          "Per-model cooldown / recent errors (only that model is affected)",
+        )}
+      </div>
       <table className="table small">
         <thead>
           <tr>
-            <th>{tr('模型', 'Model')}</th>
-            <th>{tr('状态', 'State')}</th>
-            <th>{tr('恢复时间', 'Retry at')}</th>
+            <th>{tr("模型", "Model")}</th>
+            <th>{tr("状态", "State")}</th>
+            <th>{tr("恢复时间", "Retry at")}</th>
           </tr>
         </thead>
         <tbody>
@@ -588,17 +1032,29 @@ function ModelCooldownList({ cred }: { cred: Credential }) {
             <tr key={m.model}>
               <td className="mono">{m.model}</td>
               <td>
-                <Badge kind={m.cooling ? 'warn' : undefined} dot>
-                  {m.cooling ? (m.quota_exceeded ? tr('额度耗尽冷却', 'Quota cooldown') : tr('冷却中', 'Cooling')) : tr('最近失败', 'Recent error')}
-                  {m.http_status ? ` · ${m.http_status}` : ''}
+                <Badge kind={m.cooling ? "warn" : undefined} dot>
+                  {m.cooling
+                    ? m.quota_exceeded
+                      ? tr("额度耗尽冷却", "Quota cooldown")
+                      : tr("冷却中", "Cooling")
+                    : tr("最近失败", "Recent error")}
+                  {m.http_status ? ` · ${m.http_status}` : ""}
                 </Badge>
                 {m.status_message && (
-                  <div className="faint small ellipsis" style={{ maxWidth: 280 }} title={m.status_message}>
+                  <div
+                    className="faint small ellipsis"
+                    style={{ maxWidth: 280 }}
+                    title={m.status_message}
+                  >
                     {m.status_message}
                   </div>
                 )}
               </td>
-              <td className="small">{m.next_retry_after ? `${fmtTime(m.next_retry_after)} (${fmtRelative(m.next_retry_after, lang)})` : '—'}</td>
+              <td className="small">
+                {m.next_retry_after
+                  ? `${fmtTime(m.next_retry_after)} (${fmtRelative(m.next_retry_after, lang)})`
+                  : "—"}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -607,7 +1063,13 @@ function ModelCooldownList({ cred }: { cred: Credential }) {
   );
 }
 
-function CredentialGroupsEditor({ cred, onChanged }: { cred: CredentialSearchItem; onChanged: () => Promise<void> }) {
+function CredentialGroupsEditor({
+  cred,
+  onChanged,
+}: {
+  cred: CredentialSearchItem;
+  onChanged: () => Promise<void>;
+}) {
   const api = useApi();
   const { tr } = useI18n();
   const { toast } = useUi();
@@ -618,14 +1080,24 @@ function CredentialGroupsEditor({ cred, onChanged }: { cred: CredentialSearchIte
   useEffect(() => setValue(cred.group_ids ?? []), [cred.group_ids]);
   if (!d) return null;
   const change = (next: number[]) =>
-    run('groups', async () => {
+    run("groups", async () => {
       let ruleKept = 0;
-      for (const id of next.filter((x) => !value.includes(x))) await api.bulkCredentialGroupMembers(id, { add: [cred.id] });
+      for (const id of next.filter((x) => !value.includes(x)))
+        await api.bulkCredentialGroupMembers(id, { add: [cred.id] });
       for (const id of value.filter((x) => !next.includes(x))) {
-        const r = await api.bulkCredentialGroupMembers(id, { remove: [cred.id] });
+        const r = await api.bulkCredentialGroupMembers(id, {
+          remove: [cred.id],
+        });
         if (r.result.removed === 0) ruleKept++;
       }
-      if (ruleKept) toast(tr('该凭据由分组规则自动加入，需修改规则才能移出。', 'This credential joined via a group rule; change the rule to remove it.'), 'err');
+      if (ruleKept)
+        toast(
+          tr(
+            "该凭据由分组规则自动加入，需修改规则才能移出。",
+            "This credential joined via a group rule; change the rule to remove it.",
+          ),
+          "err",
+        );
       setValue(next);
       await groups.reload();
       await onChanged();
@@ -633,52 +1105,92 @@ function CredentialGroupsEditor({ cred, onChanged }: { cred: CredentialSearchIte
   return (
     <div data-testid="cred-groups-editor">
       <h3 style={{ marginBottom: 8 }}>
-        {tr('凭据分组', 'Credential groups')} {busy === 'groups' && <Spinner />}
+        {tr("凭据分组", "Credential groups")} {busy === "groups" && <Spinner />}
       </h3>
       <GroupChecklist
-        groups={d.credential_groups.map((g) => ({ id: g.id, name: g.channel_name, enabled: g.enabled, extra: g.has_rule ? tr('含规则', 'has rule') : undefined }))}
+        groups={d.credential_groups.map((g) => ({
+          id: g.id,
+          name: g.channel_name,
+          enabled: g.enabled,
+          extra: g.has_rule ? tr("含规则", "has rule") : undefined,
+        }))}
         value={value}
         onChange={(v) => void change(v)}
       />
       <p className="hint" style={{ marginTop: 6 }}>
-        {tr('绑定了凭据分组的访问密钥只会使用分组内的凭据。凭据可同时属于多个分组；不属于任何分组的凭据只服务未绑定分组的密钥。', 'Keys bound to credential groups only use members. A credential may be in several groups; ungrouped credentials only serve keys without groups.')}
+        {tr(
+          "绑定了凭据分组的访问密钥只会使用分组内的凭据。凭据可同时属于多个分组；不属于任何分组的凭据只服务未绑定分组的密钥。",
+          "Keys bound to credential groups only use members. A credential may be in several groups; ungrouped credentials only serve keys without groups.",
+        )}
       </p>
       <TagsEditor cred={cred} onChanged={onChanged} />
     </div>
   );
 }
 
-function TagsEditor({ cred, onChanged }: { cred: CredentialSearchItem; onChanged: () => Promise<void> }) {
+function TagsEditor({
+  cred,
+  onChanged,
+}: {
+  cred: CredentialSearchItem;
+  onChanged: () => Promise<void>;
+}) {
   const api = useApi();
   const { t, tr } = useI18n();
   const { toast } = useUi();
   const { busy, run } = useAction();
-  const [text, setText] = useState((cred.tags ?? []).join(', '));
-  useEffect(() => setText((cred.tags ?? []).join(', ')), [cred.tags]);
-  const tags = Array.from(new Set(text.split(/[,，\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))).sort();
-  const dirty = tags.join(',') !== (cred.tags ?? []).join(',');
+  const [text, setText] = useState((cred.tags ?? []).join(", "));
+  useEffect(() => setText((cred.tags ?? []).join(", ")), [cred.tags]);
+  const tags = Array.from(
+    new Set(
+      text
+        .split(/[,，\s]+/)
+        .map((x) => x.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ).sort();
+  const dirty = tags.join(",") !== (cred.tags ?? []).join(",");
   return (
-    <div className="field" style={{ marginTop: 12 }} data-testid="cred-tags-editor">
-      <label>{tr('标签（逗号分隔）', 'Tags (comma separated)')}</label>
-      <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
-        <input className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="vip, eu" data-testid="cred-tags-input" />
+    <div
+      className="field"
+      style={{ marginTop: 12 }}
+      data-testid="cred-tags-editor"
+    >
+      <label>{tr("标签（逗号分隔）", "Tags (comma separated)")}</label>
+      <div className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+        <input
+          className="input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="vip, eu"
+          data-testid="cred-tags-input"
+        />
         <button
           className="btn"
           disabled={!dirty || !!busy}
           data-testid="cred-tags-save"
           onClick={() =>
-            void run('tags', async () => {
-              await api.bulkCredentials({ ids: [cred.id], action: 'set_tags', tags });
-              toast(t('saved'));
+            void run("tags", async () => {
+              await api.bulkCredentials({
+                ids: [cred.id],
+                action: "set_tags",
+                tags,
+              });
+              toast(t("saved"));
               await onChanged();
             })
           }
         >
-          {busy === 'tags' && <Spinner />}
-          {t('save')}
+          {busy === "tags" && <Spinner />}
+          {t("save")}
         </button>
       </div>
-      <span className="hint">{tr('用于筛选与分组自动加入规则。', 'Used by filters and group auto-join rules.')}</span>
+      <span className="hint">
+        {tr(
+          "用于筛选与分组自动加入规则。",
+          "Used by filters and group auto-join rules.",
+        )}
+      </span>
     </div>
   );
 }
