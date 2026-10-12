@@ -175,7 +175,7 @@ func (r *Runtime) disableForAccountBlock(ctx context.Context, id string, f accou
 	}
 	full.Disabled = true
 	full.Status = coreauth.StatusDisabled
-	full.StatusMessage = f.label + "：" + f.upstream + " · 自动停用于 " + now.In(quotaBucketDisplayZone).Format("01-02 15:04") + "（完成验证后点「启用」，或等待自动复查）"
+	full.StatusMessage = f.label + " · " + now.In(quotaBucketDisplayZone).Format("01-02 15:04") + " 停用：" + f.upstream
 	full.LastError = &coreauth.Error{Code: f.code, HTTPStatus: http.StatusForbidden, Message: f.upstream}
 	full.Metadata["disabled"] = true
 	full.Metadata[AccountBlockReasonKey] = f.code

@@ -52,8 +52,8 @@ export function credentialStatus(
       <span title={c.status_message}>
         <Badge kind="err" dot>
           {c.auto_disabled_reason === "account_verification_required"
-            ? tr("已停用 · 需验证账号（403）", "Disabled · account verification required (403)")
-            : tr("已停用 · 账号被封/违反条款（403）", "Disabled · account suspended (403)")}
+            ? tr("停用·需验证(403)", "Off · verify (403)")
+            : tr("停用·账号封禁(403)", "Off · suspended (403)")}
         </Badge>
       </span>
     );
@@ -99,14 +99,14 @@ export function bucketExhaustedMessages(c: Credential): string[] {
   const out = new Set<string>();
   for (const m of coolingModels(c)) {
     if (m.bucket_exhausted || m.error_code === "quota_bucket_exhausted")
-      out.add((m.status_message || "额度耗尽").replace("（配额探测剩余 0%）", ""));
+      out.add((m.status_message || "额度耗尽").replace("（配额探测剩余 0%）", "").replace("，重置于 ", " · 重置 "));
   }
   return [...out];
 }
 
 function cooldownReason(m: { http_status?: number; quota_exceeded?: boolean; status_message?: string; bucket_exhausted?: boolean; error_code?: string }, tr: ReturnType<typeof useI18n>["tr"]) {
   if (m.bucket_exhausted || m.error_code === "quota_bucket_exhausted")
-    return tr("额度探测 0%，等待额度恢复", "quota probe 0%, waiting for reset");
+    return tr("额度 0%", "quota 0%");
   if (m.http_status === 429 || m.quota_exceeded) return tr("额度耗尽 429", "quota exhausted 429");
   if (m.http_status === 503) return tr("上游无容量 503", "no capacity 503");
   if (m.http_status) return `HTTP ${m.http_status}`;

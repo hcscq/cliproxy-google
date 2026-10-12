@@ -96,9 +96,9 @@ var quotaBucketDisplayZone = func() *time.Location {
 }()
 
 func quotaBucketMessage(bucket string, resetAt time.Time) string {
-	msg := quotaBucketLabel(bucket) + " 额度耗尽（配额探测剩余 0%）"
+	msg := quotaBucketLabel(bucket) + " 额度耗尽"
 	if !resetAt.IsZero() {
-		msg += "，重置于 " + resetAt.In(quotaBucketDisplayZone).Format("01-02 15:04")
+		msg += " · 重置 " + resetAt.In(quotaBucketDisplayZone).Format("01-02 15:04")
 	}
 	return msg
 }

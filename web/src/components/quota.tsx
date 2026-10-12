@@ -38,6 +38,17 @@ export function QuotaStatusBadge({ item }: { item?: QuotaItem }) {
 }
 
 /** Compact quota windows (e.g. Antigravity "Gemini Models" weekly %). */
+/** Below this remaining ratio the compact view shows the known reset time. */
+export const LOW_QUOTA_RATIO = 0.05;
+
+/** "10-17 13:36" in local time. */
+export function fmtResetShort(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export function QuotaWindows({ item, compact, error, loading }: { item?: QuotaItem; compact?: boolean; error?: unknown; loading?: boolean }) {
   const { tr, lang } = useI18n();
   if (!item || !item.primary_windows?.length) {
@@ -75,6 +86,9 @@ export function QuotaWindows({ item, compact, error, loading }: { item?: QuotaIt
               <span className="spacer ellipsis">{w.label ?? w.id}</span>
               <b>{valueText}</b>
               {!compact && w.reset_at && <span className="faint">· {tr('重置', 'resets')} {fmtRelative(w.reset_at, lang)}</span>}
+              {compact && w.reset_at && ratio !== undefined && ratio < LOW_QUOTA_RATIO && (
+                <span className="warn-text" title={tr('额度将在此时重置', 'Quota resets at')}>{tr('重置', 'reset')} {fmtResetShort(w.reset_at)}</span>
+              )}
             </div>
             <Progress ratio={ratio} />
           </div>

@@ -69,7 +69,7 @@ func TestApplyQuotaBucketWindowsBlocksAndReleasesPerBucket(t *testing.T) {
 		if d := time.Until(st.NextRetryAfter); d <= 0 || d > 11*time.Minute {
 			t.Fatalf("%s blocked for %v, want short re-probe window (<=2x5m)", m, d)
 		}
-		if !strings.Contains(st.StatusMessage, "Gemini 额度耗尽") || !strings.Contains(st.StatusMessage, "重置于") {
+		if !strings.Contains(st.StatusMessage, "Gemini 额度耗尽") || !strings.Contains(st.StatusMessage, "重置 ") {
 			t.Fatalf("%s message = %q", m, st.StatusMessage)
 		}
 	}
