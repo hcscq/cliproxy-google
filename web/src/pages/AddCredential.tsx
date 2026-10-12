@@ -361,7 +361,12 @@ function VertexImport({ onDone }: { onDone: () => void }) {
 
 /** Split pasted text into chunks the server accepts (<=50 entries per request). */
 export function chunkTokenInput(text: string): { text?: string; items?: unknown[] }[] {
-  const t = text.trim();
+  // Strip BOM / zero-width chars and normalize newlines / dash variants from copy-paste.
+  const t = text
+    .replace(/[\u200b-\u200d\u2060\ufeff]/g, '')
+    .replace(/[\u00a0\u3000]/g, ' ')
+    .replace(/\r\n?/g, '\n')
+    .trim();
   if (!t) return [];
   if (t.startsWith('[')) {
     try {
@@ -375,7 +380,7 @@ export function chunkTokenInput(text: string): { text?: string; items?: unknown[
       /* fall through to line mode */
     }
   }
-  const lines = t.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  const lines = t.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
   const out = [];
   for (let i = 0; i < lines.length; i += 50) out.push({ text: lines.slice(i, i + 50).join('\n') });
   return out;

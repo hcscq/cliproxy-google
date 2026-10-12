@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -210,9 +211,20 @@ type rtImportEntry struct {
 	ParseError   string
 }
 
+var (
+	rtInvisibleReplacer = strings.NewReplacer("\u200b", "", "\u200c", "", "\u200d", "", "\u2060", "", "\ufeff", "", "\u00a0", " ", "\u3000", " ", "\r\n", "\n", "\r", "\n")
+	rtDashClass         = `[-\x{2010}-\x{2015}\x{2212}\x{FE58}\x{FE63}\x{FF0D}]`
+	rtSepPattern        = regexp.MustCompile(`\s*` + rtDashClass + `{3,}\s*`)
+	rtEmailSepPattern   = regexp.MustCompile(`^([^\s@]+@[^\s]+?)\s*` + rtDashClass + `{3,}\s*(\S.*)$`)
+)
+
+// normalizeRTText strips BOM/zero-width chars and normalizes line endings from copy-paste.
+func normalizeRTText(text string) string { return rtInvisibleReplacer.Replace(text) }
+
 // parseRefreshTokenInput accepts: one token per line; a JSON array of strings or
 // objects; a single JSON object; or one JSON object per line.
 func parseRefreshTokenInput(text string) []rtImportEntry {
+	text = normalizeRTText(text)
 	text = strings.TrimSpace(strings.TrimPrefix(text, "\ufeff"))
 	if text == "" {
 		return nil
@@ -234,7 +246,7 @@ func parseRefreshTokenInput(text string) []rtImportEntry {
 			return out
 		}
 	}
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	lines := strings.Split(normalizeRTText(text), "\n")
 	out := make([]rtImportEntry, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -252,17 +264,16 @@ func parseRefreshTokenInput(text string) []rtImportEntry {
 			continue
 		}
 		email := ""
-		if sep := strings.Index(line, "----"); sep >= 0 {
-			// "email----refresh_token" (extra "----" fields after the token are ignored)
-			email = strings.TrimSpace(line[:sep])
-			line = strings.TrimSpace(line[sep+4:])
-			if next := strings.Index(line, "----"); next >= 0 {
-				line = strings.TrimSpace(line[:next])
+		if m := rtEmailSepPattern.FindStringSubmatch(line); m != nil {
+			// "email----refresh_token" (3+ dashes, any dash variant; extra fields after the token are ignored)
+			email = strings.TrimSpace(m[1])
+			line = strings.TrimSpace(m[2])
+			if loc := rtSepPattern.FindStringIndex(line); loc != nil {
+				line = strings.TrimSpace(line[:loc[0]])
 			}
-			if !strings.Contains(email, "@") {
-				out = append(out, rtImportEntry{Index: idx, ParseError: "expected email----refresh_token"})
-				continue
-			}
+		} else if strings.Contains(line, "----") {
+			out = append(out, rtImportEntry{Index: idx, ParseError: "expected email----refresh_token"})
+			continue
 		}
 		token := strings.Trim(line, `"', `)
 		if strings.ContainsAny(token, " \t") {
