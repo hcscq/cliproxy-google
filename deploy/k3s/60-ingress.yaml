@@ -55,6 +55,16 @@ spec:
           - {path: /index.html, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
           - {path: /management.html, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
           - {path: /assets, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          # panel client routes (SPA deep links / reloads; Home answers them with index.html)
+          - {path: /credentials, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /provider-keys, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /models, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /access-keys, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /groups, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /usage, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /logs, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /nodes, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+          - {path: /settings, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
           # Management API v8 used by the panel. Every route requires the management key,
           # except /v8/management/oauth/callback which is validated by its pending OAuth state.
           - {path: /v8/management, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
