@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
@@ -230,15 +232,21 @@ type Config struct {
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
 	// Settings shared with CPA V8.
-	Discovery                     DiscoveryConfig                     `yaml:"discovery" json:"discovery"`
-	SaveCooldownStatus            bool                                `yaml:"save-cooldown-status" json:"save-cooldown-status"`
-	TransientErrorCooldownSeconds int                                 `yaml:"transient-error-cooldown-seconds" json:"transient-error-cooldown-seconds"`
-	Devin                         DevinConfig                         `yaml:"devin" json:"devin"`
-	XAI                           XAIConfig                           `yaml:"xai" json:"xai"`
-	Codex                         CodexConfig                         `yaml:"codex" json:"codex"`
-	Claude                        ClaudeConfig                        `yaml:"claude" json:"claude"`
-	DisableClaudeCloakMode        bool                                `yaml:"disable-claude-cloak-mode" json:"disable-claude-cloak-mode"`
-	OAuthRequestScopedErrors      map[string][]RequestScopedErrorRule `yaml:"oauth-request-scoped-errors,omitempty" json:"oauth-request-scoped-errors,omitempty"`
+	Discovery                     DiscoveryConfig `yaml:"discovery" json:"discovery"`
+	SaveCooldownStatus            bool            `yaml:"save-cooldown-status" json:"save-cooldown-status"`
+	TransientErrorCooldownSeconds int             `yaml:"transient-error-cooldown-seconds" json:"transient-error-cooldown-seconds"`
+	// QuotaShortCooldownSeconds is the fixed per-model cooldown for a 429 that carries no
+	// upstream reset hint (0 = env QUOTA_SHORT_COOLDOWN_SECONDS or 60).
+	QuotaShortCooldownSeconds int `yaml:"quota-short-cooldown-seconds" json:"quota-short-cooldown-seconds"`
+	// QuotaProbeIntervalSeconds is how often the Home leader probes cooling (credential, model)
+	// pairs (0 = env QUOTA_PROBE_INTERVAL_SECONDS or 60).
+	QuotaProbeIntervalSeconds int                                 `yaml:"quota-probe-interval-seconds" json:"quota-probe-interval-seconds"`
+	Devin                     DevinConfig                         `yaml:"devin" json:"devin"`
+	XAI                       XAIConfig                           `yaml:"xai" json:"xai"`
+	Codex                     CodexConfig                         `yaml:"codex" json:"codex"`
+	Claude                    ClaudeConfig                        `yaml:"claude" json:"claude"`
+	DisableClaudeCloakMode    bool                                `yaml:"disable-claude-cloak-mode" json:"disable-claude-cloak-mode"`
+	OAuthRequestScopedErrors  map[string][]RequestScopedErrorRule `yaml:"oauth-request-scoped-errors,omitempty" json:"oauth-request-scoped-errors,omitempty"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests.
@@ -1682,4 +1690,29 @@ type CapacityRetryConfig struct {
 	// MaxDelay caps a single backoff delay (default 8s). An upstream RetryInfo
 	// retryDelay is honoured up to this cap.
 	MaxDelay string `yaml:"max-delay,omitempty" json:"max-delay,omitempty"`
+}
+
+func envSeconds(name string, def int) int {
+	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			return v
+		}
+	}
+	return def
+}
+
+// QuotaShortCooldown returns the effective no-hint 429 cooldown.
+func (c *Config) QuotaShortCooldown() time.Duration {
+	if c != nil && c.QuotaShortCooldownSeconds > 0 {
+		return time.Duration(c.QuotaShortCooldownSeconds) * time.Second
+	}
+	return time.Duration(envSeconds("QUOTA_SHORT_COOLDOWN_SECONDS", 60)) * time.Second
+}
+
+// QuotaProbeInterval returns the effective cooling-pair probe interval.
+func (c *Config) QuotaProbeInterval() time.Duration {
+	if c != nil && c.QuotaProbeIntervalSeconds > 0 {
+		return time.Duration(c.QuotaProbeIntervalSeconds) * time.Second
+	}
+	return time.Duration(envSeconds("QUOTA_PROBE_INTERVAL_SECONDS", 60)) * time.Second
 }

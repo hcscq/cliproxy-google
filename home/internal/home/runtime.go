@@ -61,6 +61,7 @@ type Runtime struct {
 	pluginSyncHTTPClient    pluginstore.HTTPDoer
 	clusterAdapter          ClusterAdapter
 	agCatalog               antigravityCatalogSync
+	prober                  quotaProber
 	concurrencyAdmitter     ConcurrencyAdmitter
 	clusterRefresh          func(context.Context, string, string) ([]byte, error)
 	originalStore           coreauth.Store
@@ -344,6 +345,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	r.startClusterUsageWriter(runCtx)
 	r.startKVCleanupLoop(runCtx)
 	r.startAntigravityCatalogLoop(runCtx)
+	r.startQuotaProber(runCtx)
 
 	if !r.clusterAutoRefreshGated() && strings.TrimSpace(r.authDir) != "" {
 		if errEnsureAuthDir := os.MkdirAll(r.authDir, 0o755); errEnsureAuthDir != nil {

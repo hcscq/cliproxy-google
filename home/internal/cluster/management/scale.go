@@ -214,6 +214,7 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		e["state"] = statusOf[a.ID]
 		items = append(items, e)
 	}
+	h.annotateQuotaProbes(c.Request.Context(), items)
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(matched), "all": len(all), "page": page, "page_size": size, "facets": facets})
 }
 

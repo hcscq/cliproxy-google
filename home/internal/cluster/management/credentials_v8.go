@@ -87,6 +87,7 @@ func (h *Handler) RefreshAuthFiles(c *gin.Context) {
 func (h *Handler) ResetQuota(c *gin.Context) {
 	var body struct {
 		AuthIndex string `json:"auth_index"`
+		Model     string `json:"model"`
 	}
 	if errBind := c.ShouldBindJSON(&body); errBind != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -102,7 +103,7 @@ func (h *Handler) ResetQuota(c *gin.Context) {
 	}
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
-	result, errClear := h.runtime.CoreManager().ClearQuotaCooldown(ctx, strings.TrimSpace(body.AuthIndex), "")
+	result, errClear := h.runtime.CoreManager().ClearQuotaCooldown(ctx, strings.TrimSpace(body.AuthIndex), strings.TrimSpace(body.Model))
 	if errClear != nil {
 		status := quotaReadErrorStatus(errClear)
 		if errors.Is(errClear, gorm.ErrRecordNotFound) {

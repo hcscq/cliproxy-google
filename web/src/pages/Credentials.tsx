@@ -8,6 +8,7 @@ import {
   type CredentialGroupSummary,
   type CredentialQuery,
   type CredentialSearchItem,
+  type ModelCooldown,
   type ModelInfo,
   type QuotaItem,
 } from "../api/client";
@@ -102,11 +103,33 @@ export function statusTooltip(c: Credential, tr: ReturnType<typeof useI18n>["tr"
   if (cooling.length > 0) {
     if (c.tried_models_all_cooling)
       lines.push(tr("已尝试过的模型都在冷却（按模型限额），未尝试的模型仍可用", "All models tried so far are cooling (per-model limits); untried models still work"));
-    for (const m of cooling)
+    for (const m of cooling) {
       lines.push(`${m.model}: ${cooldownReason(m, tr)}${m.next_retry_after ? ` · ${tr("剩余", "remaining")} ${remaining(m.next_retry_after)}` : ""}`);
+      const probe = probeLine(m, tr);
+      if (probe) lines.push(`  ${probe}`);
+    }
   }
   if (lines.length === 0) return c.status_message || undefined;
   return lines.join("\n");
+}
+
+function probeResultText(r: string, tr: ReturnType<typeof useI18n>["tr"]): string {
+  if (r === "ok") return tr("200 已恢复", "200 recovered");
+  if (r === "quota") return tr("429 仍限额", "429 still limited");
+  return tr("探测出错", "probe error");
+}
+
+export function probeLine(m: ModelCooldown, tr: ReturnType<typeof useI18n>["tr"]): string | undefined {
+  if (!m.probe_managed) return undefined;
+  const parts = [tr("上游未给出时间，由探测决定", "upstream gave no time; decided by probing")];
+  if (m.probe) {
+    parts.push(`${tr("上次探测", "last probe")} ${fmtTime(m.probe.at)} ${probeResultText(m.probe.result, tr)}${m.probe.detail ? ` (${m.probe.detail})` : ""}`);
+    parts.push(`${tr("下次探测", "next probe")} ${fmtTime(m.probe.next_probe)}`);
+  } else {
+    parts.push(tr("尚未探测", "not probed yet"));
+  }
+  parts.push(`${tr("短冷却", "short cooldown")} ${m.quota_short_cooldown_seconds ?? "?"}s / ${tr("探测间隔", "probe interval")} ${m.quota_probe_interval_seconds ?? "?"}s`);
+  return parts.join(" · ");
 }
 
 // checkbox, ID, account, groups, provider, status, quota, priority, updated, enabled
@@ -805,7 +828,7 @@ function CredentialDrawer({
         {cred.credential_scope_error && cred.status_message && (
           <div className="alert warn small">{cred.status_message}</div>
         )}
-        <ModelCooldownList cred={cred} />
+        <ModelCooldownList cred={cred} onChanged={onChanged} />
 
         <dl className="kv small">
           <dt>ID</dt>
@@ -1032,8 +1055,11 @@ function CredentialDrawer({
   );
 }
 
-function ModelCooldownList({ cred }: { cred: Credential }) {
+function ModelCooldownList({ cred, onChanged }: { cred: Credential; onChanged?: () => Promise<void> }) {
   const { tr, lang } = useI18n();
+  const api = useApi();
+  const { toast } = useUi();
+  const { busy, run } = useAction();
   const items = cred.model_cooldowns ?? [];
   if (!items.length) return null;
   return (
@@ -1050,6 +1076,7 @@ function ModelCooldownList({ cred }: { cred: Credential }) {
             <th>{tr("模型", "Model")}</th>
             <th>{tr("状态", "State")}</th>
             <th>{tr("恢复时间", "Retry at")}</th>
+            <th />
           </tr>
         </thead>
         <tbody>
@@ -1079,6 +1106,24 @@ function ModelCooldownList({ cred }: { cred: Credential }) {
                 {m.next_retry_after
                   ? `${fmtTime(m.next_retry_after)} (${fmtRelative(m.next_retry_after, lang)})`
                   : "—"}
+                {probeLine(m, tr) && <div className="faint small">{probeLine(m, tr)}</div>}
+              </td>
+              <td>
+                {m.cooling && (
+                  <button
+                    className="btn small"
+                    disabled={busy === `clear-${m.model}`}
+                    onClick={() =>
+                      run(`clear-${m.model}`, async () => {
+                        await api.resetCooldown(cred.id, m.model);
+                        toast(tr("冷却已清除", "Cooldown cleared"));
+                        await onChanged?.();
+                      })
+                    }
+                  >
+                    {tr("清除冷却", "Clear cooldown")}
+                  </button>
+                )}
               </td>
             </tr>
           ))}

@@ -81,6 +81,8 @@ func buildV8Paths() []configPath {
 		{"antigravity-catalog-refresh", "routing.antigravity-catalog-refresh"},
 		{"disable-cooling", "routing.cooldown.disable-cooling"}, {"save-cooldown-status", "routing.cooldown.save-cooldown-status"},
 		{"transient-error-cooldown-seconds", "routing.cooldown.transient-error-cooldown-seconds"},
+		{"quota-short-cooldown-seconds", "routing.cooldown.quota-short-cooldown-seconds"},
+		{"quota-probe-interval-seconds", "routing.cooldown.quota-probe-interval-seconds"},
 		{"proxy-url", "requests.proxy-url"}, {"passthrough-headers", "requests.passthrough-headers"},
 		{"nonstream-keepalive-interval", "requests.nonstream-keepalive-interval"}, {"streaming", "requests.streaming"}, {"payload", "requests.payload"},
 		{"auth-dir", "oauth.auth-dir"}, {"auth-auto-refresh-workers", "oauth.auth-auto-refresh-workers"},

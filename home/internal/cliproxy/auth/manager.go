@@ -236,6 +236,7 @@ func (m *Manager) SetConfig(cfg *internalconfig.Config) {
 		cfg = &internalconfig.Config{}
 	}
 	m.runtimeConfig.Store(cfg)
+	SetQuotaShortCooldown(cfg.QuotaShortCooldown())
 	if m.scheduler != nil {
 		m.scheduler.resetModelShards()
 	}

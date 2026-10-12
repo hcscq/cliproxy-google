@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
@@ -32,6 +33,9 @@ type Result struct {
 	RetryAfter        *time.Duration
 	ResetAt           *time.Time
 	AccessTokenSHA256 string
+	// RestartQuotaWindow makes a 429 start a fresh cooldown window from now even if a
+	// (possibly longer) window is still open. Used by the Home quota prober.
+	RestartQuotaWindow bool
 }
 
 // markResultTransition captures the registry side effects derived from a result transition.
@@ -972,42 +976,51 @@ func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) 
 	return cooldown, prevLevel + 1
 }
 
-// quotaCooldownAfterFailure returns the recovery deadline and backoff level for
-// a quota failure observed at now. Failures that land while a previous quota
-// window is still open reuse that window instead of escalating, so a burst of
-// concurrent failures advances the backoff ladder at most once per window.
-// Future provider reset timestamps are authoritative and suppress relative
-// retry delays. Without one, the later of exponential backoff and RetryAfter
-// is used. Open windows keep their backoff level and are never shortened.
-func quotaCooldownAfterFailure(quota QuotaState, now time.Time, result Result) (time.Time, int) {
-	windowOpen := quota.NextRecoverAt.After(now) && quota.NextRecoverAt.Sub(now) <= providerQuotaHintMaxHorizon
-	deadline := quota.NextRecoverAt
-	nextLevel := quota.BackoffLevel
-	if !windowOpen {
-		cooldown, level := nextQuotaCooldown(quota.BackoffLevel, false)
-		deadline = now.Add(cooldown)
-		nextLevel = level
-	}
+// quotaShortCooldownNanos is the fixed cooldown for a 429 without an upstream hint.
+// Updated from runtime config (hot-reloaded); defaults to 60s.
+var quotaShortCooldownNanos atomic.Int64
 
-	provider := strings.ToLower(strings.TrimSpace(result.Provider))
-	if provider != "antigravity" && provider != "codex" {
-		return deadline, nextLevel
+func init() { quotaShortCooldownNanos.Store(int64(60 * time.Second)) }
+
+// SetQuotaShortCooldown updates the no-hint 429 cooldown at runtime.
+func SetQuotaShortCooldown(d time.Duration) {
+	if d > 0 {
+		quotaShortCooldownNanos.Store(int64(d))
 	}
-	if result.ResetAt != nil && result.ResetAt.After(now) {
-		resetAt := result.ResetAt.UTC()
-		if resetAt.Sub(now) <= providerQuotaHintMaxHorizon {
-			if resetAt.After(deadline) {
-				deadline = resetAt
-			}
-			return deadline, nextLevel
+}
+
+// QuotaShortCooldown returns the current no-hint 429 cooldown.
+func QuotaShortCooldown() time.Duration { return time.Duration(quotaShortCooldownNanos.Load()) }
+
+// quotaCooldownAfterFailure returns the recovery deadline and backoff level for a quota
+// failure observed at now. Upstream hints (reset timestamp, retry delay) win. Without a
+// hint the cooldown is a fixed short window (no exponential growth); the Home prober then
+// decides real availability. Open windows are never shortened, so a burst of concurrent
+// failures does not extend the window either.
+func quotaCooldownAfterFailure(quota QuotaState, now time.Time, result Result) (time.Time, int) {
+	windowOpen := !result.RestartQuotaWindow && quota.NextRecoverAt.After(now) && quota.NextRecoverAt.Sub(now) <= providerQuotaHintMaxHorizon
+	// BackoffLevel still counts consecutive quota windows (diagnostics only); it no longer
+	// drives the cooldown length.
+	level := quota.BackoffLevel
+	if !windowOpen {
+		_, level = nextQuotaCooldown(quota.BackoffLevel, false)
+	}
+	var hinted time.Time
+	if result.ResetAt != nil && result.ResetAt.After(now) && result.ResetAt.Sub(now) <= providerQuotaHintMaxHorizon {
+		hinted = result.ResetAt.UTC()
+	} else if result.RetryAfter != nil && *result.RetryAfter > 0 && *result.RetryAfter <= providerQuotaHintMaxHorizon {
+		hinted = now.Add(*result.RetryAfter)
+	}
+	if !hinted.IsZero() {
+		if windowOpen && quota.NextRecoverAt.After(hinted) {
+			return quota.NextRecoverAt, level
 		}
+		return hinted, level
 	}
-	if result.RetryAfter != nil && *result.RetryAfter > 0 && *result.RetryAfter <= providerQuotaHintMaxHorizon {
-		if retryAt := now.Add(*result.RetryAfter); retryAt.After(deadline) {
-			deadline = retryAt
-		}
+	if windowOpen {
+		return quota.NextRecoverAt, level
 	}
-	return deadline, nextLevel
+	return now.Add(QuotaShortCooldown()), level
 }
 
 // NewUsageResult creates a new usage result.

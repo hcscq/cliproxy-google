@@ -62,6 +62,7 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 		}
 		files = append(files, entry)
 	}
+	h.annotateQuotaProbes(c.Request.Context(), files)
 	sort.Slice(files, func(i, j int) bool {
 		return fmt.Sprint(files[i]["name"]) < fmt.Sprint(files[j]["name"])
 	})

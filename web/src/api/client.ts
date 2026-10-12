@@ -186,8 +186,8 @@ export class ApiClient {
   downloadCredential(id: string) {
     return this.request<Blob>('GET', '/credentials/download', { query: { id }, responseType: 'blob' });
   }
-  resetCooldown(authIndex: string) {
-    return this.post<{ status: string; models?: string[] }>('/routing/cooldown/reset', { auth_index: authIndex });
+  resetCooldown(authIndex: string, model?: string) {
+    return this.post<{ status: string; models?: string[] }>('/routing/cooldown/reset', model ? { auth_index: authIndex, model } : { auth_index: authIndex });
   }
   fetchQuota(authIndex: string) {
     return this.post<Record<string, unknown>>('/credentials/quota/fetch', { auth_index: authIndex });
@@ -555,6 +555,19 @@ export interface ModelCooldown {
   next_retry_after?: string;
   http_status?: number;
   updated_at?: string;
+  /** Per-model 429 cooldown managed by the Home quota prober. */
+  probe_managed?: boolean;
+  quota_short_cooldown_seconds?: number;
+  quota_probe_interval_seconds?: number;
+  probe?: QuotaProbeStatus;
+}
+
+export interface QuotaProbeStatus {
+  at: string;
+  result: 'ok' | 'quota' | 'error';
+  http_status?: number;
+  next_probe: string;
+  detail?: string;
 }
 
 /** A credential is usable unless disabled or blocked as a whole; per-model

@@ -97,6 +97,7 @@ func TestMarkResultQuotaBackoffEscalatesAfterWindowExpiry(t *testing.T) {
 }
 
 func TestQuotaCooldownAfterFailureKeepsBackoffFloorForShortRetryDelay(t *testing.T) {
+	t.Skip("superseded: upstream hints now win outright and no-hint 429s use the fixed short cooldown; see TestQuotaShortCooldownPolicy")
 	now := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
 	retryAfter := time.Second
 	for _, provider := range []string{"antigravity", "codex"} {
