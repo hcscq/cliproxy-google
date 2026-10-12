@@ -67,7 +67,7 @@ spec:
             - {name: work, mountPath: /work}
       containers:
         - name: home
-          image: ghcr.io/hcscq/cliproxy-google-home:sha-22d09484be19c6e35c105cebe8516c3a6ea04923
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-3929567515898eb559933cac4f6f3de8df44752b
           imagePullPolicy: IfNotPresent
           workingDir: /work
           env:
