@@ -110,3 +110,14 @@ func (r *Repository) withoutDrainingHomes(ctx context.Context, nodes []ClusterNo
 	}
 	return out
 }
+
+// ClearHomeDrain removes ip:port's drain mark. A Home calls it at startup: a
+// restart at the same address (container restart in the same pod) must not
+// keep looking like it is draining.
+func (r *Repository) ClearHomeDrain(ctx context.Context, ip string, port int) error {
+	db, err := r.database()
+	if err != nil {
+		return err
+	}
+	return db.WithContext(contextOrBackground(ctx)).Where("ip = ? AND port = ?", ip, port).Delete(&HomeDrainRecord{}).Error
+}

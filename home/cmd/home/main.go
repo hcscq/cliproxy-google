@@ -607,6 +607,11 @@ func run() int {
 	go runUsageTokenAccountingBackfillMaintenance(runCtx, repo)
 	go runInFlightStagingCleanupMaintenance(runCtx, repo, rt)
 
+	if clusterRepo != nil {
+		if err := clusterRepo.ClearHomeDrain(runCtx, clusterClientAddr, clusterAdvertisedPort); err != nil {
+			log.WithError(err).Warn("could not clear this Home's drain mark")
+		}
+	}
 	serving.Store(true)
 	go func() {
 		<-ctx.Done()
@@ -1063,8 +1068,10 @@ func drainHome(repo *cluster.Repository, ip string, port int, publish func()) {
 		return
 	}
 	heartbeatTimeout := cluster.DefaultHeartbeatTimeout()
-	if _, err := repo.RebalanceHomeAssignments(ctx, heartbeatTimeout); err != nil {
+	if n, err := repo.RebalanceHomeAssignments(ctx, heartbeatTimeout); err != nil {
 		log.WithError(err).Warn("home drain: rebalance failed")
+	} else {
+		log.Infof("home drain: started; %d proxy assignments moved away", n)
 	}
 	// Tell connected proxies now (this Home is no longer listed, so they move).
 	publish()
