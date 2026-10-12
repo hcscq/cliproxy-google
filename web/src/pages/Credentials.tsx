@@ -155,15 +155,15 @@ export function CredentialsPage() {
           <table className="table cred-table" data-testid="credentials-table">
             <colgroup>
               <col style={{ width: 36 }} />
-              <col style={{ width: 92 }} />
+              <col style={{ width: 86 }} />
               <col />
-              <col style={{ width: 140 }} />
-              <col style={{ width: 110 }} />
-              <col style={{ width: 170 }} />
-              <col className="hide-sm" style={{ width: 240 }} />
-              <col className="hide-sm" style={{ width: 70 }} />
-              <col className="hide-sm" style={{ width: 100 }} />
-              <col style={{ width: 70 }} />
+              <col style={{ width: 104 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 150 }} />
+              <col className="hide-sm" style={{ width: 200 }} />
+              <col className="hide-sm" style={{ width: 56 }} />
+              <col className="hide-sm" style={{ width: 88 }} />
+              <col style={{ width: 56 }} />
             </colgroup>
             <thead>
               <tr>
