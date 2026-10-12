@@ -2172,6 +2172,10 @@ func (c *Client) RunConfigSubscriberLifetime(ctx context.Context, onConfig func(
 				}
 			}
 			if c.takeReassignPending() {
+				// Keep this membership across the move (same node, takeover):
+				// otherwise the new Home refuses the certificate while the old
+				// one still lists it as active, leaving a window with no Home.
+				c.markMembershipTakeoverEligible()
 				log.Info("home assignment changed; moving to the assigned home")
 				return c.endConfigSubscriberLifetimeWithSubscription(errHomeReassigned, pubsub, "home reassignment")
 			}
