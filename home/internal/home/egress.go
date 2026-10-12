@@ -35,9 +35,9 @@ const (
 	EgressPausedReasonKey = "auto_paused_reason"
 	egressPausedDown      = "egress_down"
 	egressStatusKV        = "egress-status"
-	egressTick            = 15 * time.Second
+	egressTick            = 5 * time.Second
 	egressFailThreshold   = 3
-	egressCheckTimeout    = 8 * time.Second
+	egressCheckTimeout    = 4 * time.Second
 	egressHealthTarget    = "oauth2.googleapis.com:443"
 	egressStatusTTL       = 10 * time.Minute
 	egressEnv             = "HOME_EGRESS_PROXIES"
@@ -264,9 +264,19 @@ func (r *Runtime) egressRound(ctx context.Context, specs []EgressSpec) {
 	repo := r.egress.repo
 	r.egress.mu.Unlock()
 
-	// 1. Health.
-	for _, s := range specs {
-		err := egressChecker(ctx, s.ProxyURL)
+	// 1. Health (parallel, so one dead egress never delays the others).
+	errs := make([]error, len(specs))
+	var wg sync.WaitGroup
+	for i := range specs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = egressChecker(ctx, specs[i].ProxyURL)
+		}(i)
+	}
+	wg.Wait()
+	for i, s := range specs {
+		err := errs[i]
 		r.egress.mu.Lock()
 		st := r.egress.status[s.ProxyURL]
 		if st == nil {

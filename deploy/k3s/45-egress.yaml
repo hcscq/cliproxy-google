@@ -6,6 +6,8 @@
 #   3128/3129 on the same IP; no conflict). Pod/LAN sources only, CONNECT :443 only.
 # - Home lists these in proxy_pool (scope "egress") from HOME_EGRESS_PROXIES and
 #   pins each credential to one of them (fail closed: never falls back to direct).
+# - Master (7fm6r3az, 154.44.10.227): its host firewall (/usr/local/sbin/hostfw-restore.sh)
+#   needs "-i ens19 -s 172.16.0.0/16 -p tcp --dport 3140 -j ACCEPT" (added 2026-10-12).
 # Apply with the namespace used in prod:  sed 's/namespace: cliproxy$/namespace: cliproxy-google/'
 apiVersion: v1
 kind: ConfigMap
