@@ -741,7 +741,9 @@ func TestHealthzAccessLogging(t *testing.T) {
 		status      int
 	}{
 		{"healthy", false, http.StatusOK},
-		{"home_unavailable", true, http.StatusServiceUnavailable},
+		// Liveness must not depend on Home: a Home outage used to get proxies
+		// restarted (dropping their unsent usage queue).
+		{"home_unavailable", true, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server.cfg.Home.Enabled = tc.homeEnabled
@@ -757,13 +759,13 @@ func TestHealthzAccessLogging(t *testing.T) {
 					for _, entry := range hook.AllEntries() {
 						if _, ok := entry.Data["request_id"]; ok && strings.Contains(entry.Message, `"/healthz"`) {
 							count++
-							if tc.homeEnabled && entry.Level != log.ErrorLevel {
+							if tc.status != http.StatusOK && entry.Level != log.ErrorLevel {
 								t.Errorf("failed probe log level = %v, want error", entry.Level)
 							}
 						}
 					}
 					wantCount := 0
-					if tc.homeEnabled {
+					if tc.status != http.StatusOK {
 						wantCount = 1
 					}
 					if count != wantCount {

@@ -3,7 +3,9 @@
 H=${1:-2}; P=${2:-4}; shift 2
 R=/workspace/cap/run; B=/workspace/cap/bin
 [ -n "$FRESH_ID" ] && rm -rf $R/proxy*/id   # after a DB rebuild the cluster CA changes
-pkill -f "$B/(home|proxy|mock)"; rm -f $R/ABORTED ; sleep 2
+pkill -f "$B/(home|proxy|mock)"; rm -f $R/ABORTED
+for t in $(seq 1 30); do pgrep -f "$B/(home|proxy|mock)" >/dev/null || break; sleep 1; done
+pkill -9 -f "$B/(home|proxy|mock)"; sleep 1
 cd $R
 bash -c "ulimit -n 500000; GOMEMLIMIT=200MiB exec $B/mock $* > $R/mock.log 2>&1" &
 for i in $(seq 1 $H); do

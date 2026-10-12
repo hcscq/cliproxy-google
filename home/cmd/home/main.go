@@ -611,7 +611,11 @@ func run() int {
 	go func() {
 		<-ctx.Done()
 		if clusterRepo != nil {
-			drainHome(clusterRepo, clusterClientAddr, clusterAdvertisedPort, coordinator)
+			drainHome(clusterRepo, clusterClientAddr, clusterAdvertisedPort, func() {
+				if respSrv != nil {
+					respSrv.PublishClusterUpdateNow()
+				}
+			})
 		}
 		shutdownServers()
 	}()
@@ -1043,7 +1047,7 @@ func openPostgresWithRetry(ctx context.Context, cfg cluster.PGSQLConfig) (*gorm.
 // drainHome marks this Home as draining, rebalances proxies away from it and
 // waits (HOME_DRAIN_TIMEOUT, default 25s) until none is connected, so a
 // rolling update moves proxies before their Home disappears.
-func drainHome(repo *cluster.Repository, ip string, port int, coordinator *cluster.Coordinator) {
+func drainHome(repo *cluster.Repository, ip string, port int, publish func()) {
 	timeout := 25 * time.Second
 	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv("HOME_DRAIN_TIMEOUT"))); err == nil && d >= 0 {
 		timeout = d
@@ -1062,7 +1066,14 @@ func drainHome(repo *cluster.Repository, ip string, port int, coordinator *clust
 	if _, err := repo.RebalanceHomeAssignments(ctx, heartbeatTimeout); err != nil {
 		log.WithError(err).Warn("home drain: rebalance failed")
 	}
+	// Tell connected proxies now (this Home is no longer listed, so they move).
+	publish()
+	lastPublish := time.Now()
 	for time.Since(start) < timeout {
+		if time.Since(lastPublish) >= 5*time.Second {
+			publish() // a proxy that missed the first update
+			lastPublish = time.Now()
+		}
 		n, err := repo.ConnectedProxyCount(ctx, ip, port, heartbeatTimeout)
 		if err == nil && n == 0 {
 			log.Infof("home drain: no proxies connected after %s; stopping", time.Since(start).Round(time.Millisecond))

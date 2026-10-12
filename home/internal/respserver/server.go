@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -51,6 +52,8 @@ func (s *Server) annotateAssignment(ctx context.Context, payload []byte, nodeID 
 }
 
 type Server struct {
+	kickMu                  sync.Mutex
+	clusterKick             chan struct{} // closed to push a cluster update to all subscribers now
 	addr                    string
 	runtime                 *home.Runtime
 	registry                *dispatch.Registry
@@ -208,6 +211,9 @@ func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedC
 				case <-runCtx.Done():
 					return
 				case <-ticker.C:
+				case <-s.clusterKickChan():
+				}
+				{
 					if errSend := s.writeClusterSubscriptionUpdate(runCtx, writer, nodeID); errSend != nil {
 						log.Warnf("failed to publish cluster update to subscriber: %v", errSend)
 						cancel()
@@ -219,6 +225,30 @@ func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedC
 	}
 
 	return cancel
+}
+
+func (s *Server) clusterKickChan() <-chan struct{} {
+	s.kickMu.Lock()
+	defer s.kickMu.Unlock()
+	if s.clusterKick == nil {
+		s.clusterKick = make(chan struct{})
+	}
+	return s.clusterKick
+}
+
+// PublishClusterUpdateNow sends every subscribed proxy a fresh cluster update
+// (node list + assignment) right away instead of at the next 30s tick; used
+// when this Home starts draining so its proxies move before it stops.
+func (s *Server) PublishClusterUpdateNow() {
+	if s == nil {
+		return
+	}
+	s.kickMu.Lock()
+	if s.clusterKick != nil {
+		close(s.clusterKick)
+	}
+	s.clusterKick = make(chan struct{})
+	s.kickMu.Unlock()
 }
 
 func (s *Server) refreshSubscriptionLiveness(ctx context.Context, lifetime cluster.ConnectionLifetime) error {
