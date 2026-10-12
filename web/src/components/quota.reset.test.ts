@@ -10,3 +10,13 @@ describe('fmtResetShort', () => {
     expect(0.00035 < LOW_QUOTA_RATIO).toBe(true);
   });
 });
+
+import { fmtRecover } from './quota';
+describe('fmtRecover', () => {
+  it('shows HH:mm today and MM-DD HH:mm otherwise', () => {
+    const today = new Date(); today.setHours(19, 12, 0, 0);
+    expect(fmtRecover(today.toISOString())).toBe('19:12');
+    expect(fmtRecover(new Date(2030, 9, 17, 13, 36).toISOString())).toBe('10-17 13:36');
+    expect(fmtRecover(undefined)).toBe('');
+  });
+});

@@ -6,17 +6,24 @@ import { useI18n } from '../i18n';
 import { Badge, Card, Drawer, Empty, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
 import { IconRefresh } from '../components/icons';
 import { CatalogPanel } from './CatalogPanel';
+import { fmtRecover } from '../components/quota';
 
 const STATUS_ORDER: ModelHealthStatus[] = ['retired', 'removed', 'rejected', 'cooling', 'partial', 'unknown', 'available'];
 
-export function statusBadge(s: ModelHealthStatus, tr: (zh: string, en: string) => string) {
+/** Earliest recovery time across the model's cooling credentials. */
+function earliestRetry(m: ModelHealth): string | undefined {
+  return m.credentials.map((c) => c.next_retry_after).filter(Boolean).sort()[0];
+}
+
+export function statusBadge(s: ModelHealthStatus, tr: (zh: string, en: string) => string, until?: string) {
+  const at = fmtRecover(until);
   switch (s) {
     case 'available':
       return <Badge kind="ok" dot>{tr('可用', 'Available')}</Badge>;
     case 'partial':
       return <Badge kind="warn" dot>{tr('部分冷却', 'Partly cooling')}</Badge>;
     case 'cooling':
-      return <Badge kind="warn" dot>{tr('冷却中', 'Cooling')}</Badge>;
+      return <Badge kind="warn" dot>{at ? tr(`冷却 · ${at}恢复`, `Cooling · ${at}`) : tr('冷却中', 'Cooling')}</Badge>;
     case 'rejected':
       return <Badge kind="err" dot>{tr('上游拒绝', 'Rejected upstream')}</Badge>;
     case 'retired':
@@ -278,7 +285,7 @@ export function ModelHealthTab() {
                         </span>
                       </td>
                       <td className="mh-status" title={m.reason || reason}>
-                        {statusBadge(m.status, tr)}
+                        {statusBadge(m.status, tr, earliestRetry(m))}
                         {reason && <span className="ellipsis faint small">{reason}</span>}
                       </td>
                       <td className="hide-sm">
@@ -325,7 +332,7 @@ function ModelHealthDrawer({ m, onClose, onRetest, busy }: { m: ModelHealth; onC
     <Drawer title={m.id} onClose={onClose}>
       <div className="stack" data-testid="model-health-detail">
         <div className="row">
-          {statusBadge(m.status, tr)}
+          {statusBadge(m.status, tr, earliestRetry(m))}
           {m.hidden && <Badge>{tr('已隐藏', 'hidden')}</Badge>}
           <button className="btn btn-sm" onClick={onRetest} disabled={busy}>
             {busy ? <Spinner /> : <IconRefresh />} {tr('重新测试', 'Retest')}
@@ -387,6 +394,7 @@ function ModelHealthDrawer({ m, onClose, onRetest, busy }: { m: ModelHealth; onC
                   <Badge kind={c.state === 'ok' ? 'ok' : c.state === 'cooling' ? 'warn' : 'err'} dot>
                     {c.state}
                     {c.http_status ? ` ${c.http_status}` : ''}
+                    {c.state === 'cooling' && c.next_retry_after ? ` · ${fmtRecover(c.next_retry_after)}恢复` : ''}
                   </Badge>
                   {c.message && <div className="faint small wrap-text" style={{ maxWidth: 320 }}>{c.message}</div>}
                 </td>

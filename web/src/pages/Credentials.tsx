@@ -32,7 +32,7 @@ import {
   Switch,
 } from "../components/ui";
 import { useFlexColumns, type FlexCol } from "../components/flexCols";
-import { QuotaStatusBadge, QuotaWindows } from "../components/quota";
+import { QuotaStatusBadge, QuotaWindows, fmtRecover } from "../components/quota";
 import {
   IconDownload,
   IconPlus,
@@ -52,8 +52,8 @@ export function credentialStatus(
       <span title={c.status_message}>
         <Badge kind="err" dot>
           {c.auto_disabled_reason === "account_verification_required"
-            ? tr("停用·需验证(403)", "Off · verify (403)")
-            : tr("停用·账号封禁(403)", "Off · suspended (403)")}
+            ? tr("已停用 · 需验证(403)", "Off · verify (403)")
+            : tr("已停用 · 封禁(403)", "Off · suspended (403)")}
         </Badge>
       </span>
     );
@@ -61,26 +61,33 @@ export function credentialStatus(
   const buckets = bucketExhaustedMessages(c);
   if (buckets.length > 0 && !c.credential_scope_error)
     return (
-      <Badge kind="warn" dot>
-        {buckets.join(" · ")}
-      </Badge>
+      <span title={statusTooltip(c, tr)}>
+        <Badge kind="warn" dot>
+          {buckets.join(" / ")}
+        </Badge>
+      </span>
     );
   if (c.unavailable || c.credential_scope_error)
     return (
       <Badge kind="warn" dot>
-        {tr("整体冷却/不可用", "Cooling down")}
+        {c.next_retry_after
+          ? tr(`冷却 · ${fmtRecover(c.next_retry_after)}恢复`, `Cooling · ${fmtRecover(c.next_retry_after)}`)
+          : tr("不可用", "Unavailable")}
       </Badge>
     );
-  const cooling = coolingModels(c).length;
-  if (credentialUsable(c) && cooling > 0)
+  const coolingList = coolingModels(c);
+  const cooling = coolingList.length;
+  if (credentialUsable(c) && cooling > 0) {
+    const first = coolingList.map((m) => m.next_retry_after).filter(Boolean).sort()[0];
+    const at = fmtRecover(first);
     return (
       <Badge kind="warn" dot>
-        {tr(
-          `可用 · ${cooling} 个模型冷却`,
-          `Active · ${cooling} model(s) cooling`,
-        )}
+        {at
+          ? tr(`${cooling}模型冷却 · ${at}恢复`, `${cooling} cooling · ${at}`)
+          : tr(`${cooling}模型冷却`, `${cooling} cooling`)}
       </Badge>
     );
+  }
   if (credentialUsable(c) && (c.status === "active" || c.status === "error"))
     return (
       <Badge kind="ok" dot>
@@ -94,12 +101,18 @@ export function credentialStatus(
   );
 }
 
+function bucketBadgeText(msg?: string): string {
+  const label = (msg || "").startsWith("Claude") ? "Claude/GPT" : "Gemini";
+  const t = (msg || "").match(/(\d{2}-\d{2} \d{2}:\d{2})/);
+  return t ? `${label} 耗尽 · ${t[1]}恢复` : `${label} 耗尽`;
+}
+
 /** Distinct "Gemini 额度耗尽，重置于 …" lines for buckets the quota probe shows at 0%. */
 export function bucketExhaustedMessages(c: Credential): string[] {
   const out = new Set<string>();
   for (const m of coolingModels(c)) {
     if (m.bucket_exhausted || m.error_code === "quota_bucket_exhausted")
-      out.add((m.status_message || "额度耗尽").replace("（配额探测剩余 0%）", "").replace("，重置于 ", " · 重置 "));
+      out.add(bucketBadgeText(m.status_message));
   }
   return [...out];
 }

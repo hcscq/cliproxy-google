@@ -49,6 +49,17 @@ export function fmtResetShort(iso: string): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** Compact recovery time: "19:12" today, otherwise "10-17 13:36". */
+export function fmtRecover(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? hm : `${fmtResetShort(iso)}`;
+}
+
 export function QuotaWindows({ item, compact, error, loading }: { item?: QuotaItem; compact?: boolean; error?: unknown; loading?: boolean }) {
   const { tr, lang } = useI18n();
   if (!item || !item.primary_windows?.length) {
