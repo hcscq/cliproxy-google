@@ -79,15 +79,15 @@ export function credentialStatus(
 // checkbox, ID, account, groups, provider, status, quota, priority, updated, enabled
 const CRED_COLUMNS: FlexCol[] = [
   { min: 36 },
-  { min: 80, max: 100, weight: 0.3 },
-  { min: 180, max: 280, weight: 2 },
-  { min: 90, max: 140, weight: 0.6 },
-  { min: 100, max: 130, weight: 0.4 },
-  { min: 150, max: 200, weight: 1 },
-  { min: 200, weight: 3 },
+  { min: 92, max: 104, weight: 0.2 },
+  { min: 150, max: 280, weight: 2 },
+  { min: 80, max: 140, weight: 0.6 },
+  { min: 112, max: 130, weight: 0.3 },
+  { min: 172, max: 210, weight: 0.8 },
+  { min: 170, weight: 3 },
+  { min: 56 },
+  { min: 80 },
   { min: 64 },
-  { min: 88 },
-  { min: 72 },
 ];
 
 export function CredentialsPage() {
