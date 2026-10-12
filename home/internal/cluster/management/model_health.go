@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -435,6 +436,9 @@ func modelCapabilityNotes(e modelHealthEntry) []string {
 	if (strings.HasPrefix(id, "gemini-3") || id == "gemini-pro-agent") && !strings.Contains(id, "image") {
 		notes = append(notes, "流式思考文本不稳定（上游限制）：上游流式只在思考较长时才返回思考摘要，思考签名在正文之后才到；非流式总是完整。可在“设置 → 流式思考模拟”中开启（默认关闭）。")
 	}
+	if !e.InCatalog && e.Registered && isAntigravityExtraModel(id) {
+		notes = append(notes, "上游目录未列出此 ID，但上游接受（已直接验证）；通过 HOME_ANTIGRAVITY_EXTRA_MODELS 显式提供，按原 ID 透传，不做替换。")
+	}
 	if strings.HasPrefix(id, "gpt-oss") {
 		notes = append(notes, "仅支持文本输入（不支持图片）。")
 	}
@@ -529,4 +533,14 @@ func latestChange(m map[string]string) string {
 		return ""
 	}
 	return latest.In(shanghai()).Format("01-02 15:04")
+}
+
+// isAntigravityExtraModel reports an ID configured in HOME_ANTIGRAVITY_EXTRA_MODELS.
+func isAntigravityExtraModel(id string) bool {
+	for _, x := range strings.Split(os.Getenv("HOME_ANTIGRAVITY_EXTRA_MODELS"), ",") {
+		if strings.EqualFold(strings.TrimSpace(x), id) && id != "" {
+			return true
+		}
+	}
+	return false
 }
