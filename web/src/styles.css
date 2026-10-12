@@ -268,7 +268,7 @@ table.table { width: 100%; border-collapse: collapse; }
 
 /* Dashboard list cards: equal capped height, scroll inside as a fallback. */
 .card-capped { display: flex; flex-direction: column; max-height: 460px; }
-.card-capped > .card-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; flex: 1; }
+.card-capped > .card-body { overflow-y: auto; overscroll-behavior: auto; min-height: 0; flex: 1; }
 a.list-row { text-decoration: none; color: inherit; }
 .btn-link { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-align: left; }
 .btn-link:hover { text-decoration: underline; }
