@@ -65,7 +65,7 @@ func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 
 	message := gjson.GetBytes(errorBody, "error.message").String()
 	if message != "" {
-		re := regexp.MustCompile(`after\s+(\d+)s\.?`)
+		re := regexp.MustCompile(`(?:after|resets in)\s+(\d+)s\.?`)
 		if matches := re.FindStringSubmatch(message); len(matches) > 1 {
 			seconds, err := strconv.Atoi(matches[1])
 			if err == nil {
@@ -73,7 +73,8 @@ func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 				return &duration, nil
 			}
 		}
-		reHuman := regexp.MustCompile(`after\s+((?:\d+h)?(?:\d+m)?(?:\d+s)?)\.?`)
+		// "Your quota will reset after 4h59m32s." / "Individual quota reached ... Resets in 126h19m36s."
+		reHuman := regexp.MustCompile(`(?:after|resets in)\s+((?:\d+h)?(?:\d+m)?(?:\d+s)?)\.?`)
 		if matches := reHuman.FindStringSubmatch(strings.ToLower(message)); len(matches) > 1 {
 			duration, err := time.ParseDuration(matches[1])
 			if err == nil && duration > 0 {

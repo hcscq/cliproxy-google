@@ -19,3 +19,12 @@ func TestParseRetryHints(t *testing.T) {
 		t.Fatal("empty header parsed")
 	}
 }
+
+func TestParseRetryDelayResetsInTextOnly(t *testing.T) {
+	// Real Antigravity weekly-quota message, structured details stripped.
+	body := []byte(`{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 126h19m36s.","status":"RESOURCE_EXHAUSTED"}}`)
+	d, err := ParseRetryDelay(body)
+	if err != nil || d == nil || *d != 126*time.Hour+19*time.Minute+36*time.Second {
+		t.Fatalf("ParseRetryDelay = %v, %v", d, err)
+	}
+}
