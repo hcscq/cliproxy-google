@@ -296,7 +296,8 @@ func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel s
 			state.NextRetryAfter = time.Time{}
 		}
 	}
-	auth.Status = StatusError
+	// A model-scoped failure only marks that model (state above). The credential
+	// status stays as it was; credential-level errors set it elsewhere.
 	auth.UpdatedAt = now
 	updateAggregatedAvailability(auth, now)
 	if preserveRefreshAcquisition {
@@ -356,7 +357,7 @@ func (m *Manager) resultNeedsGlobalTransition(auth *Auth, result Result, resultM
 // disabledQuotaStateAlreadyApplied reports whether a disabled-cooling 429 can
 // update local diagnostics without changing persisted scheduling state.
 func disabledQuotaStateAlreadyApplied(auth *Auth, resultModel string) bool {
-	if auth == nil || resultModel == "" || auth.Status != StatusError ||
+	if auth == nil || resultModel == "" || auth.Status == StatusDisabled ||
 		auth.Unavailable || !auth.NextRetryAfter.IsZero() ||
 		fingerprintQuota(auth.Quota) != fingerprintQuota(aggregateModelQuota(auth.ModelStates)) {
 		return false
@@ -608,8 +609,8 @@ func (m *Manager) adoptPersistedResultState(result Result, resultModel string, p
 				latestModelError = state
 			}
 		}
+		local.Status = StatusActive
 		if latestModelError != nil {
-			local.Status = StatusError
 			local.StatusMessage = latestModelError.StatusMessage
 			local.LastError = cloneError(latestModelError.LastError)
 			if local.StatusMessage == "" && local.LastError != nil {

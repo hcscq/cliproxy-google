@@ -1995,7 +1995,7 @@ func clearRefreshDispatchBlock(auth *Auth, now time.Time) {
 		auth.Unavailable = preservedUnavailable
 		auth.NextRetryAfter = preservedRetryAfter
 	case modelError != nil:
-		auth.Status = StatusError
+		auth.Status = StatusActive
 		auth.StatusMessage = modelError.StatusMessage
 		auth.LastError = cloneError(modelError.LastError)
 		if auth.StatusMessage == "" && auth.LastError != nil {

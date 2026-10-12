@@ -648,9 +648,9 @@ func reconcileAuthErrorAfterQuotaClear(auth *Auth) {
 	if latest == nil {
 		return
 	}
-	auth.Status = latest.Status
-	if auth.Status == StatusActive || auth.Status == StatusDisabled {
-		auth.Status = StatusError
+	// Remaining model errors are model-scoped: they do not make the credential error.
+	if LegacyModelScopedErrorStatus(auth, time.Now()) {
+		auth.Status = StatusActive
 	}
 	auth.StatusMessage = latest.StatusMessage
 	auth.LastError = cloneError(latest.LastError)

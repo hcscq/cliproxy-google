@@ -1032,7 +1032,7 @@ func TestMergeClusterRefreshOutcomeClearsTransientBlockWhenRefreshBecomesUnsuppo
 				if state == nil || !state.Unavailable || !state.Quota.Exceeded {
 					t.Fatalf("concurrent model cooldown was lost: %#v", merged.ModelStates)
 				}
-				if merged.Status != coreauth.StatusError || !merged.Unavailable || !merged.NextRetryAfter.Equal(state.NextRetryAfter) {
+				if merged.Status == coreauth.StatusError || !merged.Unavailable || !merged.NextRetryAfter.Equal(state.NextRetryAfter) {
 					t.Fatalf("merged model availability = %#v, want model cooldown", merged)
 				}
 				if !merged.Quota.Exceeded || !merged.Quota.NextRecoverAt.Equal(state.Quota.NextRecoverAt) {

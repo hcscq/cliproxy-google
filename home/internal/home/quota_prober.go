@@ -90,6 +90,9 @@ func (r *Runtime) startQuotaProber(ctx context.Context) {
 			if !r.catalogLeader() || r.coreManager == nil {
 				continue
 			}
+			if n := r.coreManager.NormalizeModelScopedErrorStatuses(ctx); n > 0 {
+				log.Infof("auth status: %d credential(s) with only per-model failures set back to active", n)
+			}
 			for _, target := range r.dueQuotaProbes(time.Now()) {
 				select {
 				case <-ctx.Done():

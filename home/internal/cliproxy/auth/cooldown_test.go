@@ -1324,7 +1324,7 @@ func TestClearQuotaCooldownClearsAllQuotaModelsAndPreservesOtherErrors(t *testin
 	if stateC == nil || stateC.LastError == nil || stateC.LastError.HTTPStatus != http.StatusServiceUnavailable || !stateC.NextRetryAfter.Equal(transientRetry) {
 		t.Fatalf("gpt-c state = %#v, want transient error preserved", stateC)
 	}
-	if persisted.Status != StatusError || persisted.LastError == nil || persisted.LastError.HTTPStatus != http.StatusServiceUnavailable {
+	if persisted.Status != StatusActive || persisted.LastError == nil || persisted.LastError.HTTPStatus != http.StatusServiceUnavailable {
 		t.Fatalf("aggregate state = %#v, want non-quota error preserved", persisted)
 	}
 	if persisted.Quota.Exceeded {

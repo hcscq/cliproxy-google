@@ -855,7 +855,7 @@ func TestAdoptPersistedStateKeepsLocalModelError(t *testing.T) {
 		Error:    &Error{Message: "upstream exploded", HTTPStatus: http.StatusInternalServerError},
 	})
 	mid, _ := node.GetByID(authID)
-	if mid == nil || mid.Status != StatusError || mid.ModelStates["model-a"] == nil {
+	if mid == nil || mid.Status == StatusError || mid.ModelStates["model-a"] == nil || mid.ModelStates["model-a"].Status != StatusError {
 		t.Fatalf("expected local error state after 500 on model-a, got %+v", mid)
 	}
 	if store.persistedSnapshot().ModelStates["model-a"] != nil {
@@ -878,8 +878,8 @@ func TestAdoptPersistedStateKeepsLocalModelError(t *testing.T) {
 	if state := local.ModelStates["model-b"]; state == nil || state.Unavailable || state.Quota.Exceeded {
 		t.Fatalf("expected model-b local state to adopt the cleared row state, got %+v", state)
 	}
-	if local.Status != StatusError {
-		t.Fatalf("expected local Status to stay StatusError while model-a error remains, got %q", local.Status)
+	if local.Status == StatusError || local.ModelStates["model-a"] == nil || local.ModelStates["model-a"].Status != StatusError {
+		t.Fatalf("model-a error must stay model-scoped (credential not error), got %q", local.Status)
 	}
 	if local.LastError == nil || local.LastError.Message != "upstream exploded" {
 		t.Fatalf("expected local LastError to keep the model-a failure, got %+v", local.LastError)
@@ -938,7 +938,7 @@ func TestAdoptPersistedStateClearsRefreshErrorAndRebuildsLocalModelError(t *test
 	if !adopted.Unavailable || adopted.RuntimeRefreshBlocked || RefreshBlocksDispatch(adopted) {
 		t.Fatalf("cleared persisted refresh block remained active: %#v", adopted)
 	}
-	if adopted.Status != StatusError || adopted.StatusMessage != "model-a failed" || adopted.LastError == nil || adopted.LastError.Message != "local upstream failure" {
+	if adopted.Status != StatusActive || adopted.StatusMessage != "model-a failed" || adopted.LastError == nil || adopted.LastError.Message != "local upstream failure" {
 		t.Fatalf("auth-level model error was not rebuilt from model-a: %#v", adopted)
 	}
 	if blocked, _, _ := isAuthBlockedForModel(adopted, "model-a", now); !blocked {
