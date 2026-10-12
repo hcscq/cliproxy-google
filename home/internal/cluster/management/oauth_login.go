@@ -347,7 +347,7 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, errDo := h.oauthHTTPClient().Do(req)
+	resp, errDo := h.oauthHTTPClientFor(ctx).Do(req)
 	if errDo != nil {
 		return errDo
 	}
@@ -520,7 +520,7 @@ func (h *Handler) fetchAntigravityEmail(ctx context.Context, accessToken string)
 		return "", errRequest
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
-	resp, errDo := h.oauthHTTPClient().Do(req)
+	resp, errDo := h.oauthHTTPClientFor(ctx).Do(req)
 	if errDo != nil {
 		return "", errDo
 	}
@@ -572,7 +572,7 @@ func (h *Handler) fetchAntigravityProjectID(ctx context.Context, accessToken str
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-Goog-Api-Client", antigravityGoogAPIClientUA)
 
-	resp, errDo := h.oauthHTTPClient().Do(req)
+	resp, errDo := h.oauthHTTPClientFor(ctx).Do(req)
 	if errDo != nil {
 		return "", fmt.Errorf("execute request: %w", errDo)
 	}
@@ -653,7 +653,7 @@ func (h *Handler) onboardAntigravityUser(ctx context.Context, accessToken string
 		req.Header.Set("User-Agent", userAgent)
 		req.Header.Set("X-Goog-Api-Client", antigravityGoogAPIClientUA)
 
-		resp, errDo := h.oauthHTTPClient().Do(req)
+		resp, errDo := h.oauthHTTPClientFor(ctx).Do(req)
 		if errDo != nil {
 			cancel()
 			return "", fmt.Errorf("execute request: %w", errDo)

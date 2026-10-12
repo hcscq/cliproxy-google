@@ -497,6 +497,7 @@ func run() int {
 		},
 	})
 	quotaCollector.Start(runCtx)
+	rt.SetEgressRepo(egressRepoAdapter{repo})
 
 	respSrv = respserver.New(addr, rt)
 	respSrv.SetClusterHandler(clusterRESPHandler)
@@ -1133,4 +1134,40 @@ func runOrphanGroupMembershipCleanup(ctx context.Context, repo *cluster.Reposito
 		case <-ticker.C:
 		}
 	}
+}
+
+// egressRepoAdapter maps proxy_pool rows to the Home egress manager.
+type egressRepoAdapter struct{ repo *cluster.Repository }
+
+func (a egressRepoAdapter) ListEgressPool(ctx context.Context) ([]home.EgressPoolItem, error) {
+	items, err := a.repo.ListProxyPoolItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]home.EgressPoolItem, 0, len(items))
+	for _, it := range items {
+		out = append(out, home.EgressPoolItem{ID: it.ID, Name: it.Name, ProxyURL: it.ProxyURL, Scope: it.Scope, Note: it.Note, Enabled: it.Enabled})
+	}
+	return out, nil
+}
+
+func (a egressRepoAdapter) CreateEgressPool(ctx context.Context, item home.EgressPoolItem) error {
+	enabled := item.Enabled
+	_, err := a.repo.CreateProxyPoolItem(ctx, cluster.ProxyPoolUpdate{Name: item.Name, ProxyURL: item.ProxyURL, Enabled: &enabled, Scope: item.Scope, Note: item.Note})
+	return err
+}
+
+func (a egressRepoAdapter) UpdateEgressPool(ctx context.Context, item home.EgressPoolItem) error {
+	enabled := item.Enabled
+	_, err := a.repo.UpdateProxyPoolItem(ctx, item.ID, cluster.ProxyPoolUpdate{Name: item.Name, ProxyURL: item.ProxyURL, Enabled: &enabled, Scope: item.Scope, Note: item.Note})
+	return err
+}
+
+func (a egressRepoAdapter) MarkEgressResult(ctx context.Context, id string, healthy bool, at time.Time) error {
+	result := cluster.ProxyPoolTestResultFailed
+	if healthy {
+		result = cluster.ProxyPoolTestResultPassed
+	}
+	_, err := a.repo.MarkProxyPoolTestResult(ctx, id, result, at)
+	return err
 }

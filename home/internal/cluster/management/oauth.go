@@ -684,6 +684,8 @@ func applyAuthDisabledStatus(auth *coreauth.Auth, disabled bool) {
 		auth.Metadata = make(map[string]any)
 	}
 	auth.Metadata["disabled"] = disabled
+	// Any manual toggle takes over from an egress auto-pause (a still-down egress re-pauses).
+	delete(auth.Metadata, "auto_paused_reason")
 	if !disabled {
 		// Manual re-enable lifts an account-403 auto-disable; older 403 states are ignored.
 		delete(auth.Metadata, "auto_disabled_reason")
@@ -720,6 +722,13 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	}
 	if reason := stringFromAny(auth.Metadata["auto_disabled_reason"]); reason != "" {
 		entry["auto_disabled_reason"] = reason
+	}
+	if reason := stringFromAny(auth.Metadata["auto_paused_reason"]); reason != "" && auth.Disabled {
+		entry["auto_paused_reason"] = reason
+	}
+	if ip := stringFromAny(auth.Metadata["egress_ip"]); ip != "" && strings.TrimSpace(auth.ProxyURL) != "" {
+		entry["egress_ip"] = ip
+		entry["egress_id"] = stringFromAny(auth.Metadata["egress_id"])
 	}
 	if priority := priorityFromAuth(auth); priority != nil {
 		entry["priority"] = *priority

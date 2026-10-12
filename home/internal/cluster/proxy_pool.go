@@ -12,6 +12,8 @@ import (
 
 const (
 	ProxyPoolScopeGlobal = "global"
+	// ProxyPoolScopeEgress marks per-node egress proxies managed by Home (sticky per credential).
+	ProxyPoolScopeEgress = "egress"
 
 	ProxyPoolTestResultPassed   = "passed"
 	ProxyPoolTestResultFailed   = "failed"
@@ -255,7 +257,7 @@ func normalizeProxyPoolUpdate(update ProxyPoolUpdate) (ProxyPoolUpdate, error) {
 	if normalized.Scope == "" {
 		normalized.Scope = ProxyPoolScopeGlobal
 	}
-	if normalized.Scope != ProxyPoolScopeGlobal {
+	if normalized.Scope != ProxyPoolScopeGlobal && normalized.Scope != ProxyPoolScopeEgress {
 		return normalized, fmt.Errorf("unsupported proxy pool scope %q", normalized.Scope)
 	}
 	return normalized, nil
@@ -285,7 +287,7 @@ func proxyPoolPatchUpdates(patch ProxyPoolPatch) (map[string]any, error) {
 	}
 	if patch.Scope != nil {
 		scope := strings.ToLower(strings.TrimSpace(*patch.Scope))
-		if scope != "" && scope != ProxyPoolScopeGlobal {
+		if scope != "" && scope != ProxyPoolScopeGlobal && scope != ProxyPoolScopeEgress {
 			return nil, fmt.Errorf("unsupported proxy pool scope %q", scope)
 		}
 		if scope != "" {

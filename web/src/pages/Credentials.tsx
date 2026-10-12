@@ -57,6 +57,14 @@ export function credentialStatus(
         </Badge>
       </span>
     );
+  if (c.disabled && c.auto_paused_reason)
+    return (
+      <span title={c.status_message}>
+        <Badge kind="err" dot>
+          {tr("已暂停 · 出口离线", "Paused · egress down")}
+        </Badge>
+      </span>
+    );
   if (c.disabled) return <Badge>{t("disabled")}</Badge>;
   const buckets = bucketExhaustedMessages(c);
   if (buckets.length > 0 && !c.credential_scope_error)
@@ -205,6 +213,7 @@ export function CredentialsPage() {
   const groups = useGroupLookup();
   const credCols = useFlexColumns<HTMLDivElement>(CRED_COLUMNS);
   const quota = useAsync(() => api.quotaCredentialsAll(), [], 60000);
+  const egress = useAsync(() => api.egressStatus(), [], 30000);
   const sel = useSelection<string>();
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<CredentialSearchItem | null>(null);
@@ -341,6 +350,19 @@ export function CredentialsPage() {
           </span>
         }
       >
+        {(egress.data?.items?.length ?? 0) > 0 && (
+          <div className="card-body small" data-testid="egress-list" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <span className="faint">{tr("出口", "Egress")}</span>
+            {egress.data!.items.map((e) => (
+              <span key={e.name} title={e.last_error || e.name}>
+                <Badge kind={e.healthy ? "ok" : "err"} dot>
+                  {e.ip} · {e.credentials}
+                  {e.paused > 0 ? tr(` · 暂停${e.paused}`, ` · ${e.paused} paused`) : ""}
+                </Badge>
+              </span>
+            ))}
+          </div>
+        )}
         <SelectionBar
           selected={sel.size}
           total={creds.data?.total ?? 0}
@@ -539,6 +561,14 @@ export function CredentialsPage() {
                       >
                         {credentialStatus(c, t, tr)}
                       </span>
+                      {c.egress_ip && (
+                        <div
+                          className="faint small mono nowrap"
+                          title={tr(`固定出口 ${c.egress_id ?? ""}`, `Pinned egress ${c.egress_id ?? ""}`)}
+                        >
+                          {c.egress_ip}
+                        </div>
+                      )}
                     </td>
                     <td className="hide-sm wrap-ok">
                       <QuotaWindows

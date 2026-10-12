@@ -195,6 +195,9 @@ export class ApiClient {
   fetchQuota(authIndex: string) {
     return this.post<Record<string, unknown>>('/credentials/quota/fetch', { auth_index: authIndex });
   }
+  egressStatus() {
+    return this.get<{ items: EgressStatus[] }>('/proxy/egress');
+  }
   quotaCredentials(query?: Query) {
     return this.get<QuotaList>('/quota/credentials', query);
   }
@@ -602,6 +605,11 @@ export interface Credential {
   disabled?: boolean;
   /** Set when Home auto-disabled the credential for an account-level 403. */
   auto_disabled_reason?: string;
+  /** Set when Home paused the credential because its egress is down. */
+  auto_paused_reason?: string;
+  /** Sticky egress exit IP / name. */
+  egress_ip?: string;
+  egress_id?: string;
   unavailable?: boolean;
   runtime_only?: boolean;
   source?: string;
@@ -1229,4 +1237,17 @@ export interface RTImportSummary {
   updated: number;
   failed: number;
   skipped: number;
+}
+
+export interface EgressStatus {
+  id: string;
+  name: string;
+  ip: string;
+  proxy_url: string;
+  healthy: boolean;
+  failures: number;
+  last_check?: string;
+  last_error?: string;
+  credentials: number;
+  paused: number;
 }

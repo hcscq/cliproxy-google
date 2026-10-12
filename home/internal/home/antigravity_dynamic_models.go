@@ -266,7 +266,7 @@ func fetchAntigravityCatalogRaw(ctx context.Context, auth *coreauth.Auth) ([]byt
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", antigravityModelsUserAgent)
-	resp, err := antigravityHTTPClient.Do(req)
+	resp, err := credentialHTTPClient(auth, 30*time.Second).Do(req)
 	if err != nil {
 		return nil, err
 	}

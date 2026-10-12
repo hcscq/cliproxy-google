@@ -18,6 +18,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/antigravity"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/proxyutil"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
@@ -52,6 +54,8 @@ type antigravityEnrichment struct {
 	EmailMismatch string
 	// EmailUnverified means userinfo failed and the supplied email was used as-is.
 	EmailUnverified bool
+	// Egress* is the sticky egress the enrichment calls used; a new credential keeps it.
+	EgressProxyURL, EgressName, EgressIP string
 }
 
 // antigravityEnricher resolves an antigravity identity from a refresh token.
@@ -96,7 +100,7 @@ func (g *googleAntigravityEnricher) Enrich(ctx context.Context, refreshToken, kn
 		return nil, &rtImportError{Code: "internal", Reason: "could not build token request"}
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, errDo := g.h.oauthHTTPClient().Do(req)
+	resp, errDo := g.h.oauthHTTPClientFor(ctx).Do(req)
 	if errDo != nil {
 		return nil, &rtImportError{Code: "network", Reason: "token endpoint unreachable: " + redactTransportError(errDo)}
 	}
@@ -445,8 +449,15 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 				e := entries[j.i]
 				res := &results[j.i]
 				itemCtx, cancel := context.WithTimeout(ctx, rtImportItemTimeout)
+				egress := h.importEgress(itemCtx, idx, &writeMu, e)
+				if egress.ProxyURL != "" {
+					itemCtx = withEgressProxy(itemCtx, egress.ProxyURL)
+				}
 				enriched, errEnrich := enricher.Enrich(itemCtx, e.RefreshToken, e.Email, e.ProjectID)
 				cancel()
+				if enriched != nil {
+					enriched.EgressProxyURL, enriched.EgressName, enriched.EgressIP = egress.ProxyURL, egress.Name, egress.IP
+				}
 				if errEnrich != nil {
 					res.Status = "failed"
 					var ie *rtImportError
@@ -585,6 +596,11 @@ func (h *Handler) persistAntigravityImport(ctx context.Context, existing *coreau
 	}
 	metadata["type"] = "antigravity"
 	metadata["email"] = enriched.Email
+	if enriched.EgressProxyURL != "" {
+		metadata["proxy_url"] = enriched.EgressProxyURL
+		metadata[home.EgressIDKey] = enriched.EgressName
+		metadata[home.EgressIPKey] = enriched.EgressIP
+	}
 	if enriched.ProjectID != "" {
 		metadata["project_id"] = enriched.ProjectID
 	}
@@ -599,6 +615,11 @@ func (h *Handler) persistAntigravityImport(ctx context.Context, existing *coreau
 	auths := h.synthesizeOAuthPayload(updatedRaw, fileUUID, antigravityCredentialFileName(enriched.Email))
 	if len(auths) == 0 {
 		return "", false, fmt.Errorf("could not build credential")
+	}
+	if enriched.EgressProxyURL != "" {
+		for _, a := range auths {
+			a.ProxyURL = enriched.EgressProxyURL
+		}
 	}
 	if errReplace := h.replaceOAuthPayloadAuths(ctx, fileUUID, auths); errReplace != nil {
 		return "", false, errReplace
@@ -670,4 +691,49 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": body.DryRun, "summary": summary, "results": results})
+}
+
+type egressCtxKey struct{}
+
+// withEgressProxy makes Google calls made with ctx go through the given egress proxy.
+func withEgressProxy(ctx context.Context, proxyURL string) context.Context {
+	return context.WithValue(ctx, egressCtxKey{}, proxyURL)
+}
+
+// oauthHTTPClientFor uses the egress proxy carried by ctx (fail closed), else the default.
+func (h *Handler) oauthHTTPClientFor(ctx context.Context) *http.Client {
+	if ctx != nil {
+		if proxyURL, _ := ctx.Value(egressCtxKey{}).(string); proxyURL != "" {
+			transport, _, err := proxyutil.BuildHTTPTransport(proxyURL)
+			if err != nil || transport == nil {
+				return &http.Client{Transport: failingRoundTripper{}}
+			}
+			return &http.Client{Timeout: 60 * time.Second, Transport: transport}
+		}
+	}
+	return h.oauthHTTPClient()
+}
+
+type failingRoundTripper struct{}
+
+func (failingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("credential egress proxy unusable")
+}
+
+// importEgress picks the egress for an imported token: the matched credential's own
+// proxy, otherwise the least-loaded healthy managed egress.
+func (h *Handler) importEgress(ctx context.Context, idx *credentialIndex, mu *sync.Mutex, e rtImportEntry) home.EgressSpec {
+	mu.Lock()
+	existing, _ := idx.match(e.Email, e.RefreshToken)
+	mu.Unlock()
+	if existing != nil {
+		if p := strings.TrimSpace(existing.ProxyURL); p != "" {
+			return home.EgressSpec{ProxyURL: p}
+		}
+	}
+	if h.runtime == nil {
+		return home.EgressSpec{}
+	}
+	spec, _ := h.runtime.PickEgressForImport(ctx)
+	return spec
 }

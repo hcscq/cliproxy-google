@@ -62,6 +62,7 @@ type Runtime struct {
 	clusterAdapter          ClusterAdapter
 	agCatalog               antigravityCatalogSync
 	prober                  quotaProber
+	egress                  egressState
 	concurrencyAdmitter     ConcurrencyAdmitter
 	clusterRefresh          func(context.Context, string, string) ([]byte, error)
 	originalStore           coreauth.Store
@@ -347,6 +348,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	r.startAntigravityCatalogLoop(runCtx)
 	r.startQuotaProber(runCtx)
 	r.startAccountBlockGuard(runCtx)
+	r.startEgressManager(runCtx)
 
 	if !r.clusterAutoRefreshGated() && strings.TrimSpace(r.authDir) != "" {
 		if errEnsureAuthDir := os.MkdirAll(r.authDir, 0o755); errEnsureAuthDir != nil {

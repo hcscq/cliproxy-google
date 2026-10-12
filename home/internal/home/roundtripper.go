@@ -39,12 +39,10 @@ func (p *defaultRoundTripperProvider) RoundTripperFor(auth *coreauth.Auth) http.
 	}
 
 	transport, _, errBuild := proxyutil.BuildHTTPTransport(proxyStr)
-	if errBuild != nil {
-		log.Errorf("%v", errBuild)
-		return nil
-	}
-	if transport == nil {
-		return nil
+	if errBuild != nil || transport == nil {
+		// Fail closed: a credential pinned to a proxy must never go direct.
+		log.Errorf("credential proxy unusable: %v", errBuild)
+		return failingTransport{err: errEgressProxy}
 	}
 
 	p.mu.Lock()

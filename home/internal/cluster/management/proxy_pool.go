@@ -201,3 +201,23 @@ func testProxyPoolURL(ctx context.Context, proxyURL string) (string, string) {
 	}
 	return cluster.ProxyPoolTestResultFailed, fmt.Sprintf("proxy test returned HTTP %d", resp.StatusCode)
 }
+
+// ListEgress returns the managed per-node egresses with live health and credential counts.
+func (h *Handler) ListEgress(c *gin.Context) {
+	if h == nil || h.runtime == nil {
+		c.JSON(http.StatusOK, gin.H{"items": []any{}})
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	items, err := h.runtime.EgressStatuses(ctx)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "egress_status_failed", err)
+		return
+	}
+	if items == nil {
+		c.JSON(http.StatusOK, gin.H{"items": []any{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
