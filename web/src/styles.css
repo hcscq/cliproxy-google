@@ -372,3 +372,6 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .cred-table .cell-status { display: inline-flex; max-width: 100%; cursor: default; }
 .cred-table .cell-status .badge { overflow: hidden; text-overflow: ellipsis; }
 .cred-table td.actions { text-align: right; }
+
+.id-cell { font-size: 12px; color: var(--text-2); cursor: copy; }
+.id-cell:hover { color: var(--primary); }

@@ -155,8 +155,10 @@ export function CredentialsPage() {
           <table className="table cred-table" data-testid="credentials-table">
             <colgroup>
               <col style={{ width: 36 }} />
+              <col style={{ width: 92 }} />
               <col />
-              <col style={{ width: 120 }} />
+              <col style={{ width: 140 }} />
+              <col style={{ width: 110 }} />
               <col style={{ width: 170 }} />
               <col className="hide-sm" style={{ width: 240 }} />
               <col className="hide-sm" style={{ width: 70 }} />
@@ -166,7 +168,9 @@ export function CredentialsPage() {
             <thead>
               <tr>
                 <th style={{ width: 28 }} />
+                <th>ID</th>
                 <th>{tr('账号', 'Account')}</th>
+                <th>{tr('分组', 'Groups')}</th>
                 <th>{t('provider')}</th>
                 <th>{t('status')}</th>
                 <th className="hide-sm">{t('quota')}</th>
@@ -181,28 +185,35 @@ export function CredentialsPage() {
                   <td onClick={(e) => e.stopPropagation()}>
                     <input type="checkbox" checked={sel.has(c.id)} onChange={() => sel.toggle(c.id)} aria-label="select" />
                   </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <span
+                      className="mono id-cell"
+                      title={`${c.id}\n${tr('点击复制', 'Click to copy')}`}
+                      onClick={() => void navigator.clipboard?.writeText(c.id).then(() => toast(tr('已复制 ID', 'ID copied')))}
+                    >
+                      {c.id.slice(0, 8)}
+                    </span>
+                  </td>
                   <td>
-                    <div className="cell-title ellipsis" title={c.label || c.email || c.name}>
+                    <div className="cell-title ellipsis" title={[c.label || c.email || c.name, c.note && `${tr('备注', 'Note')}: ${c.note}`].filter(Boolean).join('\n')}>
                       {c.label || c.email || c.name}
+                      {c.note && <span className="faint small"> · 📝</span>}
                     </div>
-                    <div className="cell-sub ellipsis" title={c.note || c.id}>
-                      {c.note ? c.note : <span className="mono">{c.id.slice(0, 8)}</span>}
-                    </div>
-                    {((c.group_ids?.length ?? 0) > 0 || (c.tags?.length ?? 0) > 0) && (
-                      <div className="pill-row nowrap-row" title={[...(c.group_ids ?? []).map((id) => groups.cgNames.get(id) ?? `#${id}`), ...(c.tags ?? []).map((tg) => `#${tg}`)].join(', ')}>
-                        {(c.group_ids ?? []).slice(0, 4).map((id) => (
-                          <span key={`g${id}`} className="pill pill-group" title={tr('所属凭据分组', 'Credential group')}>
-                            {groups.cgNames.get(id) ?? `#${id}`}
-                          </span>
-                        ))}
-                        {(c.group_ids?.length ?? 0) > 4 && <span className="faint">+{(c.group_ids?.length ?? 0) - 4}</span>}
-                        {(c.tags ?? []).map((tg) => (
-                          <span key={`t${tg}`} className="pill pill-tag" title={tr('标签', 'Tag')}>
-                            #{tg}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                  </td>
+                  <td>
+                    {(() => {
+                      const gs = (c.group_ids ?? []).map((id) => groups.cgNames.get(id) ?? `#${id}`);
+                      const tags = (c.tags ?? []).map((tg) => `#${tg}`);
+                      if (!gs.length && !tags.length) return <span className="faint small">—</span>;
+                      const hover = [gs.length ? `${tr('分组', 'Groups')}: ${gs.join(', ')}` : '', tags.length ? `${tr('标签', 'Tags')}: ${tags.join(', ')}` : ''].filter(Boolean).join('\n');
+                      const extra = Math.max(gs.length - 1, 0) + tags.length;
+                      return (
+                        <span className="pill-row nowrap-row" style={{ marginTop: 0 }} title={hover}>
+                          {gs.length ? <span className="pill pill-group">{gs[0]}</span> : <span className="pill pill-tag">{tags[0]}</span>}
+                          {(gs.length ? extra : extra - 1) > 0 && <span className="pill pill-tag">+{gs.length ? extra : extra - 1}</span>}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td title={c.provider}>
                     <Badge kind="primary">{c.provider}</Badge>

@@ -119,6 +119,7 @@ export function AccessKeysPage() {
             <thead>
               <tr>
                 <th style={{ width: 28 }} />
+                <th style={{ width: 64 }}>ID</th>
                 <th>{t('name')}</th>
                 <th>{tr('密钥', 'Key')}</th>
                 <th>{tr('可用范围', 'Scope')}</th>
@@ -136,10 +137,10 @@ export function AccessKeysPage() {
                       <input type="checkbox" checked={sel.has(k.id)} onChange={() => sel.toggle(k.id)} aria-label="select" />
                     </td>
                     <td>
-                      <div className="cell-title">{k.display_name || <span className="faint">{tr('未命名', 'Unnamed')}</span>}</div>
-                      <div className="cell-sub">
-                        <span className="mono" title={tr('密钥 ID', 'Key ID')}>#{k.id}</span>
-                      </div>
+                      <span className="mono id-cell" style={{ cursor: "default" }} title={tr("密钥 ID", "Key ID")}>{k.id}</span>
+                    </td>
+                    <td className="nowrap">
+                      <span className="cell-title">{k.display_name || <span className="faint">{tr('未命名', 'Unnamed')}</span>}</span>
                     </td>
                     <td>
                       <div className="row" style={{ gap: 6 }}>
