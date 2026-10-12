@@ -10,6 +10,7 @@ type Tab = 'oauth' | 'tokens' | 'upload' | 'paste' | 'vertex';
 export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('oauth');
+  const [rtPrefill, setRtPrefill] = useState('');
   const tabs: [Tab, string][] = [
     ['oauth', t('antigravityLogin')],
     ['tokens', 'Refresh Token 批量导入'],
@@ -27,9 +28,9 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
         ))}
       </div>
       {tab === 'oauth' && <OAuthFlow onDone={onAdded} />}
-      {tab === 'tokens' && <RefreshTokenImport onDone={onAdded} />}
+      {tab === 'tokens' && <RefreshTokenImport key={rtPrefill} initialText={rtPrefill} onDone={onAdded} />}
       {tab === 'upload' && <UploadFiles onDone={onAdded} />}
-      {tab === 'paste' && <PasteJson onDone={onAdded} />}
+      {tab === 'paste' && <PasteJson onDone={onAdded} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
       {tab === 'vertex' && <VertexImport onDone={onAdded} />}
     </Modal>
   );
@@ -264,7 +265,14 @@ function UploadFiles({ onDone }: { onDone: () => void }) {
   );
 }
 
-function PasteJson({ onDone }: { onDone: () => void }) {
+/** True when pasted non-JSON text looks like `email----refresh_token` lines or bare Google refresh tokens. */
+export function looksLikeRefreshTokenText(text: string): boolean {
+  const lines = text.replace(/[\u200b-\u200d\u2060\ufeff]/g, '').split(/\r\n?|\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  if (!lines.length || lines[0].startsWith('{') || lines[0].startsWith('[')) return false;
+  return lines.every((l) => /^(\S+@\S+?\s*[-\u2010-\u2015\u2212\uff0d]{3,}\s*)?1\/\/\S+/.test(l));
+}
+
+function PasteJson({ onDone, onUseTokens }: { onDone: () => void; onUseTokens?: (text: string) => void }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -297,7 +305,18 @@ function PasteJson({ onDone }: { onDone: () => void }) {
   return (
     <div className="stack">
       <textarea className="textarea" style={{ minHeight: 220 }} placeholder='{"type": "antigravity", "access_token": "...", "refresh_token": "...", ...}' value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} />
-      {parseError && <div className="alert err small">JSON: {parseError}</div>}
+      {parseError && looksLikeRefreshTokenText(text) ? (
+        <div className="alert warn small" data-testid="paste-json-rt-hint">
+          {tr('这看起来是 Refresh Token（email----token），请使用「Refresh Token 批量导入」页签。', 'This looks like refresh tokens (email----token); use the "Refresh Token batch import" tab.')}{' '}
+          {onUseTokens && (
+            <button className="btn btn-sm btn-primary" onClick={() => { const t = text; setText(''); onUseTokens(t); }} data-testid="paste-json-to-rt">
+              {tr('转到批量导入', 'Open batch import')}
+            </button>
+          )}
+        </div>
+      ) : (
+        parseError && <div className="alert err small">JSON: {parseError}</div>
+      )}
       {!parseError && provider && (
         <div className="faint small">
           {tr('检测到类型', 'Detected type')}: <b>{provider}</b>
@@ -395,10 +414,10 @@ const RT_STATUS: Record<string, [string, 'ok' | 'warn' | 'err' | 'primary']> = {
   skipped: ['跳过', 'warn'],
 };
 
-function RefreshTokenImport({ onDone }: { onDone: () => void }) {
+function RefreshTokenImport({ onDone, initialText = '' }: { onDone: () => void; initialText?: string }) {
   const api = useApi();
   const { toast, toastError } = useUi();
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [results, setResults] = useState<RTImportResult[] | null>(null);

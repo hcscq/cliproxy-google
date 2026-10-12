@@ -12,3 +12,13 @@ describe('chunkTokenInput', () => {
     expect(chunkTokenInput(`["${tok}"]`)).toEqual([{ items: [tok] }]);
   });
 });
+
+import { looksLikeRefreshTokenText } from './AddCredential';
+describe('looksLikeRefreshTokenText', () => {
+  it('detects email----token and bare tokens', () => {
+    expect(looksLikeRefreshTokenText(`a@gmail.com----${tok}\nb@x.com----${tok}`)).toBe(true);
+    expect(looksLikeRefreshTokenText(tok)).toBe(true);
+    expect(looksLikeRefreshTokenText('{"type":"antigravity"')).toBe(false);
+    expect(looksLikeRefreshTokenText('hello world')).toBe(false);
+  });
+});
