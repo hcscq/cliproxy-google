@@ -154,10 +154,59 @@ func mergeAntigravityModels(static []*ModelInfo, upstream map[string]antigravity
 	for _, m := range configModels {
 		add(m)
 	}
+	byID := make(map[string]*ModelInfo, len(out))
+	for _, m := range out {
+		byID[strings.ToLower(strings.TrimSpace(m.ID))] = m
+	}
 	for _, id := range extraIDs {
-		add(&ModelInfo{ID: id, Object: "model", Created: now, OwnedBy: "antigravity", Type: "antigravity", DisplayName: id, Name: "models/" + id, UserDefined: true})
+		add(antigravityExtraModel(id, byID, now))
 	}
 	return out
+}
+
+// antigravityExtraNote marks models served by ID although the upstream catalog
+// does not list them (HOME_ANTIGRAVITY_EXTRA_MODELS); shown in the panel.
+const antigravityExtraNote = "Upstream accepts this ID (verified); not listed in the Antigravity catalog."
+
+// antigravityExtraModel builds an extra model entry. The ID is passed upstream
+// unchanged. When a catalog sibling exists (gemini-3.8-flash-high ->
+// gemini-3.8-flash-tiered) it copies that sibling's limits and thinking
+// metadata so the model behaves like its catalog family; otherwise thinking
+// passes through unvalidated.
+func antigravityExtraModel(id string, known map[string]*ModelInfo, now int64) *ModelInfo {
+	info := &ModelInfo{ID: id, Object: "model", Created: now, OwnedBy: "antigravity", Type: "antigravity",
+		DisplayName: id, Name: "models/" + id, Description: antigravityExtraNote}
+	sib := antigravityExtraSibling(id, known)
+	if sib == nil {
+		info.UserDefined = true
+		return info
+	}
+	info.InputTokenLimit, info.ContextLength = sib.InputTokenLimit, sib.ContextLength
+	info.OutputTokenLimit, info.MaxCompletionTokens = sib.OutputTokenLimit, sib.MaxCompletionTokens
+	info.SupportedGenerationMethods = append([]string(nil), sib.SupportedGenerationMethods...)
+	if sib.Thinking != nil {
+		t := *sib.Thinking
+		t.Levels = append([]string(nil), sib.Thinking.Levels...)
+		info.Thinking = &t
+	}
+	return withAntigravityOffMode(info)
+}
+
+// antigravityExtraSibling finds the catalog model of the same family: the ID
+// with its last "-suffix" replaced by "-tiered", or the bare family ID.
+func antigravityExtraSibling(id string, known map[string]*ModelInfo) *ModelInfo {
+	key := strings.ToLower(strings.TrimSpace(id))
+	i := strings.LastIndex(key, "-")
+	if i <= 0 {
+		return nil
+	}
+	base := key[:i]
+	for _, cand := range []string{base + "-tiered", base} {
+		if m := known[cand]; m != nil {
+			return m
+		}
+	}
+	return nil
 }
 
 func (r *Runtime) cachedAntigravityCatalog(a *coreauth.Auth) map[string]antigravityUpstreamModel {

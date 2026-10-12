@@ -89,6 +89,9 @@ spec:
             # Request logs through a Redis stream (batch flush to PG; falls back to the
             # in-memory queue when Redis is down). "" / "0" = off.
             - {name: HOME_USAGE_STREAM, value: "1"}
+            # Antigravity IDs upstream accepts but does not list in its catalog
+            # (verified by direct upstream probe 2026-10-12); passed through unchanged.
+            - {name: HOME_ANTIGRAVITY_EXTRA_MODELS, value: "gemini-3.8-flash-high,gemini-3.8-flash-low,gemini-3.8-flash-medium"}
             # Main PG pool through pgbouncer (12-pgbouncer.yaml); the lease pool stays
             # direct. "" = direct connections.
             - {name: HOME_PG_POOLER_ADDR, value: "pgbouncer.cliproxy.svc.cluster.local:6432"}
