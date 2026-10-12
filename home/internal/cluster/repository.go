@@ -215,6 +215,9 @@ func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 			if errCreate := tx.Create(record).Error; errCreate != nil {
 				return errCreate
 			}
+			if errJoin := autoJoinDefaultChannelGroup(tx, record.UUID); errJoin != nil {
+				return errJoin
+			}
 			result = UpsertResultCreated
 			out = record
 		case errFirst != nil:
@@ -824,6 +827,9 @@ func (r *Repository) SoftDeleteAuthWithVersion(ctx context.Context, uuid string)
 		record.Version = newVersion
 		if errDelete := tx.Delete(&record).Error; errDelete != nil {
 			return errDelete
+		}
+		if errDeleteMembers := tx.Where("auth_id = ?", uuid).Delete(&ChannelGroupDetailRecord{}).Error; errDeleteMembers != nil {
+			return errDeleteMembers
 		}
 		if errDeleteSnapshot := tx.Where("credential_id = ?", uuid).Delete(&QuotaSnapshotRecord{}).Error; errDeleteSnapshot != nil {
 			return errDeleteSnapshot

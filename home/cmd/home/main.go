@@ -245,6 +245,9 @@ func run() int {
 	repo := cluster.NewRepository(clusterDB)
 	clusterRepo = repo
 	nodeCfg := resolveDatabaseNodeConfig(clusterCfg, clusterExists)
+	if !importState {
+		go runOrphanGroupMembershipCleanup(runCtx, repo)
+	}
 	if _, errEnsureLifecycle := repo.EnsureLifecycleConfig(runCtx, nodeCfg.HeartbeatTimeout); errEnsureLifecycle != nil {
 		log.Errorf("failed to initialize lifecycle configuration: %v", errEnsureLifecycle)
 		return 1
@@ -1089,4 +1092,23 @@ func drainHome(repo *cluster.Repository, ip string, port int, publish func()) {
 		time.Sleep(time.Second)
 	}
 	log.Warnf("home drain: proxies still connected after %s; stopping anyway", timeout)
+}
+
+// runOrphanGroupMembershipCleanup removes credential-group memberships that point at deleted
+// credentials, at startup and then hourly. Safe to run on every Home replica (idempotent).
+func runOrphanGroupMembershipCleanup(ctx context.Context, repo *cluster.Repository) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		if removed, err := repo.PurgeOrphanChannelGroupDetails(ctx); err != nil {
+			log.Warnf("orphan group membership cleanup failed: %v", err)
+		} else if removed > 0 {
+			log.Infof("orphan group membership cleanup removed %d membership(s)", removed)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
