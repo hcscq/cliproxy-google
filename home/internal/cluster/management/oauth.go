@@ -812,6 +812,9 @@ func modelCooldownEntries(auth *coreauth.Auth, now time.Time) []gin.H {
 		if st.LastError != nil && st.LastError.HTTPStatus != 0 {
 			item["http_status"] = st.LastError.HTTPStatus
 		}
+		if st.LastError != nil && st.LastError.Code != "" {
+			item["error_code"] = st.LastError.Code
+		}
 		if !st.UpdatedAt.IsZero() {
 			item["updated_at"] = st.UpdatedAt
 		}

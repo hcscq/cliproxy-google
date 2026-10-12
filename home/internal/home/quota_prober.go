@@ -123,7 +123,8 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 			if st.LastError == nil || st.LastError.HTTPStatus != http.StatusTooManyRequests {
 				continue
 			}
-			if st.Quota.Reason == "credential_quota" {
+			if st.Quota.Reason == "credential_quota" || st.LastError.Code == QuotaBucketExhaustedCode {
+				// Bucket blocks are re-checked by the quota collector, not per-model probes.
 				continue
 			}
 			out = append(out, quotaProbeTarget{auth: a, model: model})

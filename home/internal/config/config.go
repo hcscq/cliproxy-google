@@ -240,7 +240,13 @@ type Config struct {
 	QuotaShortCooldownSeconds int `yaml:"quota-short-cooldown-seconds" json:"quota-short-cooldown-seconds"`
 	// QuotaProbeIntervalSeconds is how often the Home leader probes cooling (credential, model)
 	// pairs (0 = env QUOTA_PROBE_INTERVAL_SECONDS or 60).
-	QuotaProbeIntervalSeconds int                                 `yaml:"quota-probe-interval-seconds" json:"quota-probe-interval-seconds"`
+	QuotaProbeIntervalSeconds int `yaml:"quota-probe-interval-seconds" json:"quota-probe-interval-seconds"`
+	// QuotaBucketReprobeSeconds: when the active quota probe reports a bucket (e.g.
+	// Antigravity "Gemini models") at 0%, every model of that bucket on that credential is
+	// skipped and the credential's quota is re-probed at this interval; the block is released
+	// as soon as a probe shows remaining quota (0 = env QUOTA_BUCKET_REPROBE_SECONDS or 300,
+	// negative = do not block on probe results).
+	QuotaBucketReprobeSeconds int                                 `yaml:"quota-bucket-reprobe-seconds" json:"quota-bucket-reprobe-seconds"`
 	Devin                     DevinConfig                         `yaml:"devin" json:"devin"`
 	XAI                       XAIConfig                           `yaml:"xai" json:"xai"`
 	Codex                     CodexConfig                         `yaml:"codex" json:"codex"`
@@ -1707,6 +1713,25 @@ func (c *Config) QuotaShortCooldown() time.Duration {
 		return time.Duration(c.QuotaShortCooldownSeconds) * time.Second
 	}
 	return time.Duration(envSeconds("QUOTA_SHORT_COOLDOWN_SECONDS", 60)) * time.Second
+}
+
+// QuotaBucketReprobeInterval returns the re-probe interval for credentials whose quota
+// probe shows an exhausted bucket; ok=false disables bucket blocking.
+func (c *Config) QuotaBucketReprobeInterval() (time.Duration, bool) {
+	secs := 0
+	if c != nil {
+		secs = c.QuotaBucketReprobeSeconds
+	}
+	if secs == 0 {
+		secs = envSeconds("QUOTA_BUCKET_REPROBE_SECONDS", 300)
+	}
+	if secs < 0 {
+		return 0, false
+	}
+	if secs < 30 {
+		secs = 30
+	}
+	return time.Duration(secs) * time.Second, true
 }
 
 // QuotaProbeInterval returns the effective cooling-pair probe interval.

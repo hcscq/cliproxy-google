@@ -69,6 +69,11 @@ type Options struct {
 	AntigravityURLs        []string
 	Now                    func() time.Time
 	HTTPClient             func(*coreauth.Auth, time.Duration) (*http.Client, error)
+	// OnSnapshot, when set, receives every persisted successful probe result.
+	OnSnapshot func(ctx context.Context, auth *coreauth.Auth, windows []cluster.QuotaWindow)
+	// ExhaustedReprobe, when set and returning >0, shortens the next probe of a credential
+	// whose probe shows a quota window at 0% so recovery is noticed quickly.
+	ExhaustedReprobe func() time.Duration
 }
 
 type Collector struct {
@@ -327,6 +332,12 @@ func (c *Collector) collectCredential(ctx context.Context, auth *coreauth.Auth, 
 	}
 	observedAt := c.options.Now().UTC()
 	expiresAt := observedAt.Add(c.options.SnapshotFreshness)
+	nextProbeAt := expiresAt
+	if c.options.ExhaustedReprobe != nil && quotaWindowsExhausted(result.windows) {
+		if d := c.options.ExhaustedReprobe(); d > 0 && observedAt.Add(d).Before(nextProbeAt) {
+			nextProbeAt = observedAt.Add(d)
+		}
+	}
 	status := quotaWindowAggregateStatus(result.windows)
 	collectionStatus := "success"
 	if result.partial {
@@ -336,7 +347,7 @@ func (c *Collector) collectCredential(ctx context.Context, auth *coreauth.Auth, 
 	input := cluster.QuotaSnapshotWrite{
 		CredentialID: auth.ID, QuotaStatus: status, CollectionStatus: collectionStatus, Source: "active_probe",
 		ObservedAt: &observedAt, MaxAcceptedObservedAt: &observedAt, ExpiresAt: &expiresAt, LastAttemptAt: &observedAt, LastSuccessAt: &observedAt,
-		NextProbeAt: &expiresAt, ConsecutiveFailure: 0, Error: result.collectionError, Plan: result.plan, ReplacePlan: true, ParserVersion: snapshotVersion, CollectorVersion: snapshotVersion,
+		NextProbeAt: &nextProbeAt, ConsecutiveFailure: 0, Error: result.collectionError, Plan: result.plan, ReplacePlan: true, ParserVersion: snapshotVersion, CollectorVersion: snapshotVersion,
 		ResetCredits: result.resetCredits, ReplaceResetCredits: result.replaceResetCredits,
 		ExpectedProbeOwner: c.options.Owner, ClearProbeLease: true, ReplaceWindows: result.replaceWindows, Windows: result.windows,
 	}
@@ -352,6 +363,9 @@ func (c *Collector) collectCredential(ctx context.Context, auth *coreauth.Auth, 
 	if !updated {
 		log.WithField("credential_id", auth.ID).Debug("quota collector: probe completion ignored after lease loss")
 		return
+	}
+	if c.options.OnSnapshot != nil {
+		c.options.OnSnapshot(ctx, auth, result.windows)
 	}
 	if updated {
 		log.WithFields(log.Fields{
@@ -735,4 +749,14 @@ func quotaHTTPProbeError(status int, requestID string) *probeError {
 	default:
 		return &probeError{code: "UPSTREAM_UNAVAILABLE", message: "Upstream quota endpoint returned an unavailable response.", retryable: status >= 500, statusCode: status, requestID: requestID}
 	}
+}
+
+// quotaWindowsExhausted reports whether any probed window has no remaining quota.
+func quotaWindowsExhausted(windows []cluster.QuotaWindow) bool {
+	for _, w := range windows {
+		if w.RemainingRatio != nil && *w.RemainingRatio <= 0 && !w.IsUnlimited {
+			return true
+		}
+	}
+	return false
 }

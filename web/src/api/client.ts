@@ -560,6 +560,10 @@ export interface ModelCooldown {
   updated_at?: string;
   /** Per-model 429 cooldown managed by the Home quota prober. */
   probe_managed?: boolean;
+  /** Machine code of the last error, e.g. quota_bucket_exhausted. */
+  error_code?: string;
+  /** Blocked because the credential's quota probe shows this model's bucket at 0%. */
+  bucket_exhausted?: boolean;
   quota_short_cooldown_seconds?: number;
   quota_probe_interval_seconds?: number;
   probe?: QuotaProbeStatus;

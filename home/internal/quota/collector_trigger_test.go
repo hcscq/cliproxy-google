@@ -317,3 +317,13 @@ func waitForProbeRequests(t *testing.T, requests *atomic.Int32, want int32) {
 	}
 	t.Fatalf("probe requests = %d, want at least %d", requests.Load(), want)
 }
+
+func TestQuotaWindowsExhausted(t *testing.T) {
+	zero, half := 0.0, 0.5
+	if quotaWindowsExhausted([]cluster.QuotaWindow{{RemainingRatio: &half}}) {
+		t.Fatal("50% must not count as exhausted")
+	}
+	if !quotaWindowsExhausted([]cluster.QuotaWindow{{RemainingRatio: &half}, {RemainingRatio: &zero}}) {
+		t.Fatal("0% window must count as exhausted")
+	}
+}

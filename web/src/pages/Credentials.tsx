@@ -48,6 +48,13 @@ export function credentialStatus(
   tr: ReturnType<typeof useI18n>["tr"],
 ) {
   if (c.disabled) return <Badge>{t("disabled")}</Badge>;
+  const buckets = bucketExhaustedMessages(c);
+  if (buckets.length > 0 && !c.credential_scope_error)
+    return (
+      <Badge kind="warn" dot>
+        {buckets.join(" · ")}
+      </Badge>
+    );
   if (c.unavailable || c.credential_scope_error)
     return (
       <Badge kind="warn" dot>
@@ -77,7 +84,19 @@ export function credentialStatus(
   );
 }
 
-function cooldownReason(m: { http_status?: number; quota_exceeded?: boolean; status_message?: string }, tr: ReturnType<typeof useI18n>["tr"]) {
+/** Distinct "Gemini 额度耗尽，重置于 …" lines for buckets the quota probe shows at 0%. */
+export function bucketExhaustedMessages(c: Credential): string[] {
+  const out = new Set<string>();
+  for (const m of coolingModels(c)) {
+    if (m.bucket_exhausted || m.error_code === "quota_bucket_exhausted")
+      out.add((m.status_message || "额度耗尽").replace("（配额探测剩余 0%）", ""));
+  }
+  return [...out];
+}
+
+function cooldownReason(m: { http_status?: number; quota_exceeded?: boolean; status_message?: string; bucket_exhausted?: boolean; error_code?: string }, tr: ReturnType<typeof useI18n>["tr"]) {
+  if (m.bucket_exhausted || m.error_code === "quota_bucket_exhausted")
+    return tr("额度探测 0%，等待额度恢复", "quota probe 0%, waiting for reset");
   if (m.http_status === 429 || m.quota_exceeded) return tr("额度耗尽 429", "quota exhausted 429");
   if (m.http_status === 503) return tr("上游无容量 503", "no capacity 503");
   if (m.http_status) return `HTTP ${m.http_status}`;

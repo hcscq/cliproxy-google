@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
@@ -472,6 +473,27 @@ func run() int {
 				return ""
 			}
 			return currentConfig.ProxyURL
+		},
+		OnSnapshot: func(ctx context.Context, auth *coreauth.Auth, windows []cluster.QuotaWindow) {
+			if auth == nil || !strings.EqualFold(auth.Provider, "antigravity") {
+				return
+			}
+			converted := make([]home.QuotaBucketWindow, 0, len(windows))
+			for _, w := range windows {
+				scope := ""
+				if w.ScopeID != nil {
+					scope = *w.ScopeID
+				}
+				converted = append(converted, home.QuotaBucketWindow{ScopeID: scope, RemainingRatio: w.RemainingRatio, ResetAt: w.ResetAt})
+			}
+			rt.ApplyQuotaBucketWindows(ctx, auth.ID, converted)
+		},
+		ExhaustedReprobe: func() time.Duration {
+			d, ok := rt.QuotaBucketReprobeInterval()
+			if !ok {
+				return 0
+			}
+			return d
 		},
 	})
 	quotaCollector.Start(runCtx)
