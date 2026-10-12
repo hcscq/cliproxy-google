@@ -165,6 +165,7 @@ func NewFileRequestLogger(enabled bool, logsDir string, configDir string, errorL
 			logsDir = filepath.Join(configDir, logsDir)
 		}
 	}
+	purgeStaleBodySpools(logsDir)
 	return &FileRequestLogger{
 		enabled:           enabled,
 		logsDir:           logsDir,

@@ -1013,8 +1013,16 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					if !state.NextRetryAfter.IsZero() && prevModelRetryAfter.After(state.NextRetryAfter) && prevModelRetryAfter.After(now) {
 						state.NextRetryAfter = prevModelRetryAfter
 					}
-					auth.Status = StatusError
 					updateAggregatedAvailability(auth, now)
+					// A model-scoped failure (e.g. per-model 429 quota) must not mark the whole
+					// credential as errored while other models are still usable; the per-model
+					// cooldown carries that state. Only flag the credential when it is unavailable
+					// as a whole.
+					if auth.Unavailable {
+						auth.Status = StatusError
+					} else if auth.Status == StatusError || auth.Status == "" {
+						auth.Status = StatusActive
+					}
 				}
 			} else {
 				disableCooling := m.cooldownDisabledForAuth(auth)
