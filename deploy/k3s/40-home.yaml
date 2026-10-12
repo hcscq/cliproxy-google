@@ -39,6 +39,8 @@ spec:
         app: cliproxy-home
         workload: deployment
     spec:
+      # SIGTERM -> drain (proxies move away, <=HOME_DRAIN_TIMEOUT 25s) -> flush usage stream -> exit.
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
