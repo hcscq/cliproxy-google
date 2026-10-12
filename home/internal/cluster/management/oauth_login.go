@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/antigravity"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
@@ -107,7 +108,7 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		return
 	}
 	if strings.EqualFold(session.Status, "complete") {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusOK, completedOAuthResponse(session, false))
 		return
 	}
 	if strings.EqualFold(session.Status, "error") {
@@ -191,11 +192,21 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 		return
 	}
 	if session == nil {
-		c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "unknown or expired state"})
+		c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "unknown or expired state",
+			"message": "登录会话不存在或已过期（有效期 20 分钟），请重新生成登录链接后再粘贴回调地址"})
+		return
+	}
+	if strings.EqualFold(session.Status, "complete") {
+		// Idempotent: the same callback was already processed (possibly by another Home replica).
+		c.JSON(http.StatusOK, completedOAuthResponse(session, true))
 		return
 	}
 	if strings.TrimSpace(session.Status) != "" {
-		c.JSON(http.StatusConflict, gin.H{"status": "error", "error": "oauth flow is not pending"})
+		errMsg := strings.TrimSpace(session.Error)
+		if errMsg == "" {
+			errMsg = "oauth flow is not pending"
+		}
+		c.JSON(http.StatusConflict, gin.H{"status": "error", "error": errMsg})
 		return
 	}
 	data, errData := cluster.OAuthSessionData(session)
@@ -389,7 +400,77 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 	if projectID != "" {
 		metadata["project_id"] = projectID
 	}
+	if existing := h.findActiveCredentialByEmail(ctx, "antigravity", email); existing != nil {
+		return h.refreshExistingOAuthCredential(ctx, existing, metadata)
+	}
 	return h.storeOAuthMetadataWithContext(ctx, metadata, antigravityCredentialFileName(email))
+}
+
+// completedOAuthResponse renders a completed session, including its non-secret result.
+func completedOAuthResponse(session *cluster.OAuthSessionRecord, alreadyCompleted bool) gin.H {
+	resp := gin.H{"status": "ok"}
+	if alreadyCompleted {
+		resp["already_completed"] = true
+	}
+	for key, value := range cluster.OAuthSessionResult(session) {
+		resp[key] = value
+	}
+	return resp
+}
+
+// findActiveCredentialByEmail returns the oldest active credential of provider with the same email.
+func (h *Handler) findActiveCredentialByEmail(ctx context.Context, provider, email string) *coreauth.Auth {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil
+	}
+	auths, errList := h.repo.ListAuths(ctx)
+	if errList != nil {
+		log.Warnf("cluster oauth: dedupe lookup failed: %v", errList)
+		return nil
+	}
+	var found *coreauth.Auth
+	for _, auth := range auths {
+		if auth == nil || !strings.EqualFold(auth.Provider, provider) {
+			continue
+		}
+		candidate := strings.ToLower(strings.TrimSpace(stringFromAny(auth.Metadata["email"])))
+		if candidate == "" {
+			candidate = strings.ToLower(strings.TrimSpace(auth.Label))
+		}
+		if candidate != email {
+			continue
+		}
+		if found == nil || (!auth.CreatedAt.IsZero() && auth.CreatedAt.Before(found.CreatedAt)) {
+			found = auth
+		}
+	}
+	return found
+}
+
+// refreshExistingOAuthCredential merges fresh tokens into an existing credential instead of
+// creating a duplicate. Groups, notes, exclusions and other attributes are preserved.
+func (h *Handler) refreshExistingOAuthCredential(ctx context.Context, existing *coreauth.Auth, metadata map[string]any) error {
+	if existing.Metadata == nil {
+		existing.Metadata = map[string]any{}
+	}
+	for _, key := range []string{"access_token", "refresh_token", "expires_in", "timestamp", "expired", "project_id"} {
+		if value, ok := metadata[key]; ok && value != nil && value != "" {
+			existing.Metadata[key] = value
+		}
+	}
+	existing.UpdatedAt = time.Now().UTC()
+	result := map[string]any{"credential_id": existing.ID, "email": stringFromAny(metadata["email"]), "updated_existing": true}
+	state, _ := ctx.Value(oauthSessionStateKey{}).(string)
+	if state != "" {
+		if errComplete := h.repo.CompleteOAuthSessionWithAuthsResult(ctx, state, []*coreauth.Auth{existing}, result); errComplete != nil {
+			return errComplete
+		}
+	} else if _, errUpsert := h.repo.UpsertAuth(ctx, existing, "upsert"); errUpsert != nil {
+		return errUpsert
+	}
+	log.Infof("cluster oauth: %s login for existing credential %s refreshed its tokens instead of adding a duplicate", existing.Provider, existing.ID)
+	return h.refreshAuths(ctx)
 }
 
 // storeOAuthMetadataWithContext stores an o auth metadata with context.

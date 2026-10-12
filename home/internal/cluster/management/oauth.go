@@ -340,7 +340,11 @@ func (h *Handler) storeOAuthPayloadWithContext(ctx context.Context, raw []byte, 
 		return "", fmt.Errorf("unsupported credential json")
 	}
 	if state, ok := ctx.Value(oauthSessionStateKey{}).(string); ok && state != "" {
-		if errComplete := h.repo.CompleteOAuthSessionWithAuths(ctx, state, auths); errComplete != nil {
+		result := map[string]any{"credential_id": fileUUID, "updated_existing": false}
+		if len(auths) > 0 && auths[0] != nil {
+			result["email"] = stringFromAny(auths[0].Metadata["email"])
+		}
+		if errComplete := h.repo.CompleteOAuthSessionWithAuthsResult(ctx, state, auths, result); errComplete != nil {
 			return "", errComplete
 		}
 	} else if errReplace := h.replaceOAuthPayloadAuths(ctx, fileUUID, auths); errReplace != nil {

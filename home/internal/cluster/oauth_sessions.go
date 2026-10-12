@@ -14,7 +14,9 @@ import (
 
 const (
 	OAuthSessionTTL          = 20 * time.Minute
-	oauthCompletedSessionTTL = time.Minute
+	// Completed sessions are kept so a late or repeated callback submit (from any
+	// Home replica) is answered idempotently instead of "unknown or expired state".
+	oauthCompletedSessionTTL = 24 * time.Hour
 )
 
 // ErrOAuthSessionNotPending reports that session data can no longer be changed.
@@ -215,6 +217,13 @@ func (r *Repository) CompleteOAuthSession(ctx context.Context, state string) err
 // CompleteOAuthSessionWithAuths atomically claims a pending session and persists its credentials.
 // The conditional update serializes completion against cancellation across Home nodes.
 func (r *Repository) CompleteOAuthSessionWithAuths(ctx context.Context, state string, auths []*coreauth.Auth) error {
+	return r.CompleteOAuthSessionWithAuthsResult(ctx, state, auths, nil)
+}
+
+// CompleteOAuthSessionWithAuthsResult is CompleteOAuthSessionWithAuths that also records a
+// small, non-secret result (credential id, email, whether an existing credential was updated)
+// on the completed session so status polls and repeated callback submits can report it.
+func (r *Repository) CompleteOAuthSessionWithAuthsResult(ctx context.Context, state string, auths []*coreauth.Auth, result map[string]any) error {
 	db, errDB := r.database()
 	if errDB != nil {
 		return errDB
@@ -223,7 +232,7 @@ func (r *Repository) CompleteOAuthSessionWithAuths(ctx context.Context, state st
 		return fmt.Errorf("oauth credentials are required")
 	}
 	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		if errComplete := completePendingOAuthSession(ctx, tx, state); errComplete != nil {
+		if errComplete := completePendingOAuthSessionResult(ctx, tx, state, result); errComplete != nil {
 			return errComplete
 		}
 		txRepo := NewRepository(tx)
@@ -240,10 +249,22 @@ func (r *Repository) CompleteOAuthSessionWithAuths(ctx context.Context, state st
 }
 
 func completePendingOAuthSession(ctx context.Context, db *gorm.DB, state string) error {
+	return completePendingOAuthSessionResult(ctx, db, state, nil)
+}
+
+func completePendingOAuthSessionResult(ctx context.Context, db *gorm.DB, state string, sessionResult map[string]any) error {
 	now := time.Now().UTC()
+	var data any
+	if len(sessionResult) > 0 {
+		raw, errMarshal := json.Marshal(map[string]any{"result": sessionResult})
+		if errMarshal != nil {
+			return errMarshal
+		}
+		data = JSONB(raw)
+	}
 	result := db.WithContext(contextOrBackground(ctx)).Model(&OAuthSessionRecord{}).
 		Where("state = ? AND status = ? AND expires_at > ?", strings.TrimSpace(state), "", now).
-		Updates(map[string]any{"status": "complete", "error": "", "data": nil,
+		Updates(map[string]any{"status": "complete", "error": "", "data": data,
 			"updated_at": now, "expires_at": now.Add(oauthCompletedSessionTTL), "completed_at": &now})
 	if result.Error != nil {
 		return result.Error
@@ -288,4 +309,17 @@ func (r *Repository) CancelOAuthSession(ctx context.Context, state string) (bool
 		Where("state = ? AND status = ?", strings.TrimSpace(state), "").
 		Updates(map[string]any{"status": "error", "error": "Authentication cancelled", "data": nil, "updated_at": time.Now().UTC()})
 	return result.RowsAffected > 0, result.Error
+}
+
+// OAuthSessionResult returns the non-secret completion result stored on a completed session.
+func OAuthSessionResult(record *OAuthSessionRecord) map[string]any {
+	if record == nil || !strings.EqualFold(record.Status, "complete") {
+		return nil
+	}
+	data, errData := OAuthSessionData(record)
+	if errData != nil || data == nil {
+		return nil
+	}
+	result, _ := data["result"].(map[string]any)
+	return result
 }
