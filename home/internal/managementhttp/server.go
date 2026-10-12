@@ -652,14 +652,17 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	engine.Use(gin.Recovery())
 	engine.Use(corsMiddleware())
 
+	var spaIndex gin.HandlerFunc
 	if clusterEnabled {
 		registerManagementControlPanelRoutes(engine, func(assetName string) gin.HandlerFunc {
 			return serveManagementControlPanelFromRuntime(clusterOpt, configFilePath, assetName)
 		}, serveManagementControlPanelAssetFromRuntime(clusterOpt, configFilePath))
+		spaIndex = serveManagementControlPanelFromRuntime(clusterOpt, configFilePath, managementasset.IndexFileName)
 	} else {
 		registerManagementControlPanelRoutes(engine, func(assetName string) gin.HandlerFunc {
 			return serveManagementControlPanel(cfg, configFilePath, assetName)
 		}, serveManagementControlPanelAsset(cfg, configFilePath))
+		spaIndex = serveManagementControlPanel(cfg, configFilePath, managementasset.IndexFileName)
 	}
 
 	var clusterHandler *clustermanagement.Handler
@@ -720,9 +723,11 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		callback.GET("/callback", handler.GetOAuthCallback)
 		callback.POST("/callback", handler.PostOAuthCallback)
 	}
+	var fallback gin.HandlerFunc
 	if clusterEnabled && clusterHandler != nil {
-		engine.NoRoute(clusterManagementNoRoute(clusterOpt, handler, clusterHandler))
+		fallback = clusterManagementNoRoute(clusterOpt, handler, clusterHandler)
 	}
+	engine.NoRoute(spaFallbackNoRoute(spaIndex, fallback))
 
 	return &BuildResult{
 		Engine:      engine,
@@ -771,6 +776,43 @@ func setBuildInfoHeaders(c *gin.Context) {
 	c.Writer.Header().Set("X-CPA-HOME-VERSION", buildinfo.Version)
 	c.Writer.Header().Set("X-CPA-HOME-COMMIT", buildinfo.Commit)
 	c.Writer.Header().Set("X-CPA-HOME-BUILD-DATE", buildinfo.BuildDate)
+}
+
+// spaReservedPrefixes are server namespaces that must never fall back to the panel HTML.
+var spaReservedPrefixes = []string{"/v0", "/v1", "/v1beta", "/v1internal", "/api", "/assets", "/internal", "/oauth", "/callback", "/healthz", "/readyz", "/metrics", "/backend-api", "/anthropic", "/openai", "/gemini"}
+
+// isSPAClientRoute reports whether a GET path is a panel client-side route (e.g. /models)
+// that should be answered with index.html so deep links and reloads work.
+func isSPAClientRoute(method, path string) bool {
+	if method != http.MethodGet && method != http.MethodHead {
+		return false
+	}
+	if path == "" || path == "/" || !strings.HasPrefix(path, "/") {
+		return false
+	}
+	for _, p := range spaReservedPrefixes {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return false
+		}
+	}
+	last := path[strings.LastIndex(path, "/")+1:]
+	return !strings.Contains(last, ".") // files (favicon.ico, *.js) stay 404
+}
+
+// spaFallbackNoRoute serves the panel index for client routes and defers everything else.
+func spaFallbackNoRoute(index, next gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if index != nil && c != nil && c.Request != nil && c.Request.URL != nil && isSPAClientRoute(c.Request.Method, c.Request.URL.Path) {
+			c.Status(http.StatusOK)
+			index(c)
+			return
+		}
+		if next != nil {
+			next(c)
+			return
+		}
+		c.AbortWithStatus(http.StatusNotFound)
+	}
 }
 
 func clusterManagementNoRoute(opt *ClusterManagementOption, handler *cpasdkapi.Handler, clusterHandler *clustermanagement.Handler) gin.HandlerFunc {
