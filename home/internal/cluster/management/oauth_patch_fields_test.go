@@ -2,6 +2,7 @@ package management
 
 import (
 	"encoding/json"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -601,4 +602,42 @@ func mustRawFields(t *testing.T, payload string) map[string]json.RawMessage {
 		t.Fatalf("failed to unmarshal raw fields: %v", errUnmarshal)
 	}
 	return fields
+}
+
+func TestPatchAuthFileFieldsEgress(t *testing.T) {
+	handler, engine, _, closeRepo := newConcurrencyManagementTestServer(t)
+	defer closeRepo()
+	seedOAuthAuth(t, handler.repo, "oauth-egress")
+	a, _, _ := handler.repo.GetAuth(t.Context(), "oauth-egress")
+	home.ApplyEgressMetadata(a, home.EgressSpec{Name: "egress-x", ProxyURL: "http://10.0.0.1:3140", IP: "1.2.3.4"})
+	if _, err := handler.repo.UpsertAuth(t.Context(), a, "upsert"); err != nil {
+		t.Fatal(err)
+	}
+	patch := func(body string) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPatch, "/auth-files/fields", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s = %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	// Re-saving the same proxy URL keeps the managed pin.
+	patch(`{"id":"oauth-egress","proxy_url":"http://10.0.0.1:3140","note":"n"}`)
+	got, _, _ := handler.repo.GetAuth(t.Context(), "oauth-egress")
+	if got.Metadata[home.EgressIPKey] != "1.2.3.4" {
+		t.Fatalf("unchanged proxy dropped pin: %#v", got.Metadata)
+	}
+	// A custom URL replaces the pin.
+	patch(`{"id":"oauth-egress","proxy-url":"socks5://127.0.0.1:1080"}`)
+	got, _, _ = handler.repo.GetAuth(t.Context(), "oauth-egress")
+	if got.ProxyURL != "socks5://127.0.0.1:1080" || got.Metadata[home.EgressIPKey] != nil {
+		t.Fatalf("custom proxy: %q %#v", got.ProxyURL, got.Metadata)
+	}
+	// auto unpins (re-balanced by the egress loop).
+	patch(`{"id":"oauth-egress","egress_id":"auto"}`)
+	got, _, _ = handler.repo.GetAuth(t.Context(), "oauth-egress")
+	if got.ProxyURL != "" {
+		t.Fatalf("auto kept proxy %q", got.ProxyURL)
+	}
 }

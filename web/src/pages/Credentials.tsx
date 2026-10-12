@@ -40,6 +40,7 @@ import {
   IconTrash,
 } from "../components/icons";
 import { AddCredentialModal } from "./AddCredential";
+import { EgressSelect, useEgressList } from "../components/EgressSelect";
 import { GroupChecklist, useGroupLookup } from "./Groups";
 
 export function credentialStatus(
@@ -216,6 +217,7 @@ export function CredentialsPage() {
   const egress = useAsync(() => api.egressStatus(), [], 30000);
   const sel = useSelection<string>();
   const [adding, setAdding] = useState(false);
+  const [bulkEgress, setBulkEgress] = useState(false);
   const [selected, setSelected] = useState<CredentialSearchItem | null>(null);
   const [bulk, setBulk] = useState<
     null | "add_to_group" | "remove_from_group" | "add_tags" | "remove_tags"
@@ -405,6 +407,14 @@ export function CredentialsPage() {
                 onClick={() => setBulk("remove_tags")}
               >
                 {tr("去标签", "Remove tags")}
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={!!busy}
+                onClick={() => setBulkEgress(true)}
+                data-testid="bulk-egress"
+              >
+                {tr("设置出口", "Set egress")}
               </button>
               <button
                 className="btn btn-sm"
@@ -625,6 +635,16 @@ export function CredentialsPage() {
           }}
         />
       )}
+      {bulkEgress && (
+        <BulkEgressModal
+          ids={sel.list()}
+          onClose={() => setBulkEgress(false)}
+          onDone={async () => {
+            setBulkEgress(false);
+            await reloadAll();
+          }}
+        />
+      )}
       {adding && (
         <AddCredentialModal
           onClose={() => setAdding(false)}
@@ -828,10 +848,12 @@ function CredentialDrawer({
   const { t, tr } = useI18n();
   const { toast, confirm } = useUi();
   const { busy, run } = useAction();
+  const egressList = useEgressList();
   const [form, setForm] = useState({
     priority: cred.priority?.toString() ?? "",
     prefix: cred.prefix ?? "",
     proxy_url: cred.proxy_url ?? "",
+    egress: cred.egress_id || (cred.proxy_url ? "custom" : "auto"),
     note: cred.note ?? "",
     requestRetry: cred["request-retry"]?.toString() ?? "",
     cooling:
@@ -850,7 +872,6 @@ function CredentialDrawer({
     run("save", async () => {
       const fields: Record<string, unknown> = {
         prefix: form.prefix.trim(),
-        proxy_url: form.proxy_url.trim(),
         note: form.note.trim(),
         "request-retry":
           form.requestRetry.trim() === "" ? null : Number(form.requestRetry),
@@ -858,6 +879,29 @@ function CredentialDrawer({
           form.cooling === "inherit" ? null : form.cooling === "off",
       };
       if (form.priority.trim() !== "") fields.priority = Number(form.priority);
+      const initialEgress = cred.egress_id || (cred.proxy_url ? "custom" : "auto");
+      if (form.egress === "custom") {
+        if (form.proxy_url.trim() !== (cred.proxy_url ?? "")) fields.proxy_url = form.proxy_url.trim();
+      } else if (form.egress !== initialEgress) {
+        fields.egress_id = form.egress;
+      }
+      const ipChanges = form.egress !== initialEgress || fields.proxy_url !== undefined;
+      if (ipChanges) {
+        const target =
+          form.egress === "auto"
+            ? tr("自动均衡", "auto-balance")
+            : form.egress === "custom"
+              ? form.proxy_url.trim() || tr("直连", "direct")
+              : (egressList.data?.find((e) => e.name === form.egress)?.ip ?? form.egress);
+        const ok = await confirm({
+          title: tr("更换出口", "Change egress"),
+          body: tr(
+            `出口 IP 将由 ${cred.egress_ip || cred.proxy_url || "—"} 改为 ${target}，该凭据所有流量随之切换。`,
+            `Egress changes from ${cred.egress_ip || cred.proxy_url || "—"} to ${target} for all of this credential's traffic.`,
+          ),
+        });
+        if (!ok) return;
+      }
       await api.updateCredentialFields(cred.id, fields);
       toast(t("saved"));
       await onChanged();
@@ -1031,15 +1075,24 @@ function CredentialDrawer({
               </select>
             </div>
             <div className="field full">
-              <label>{t("proxyUrl")}</label>
-              <input
-                className="input"
-                value={form.proxy_url}
-                onChange={(e) =>
-                  setForm({ ...form, proxy_url: e.target.value })
-                }
-                placeholder="socks5://user:pass@host:1080"
+              <label>{tr("出口", "Egress")}</label>
+              <EgressSelect
+                value={form.egress}
+                onChange={(v) => setForm({ ...form, egress: v })}
+                allowCustom
+                testId="cred-egress"
               />
+              {form.egress === "custom" && (
+                <input
+                  className="input"
+                  style={{ marginTop: 6 }}
+                  value={form.proxy_url}
+                  onChange={(e) =>
+                    setForm({ ...form, proxy_url: e.target.value })
+                  }
+                  placeholder="socks5://user:pass@host:1080"
+                />
+              )}
             </div>
             <div className="field full">
               <label>{t("note")}</label>
@@ -1334,5 +1387,62 @@ function TagsEditor({
         )}
       </span>
     </div>
+  );
+}
+
+function BulkEgressModal({
+  ids,
+  onClose,
+  onDone,
+}: {
+  ids: string[];
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast, toastError } = useUi();
+  const [egress, setEgress] = useState("auto");
+  const [busy, setBusy] = useState(false);
+  const apply = async () => {
+    setBusy(true);
+    let ok = 0;
+    try {
+      for (const id of ids) {
+        await api.updateCredentialFields(id, { egress_id: egress });
+        ok++;
+      }
+      toast(tr(`已更新 ${ok} 个凭据出口`, `Egress set for ${ok}`));
+      await onDone();
+    } catch (e) {
+      toastError(e);
+      await onDone();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={tr(`设置出口（${ids.length} 个）`, `Set egress (${ids.length})`)}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {tr("取消", "Cancel")}
+          </button>
+          <button className="btn btn-primary" disabled={busy} onClick={() => void apply()} data-testid="bulk-egress-apply">
+            {busy && <Spinner />}
+            {tr("确认切换", "Apply")}
+          </button>
+        </>
+      }
+    >
+      <div className="field">
+        <EgressSelect value={egress} onChange={setEgress} testId="bulk-egress-select" />
+        <span className="hint">
+          {tr("所选凭据的出口 IP 将切换，所有流量随之改变。", "Selected credentials switch exit IP for all traffic.")}
+        </span>
+      </div>
+    </Modal>
   );
 }

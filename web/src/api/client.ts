@@ -160,16 +160,16 @@ export class ApiClient {
   credentialModels(name: string) {
     return this.get<{ models: ModelInfo[] }>('/credentials/models', { name });
   }
-  uploadCredentialFiles(files: File[]) {
+  uploadCredentialFiles(files: File[], egressId?: string) {
     const form = new FormData();
     files.forEach((f, i) => form.append(`file${i}`, f, f.name));
-    return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form });
+    return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form, query: { egress_id: egressId } });
   }
-  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean }) {
+  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string }) {
     return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[] }>('/credentials/import/refresh-tokens', body);
   }
-  uploadCredentialJSON(json: string) {
-    return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json });
+  uploadCredentialJSON(json: string, egressId?: string) {
+    return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId } });
   }
   setCredentialDisabled(name: string, disabled: boolean) {
     return this.patch<{ status: string; disabled: boolean }>('/credentials/status', { name, disabled });
@@ -229,8 +229,8 @@ export class ApiClient {
   }
 
   // ---- OAuth -----------------------------------------------------------------
-  oauthStart(provider: string) {
-    return this.get<{ status: string; url: string; state: string; user_code?: string }>('/oauth/auth-url', { provider });
+  oauthStart(provider: string, egressId?: string) {
+    return this.get<{ status: string; url: string; state: string; user_code?: string }>('/oauth/auth-url', { provider, egress_id: egressId });
   }
   oauthStatus(state: string) {
     return this.get<OAuthResult & { status: 'ok' | 'wait' | 'error'; error?: string }>('/oauth/status', { state });

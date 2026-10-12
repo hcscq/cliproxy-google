@@ -56,6 +56,7 @@ type antigravityEnrichment struct {
 	EmailUnverified bool
 	// Egress* is the sticky egress the enrichment calls used; a new credential keeps it.
 	EgressProxyURL, EgressName, EgressIP string
+	EgressExplicit                       bool
 }
 
 // antigravityEnricher resolves an antigravity identity from a refresh token.
@@ -349,6 +350,9 @@ type RTImportSummary struct {
 type rtImportOptions struct {
 	DryRun      bool
 	Concurrency int
+	// Egress is "" / "auto" (least-loaded healthy, balanced within the batch) or an
+	// egress name/IP; an explicit choice also re-pins matched existing credentials.
+	Egress string
 }
 
 // credentialIndex finds existing antigravity credentials by email / refresh token.
@@ -422,6 +426,10 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 	var writeMu sync.Mutex // serializes dedupe decisions + writes so duplicates in one batch merge
 	touched := map[string]struct{}{}
 	enricher := h.antigravityEnricher()
+	picker, errPicker := h.newEgressPicker(ctx, opts.Egress)
+	if errPicker != nil {
+		return nil, RTImportSummary{}, errPicker
+	}
 
 	for i := range entries {
 		e := entries[i]
@@ -449,7 +457,7 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 				e := entries[j.i]
 				res := &results[j.i]
 				itemCtx, cancel := context.WithTimeout(ctx, rtImportItemTimeout)
-				egress := h.importEgress(itemCtx, idx, &writeMu, e)
+				egress, explicitEgress := h.importEgress(idx, &writeMu, e, picker)
 				if egress.ProxyURL != "" {
 					itemCtx = withEgressProxy(itemCtx, egress.ProxyURL)
 				}
@@ -457,6 +465,7 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 				cancel()
 				if enriched != nil {
 					enriched.EgressProxyURL, enriched.EgressName, enriched.EgressIP = egress.ProxyURL, egress.Name, egress.IP
+					enriched.EgressExplicit = explicitEgress
 				}
 				if errEnrich != nil {
 					res.Status = "failed"
@@ -581,6 +590,9 @@ func (h *Handler) persistAntigravityImport(ctx context.Context, existing *coreau
 		if stringFromAny(fresh.Metadata["email"]) == "" && enriched.Email != "" {
 			fresh.Metadata["email"] = enriched.Email
 		}
+		if enriched.EgressExplicit && enriched.EgressProxyURL != "" {
+			home.ApplyEgressMetadata(fresh, home.EgressSpec{Name: enriched.EgressName, ProxyURL: enriched.EgressProxyURL, IP: enriched.EgressIP})
+		}
 		fresh.UpdatedAt = now.UTC()
 		if _, errUpsert := h.repo.UpsertAuth(ctx, fresh, "upsert"); errUpsert != nil {
 			return "", false, errUpsert
@@ -666,6 +678,7 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 		Items       []any  `json:"items"`
 		DryRun      bool   `json:"dry_run"`
 		Concurrency int    `json:"concurrency"`
+		EgressID    string `json:"egress_id"`
 	}
 	if errBind := json.NewDecoder(io.LimitReader(c.Request.Body, 8<<20)).Decode(&body); errBind != nil {
 		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("body must be JSON: {text, items, dry_run}"))
@@ -685,7 +698,7 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
 	defer cancel()
-	results, summary, errImport := h.importAntigravityEntries(ctx, entries, rtImportOptions{DryRun: body.DryRun, Concurrency: body.Concurrency})
+	results, summary, errImport := h.importAntigravityEntries(ctx, entries, rtImportOptions{DryRun: body.DryRun, Concurrency: body.Concurrency, Egress: body.EgressID})
 	if errImport != nil {
 		respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 		return
@@ -720,20 +733,71 @@ func (failingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("credential egress proxy unusable")
 }
 
-// importEgress picks the egress for an imported token: the matched credential's own
-// proxy, otherwise the least-loaded healthy managed egress.
-func (h *Handler) importEgress(ctx context.Context, idx *credentialIndex, mu *sync.Mutex, e rtImportEntry) home.EgressSpec {
+// egressPicker hands out egresses for one import batch: a fixed explicit choice, or
+// least-loaded healthy with in-batch counting so a batch spreads across egresses.
+type egressPicker struct {
+	mu       sync.Mutex
+	explicit *home.EgressSpec
+	items    []home.EgressStatus
+}
+
+func (h *Handler) newEgressPicker(ctx context.Context, choice string) (*egressPicker, error) {
+	p := &egressPicker{}
+	if h.runtime == nil {
+		return p, nil
+	}
+	if c := strings.TrimSpace(choice); c != "" && !strings.EqualFold(c, home.EgressAuto) {
+		spec, _, err := h.runtime.ResolveEgress(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		p.explicit = &spec
+		return p, nil
+	}
+	p.items, _ = h.runtime.EgressStatuses(ctx)
+	return p, nil
+}
+
+func (p *egressPicker) pick() (home.EgressSpec, bool) {
+	if p == nil {
+		return home.EgressSpec{}, false
+	}
+	if p.explicit != nil {
+		return *p.explicit, true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	best := -1
+	for i := range p.items {
+		it := &p.items[i]
+		if !it.Healthy {
+			continue
+		}
+		if best < 0 || it.Credentials < p.items[best].Credentials || (it.Credentials == p.items[best].Credentials && it.Name < p.items[best].Name) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return home.EgressSpec{}, false
+	}
+	p.items[best].Credentials++
+	return p.items[best].EgressSpec, false
+}
+
+// importEgress picks the egress for an imported token. An explicit choice wins;
+// otherwise a matched credential keeps its own proxy, else the batch picker decides.
+func (h *Handler) importEgress(idx *credentialIndex, mu *sync.Mutex, e rtImportEntry, picker *egressPicker) (home.EgressSpec, bool) {
+	if picker != nil && picker.explicit != nil {
+		return *picker.explicit, true
+	}
 	mu.Lock()
 	existing, _ := idx.match(e.Email, e.RefreshToken)
 	mu.Unlock()
 	if existing != nil {
 		if p := strings.TrimSpace(existing.ProxyURL); p != "" {
-			return home.EgressSpec{ProxyURL: p}
+			return home.EgressSpec{ProxyURL: p}, false
 		}
 	}
-	if h.runtime == nil {
-		return home.EgressSpec{}
-	}
-	spec, _ := h.runtime.PickEgressForImport(ctx)
-	return spec
+	spec, _ := picker.pick()
+	return spec, false
 }

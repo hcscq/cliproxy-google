@@ -4,6 +4,7 @@ import { stateFromRedirect, type OAuthResult, type RTImportResult } from '../api
 import { useI18n } from '../i18n';
 import { CopyButton, Modal, Spinner } from '../components/ui';
 import { IconExternal, IconUpload } from '../components/icons';
+import { EgressSelect } from '../components/EgressSelect';
 
 type Tab = 'oauth' | 'tokens' | 'upload' | 'paste' | 'vertex';
 
@@ -11,6 +12,8 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('oauth');
   const [rtPrefill, setRtPrefill] = useState('');
+  const [egress, setEgress] = useState('auto');
+  const { tr } = useI18n();
   const tabs: [Tab, string][] = [
     ['oauth', t('antigravityLogin')],
     ['tokens', 'Refresh Token 批量导入'],
@@ -27,16 +30,22 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
           </button>
         ))}
       </div>
-      {tab === 'oauth' && <OAuthFlow onDone={onAdded} />}
-      {tab === 'tokens' && <RefreshTokenImport key={rtPrefill} initialText={rtPrefill} onDone={onAdded} />}
-      {tab === 'upload' && <UploadFiles onDone={onAdded} />}
-      {tab === 'paste' && <PasteJson onDone={onAdded} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
+      {tab !== 'vertex' && (
+        <div className="field" style={{ maxWidth: 420, marginBottom: 12 }}>
+          <label>{tr('出口', 'Egress')}</label>
+          <EgressSelect value={egress} onChange={setEgress} testId="add-egress" />
+        </div>
+      )}
+      {tab === 'oauth' && <OAuthFlow onDone={onAdded} egress={egress} />}
+      {tab === 'tokens' && <RefreshTokenImport key={rtPrefill} initialText={rtPrefill} onDone={onAdded} egress={egress} />}
+      {tab === 'upload' && <UploadFiles onDone={onAdded} egress={egress} />}
+      {tab === 'paste' && <PasteJson onDone={onAdded} egress={egress} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
       {tab === 'vertex' && <VertexImport onDone={onAdded} />}
     </Modal>
   );
 }
 
-function OAuthFlow({ onDone }: { onDone: () => void }) {
+function OAuthFlow({ onDone, egress }: { onDone: () => void; egress: string }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -90,7 +99,7 @@ function OAuthFlow({ onDone }: { onDone: () => void }) {
     setStarting(true);
     setError(undefined);
     try {
-      const res = await api.oauthStart('antigravity');
+      const res = await api.oauthStart('antigravity', egress);
       setSession({ url: res.url, state: res.state });
       setPhase('waiting');
       startPoll(res.state);
@@ -192,7 +201,7 @@ function OAuthFlow({ onDone }: { onDone: () => void }) {
   );
 }
 
-function UploadFiles({ onDone }: { onDone: () => void }) {
+function UploadFiles({ onDone, egress }: { onDone: () => void; egress: string }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -207,7 +216,7 @@ function UploadFiles({ onDone }: { onDone: () => void }) {
   const upload = async () => {
     setBusy(true);
     try {
-      const res = await api.uploadCredentialFiles(files);
+      const res = await api.uploadCredentialFiles(files, egress);
       toast(tr(`已上传 ${res.uploaded ?? files.length} 个凭据`, `Uploaded ${res.uploaded ?? files.length} credential(s)`));
       setFiles([]);
       onDone();
@@ -272,7 +281,7 @@ export function looksLikeRefreshTokenText(text: string): boolean {
   return lines.every((l) => /^(\S+@\S+?\s*[-\u2010-\u2015\u2212\uff0d]{3,}\s*)?1\/\/\S+/.test(l));
 }
 
-function PasteJson({ onDone, onUseTokens }: { onDone: () => void; onUseTokens?: (text: string) => void }) {
+function PasteJson({ onDone, onUseTokens, egress }: { onDone: () => void; onUseTokens?: (text: string) => void; egress: string }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -292,7 +301,7 @@ function PasteJson({ onDone, onUseTokens }: { onDone: () => void; onUseTokens?: 
   const submit = async () => {
     setBusy(true);
     try {
-      const res = await api.uploadCredentialJSON(text);
+      const res = await api.uploadCredentialJSON(text, egress);
       toast(tr(`已导入 ${res.name ?? ''}`, `Imported ${res.name ?? ''}`));
       setText('');
       onDone();
@@ -414,7 +423,7 @@ const RT_STATUS: Record<string, [string, 'ok' | 'warn' | 'err' | 'primary']> = {
   skipped: ['跳过', 'warn'],
 };
 
-function RefreshTokenImport({ onDone, initialText = '' }: { onDone: () => void; initialText?: string }) {
+function RefreshTokenImport({ onDone, initialText = '', egress }: { onDone: () => void; initialText?: string; egress: string }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const [text, setText] = useState(initialText);
@@ -434,7 +443,7 @@ function RefreshTokenImport({ onDone, initialText = '' }: { onDone: () => void; 
     try {
       for (let i = 0; i < chunks.length; i++) {
         setProgress(`${i + 1} / ${chunks.length}`);
-        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry });
+        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry, egress_id: egress });
         res.results.forEach((r) => all.push({ ...r, index: r.index + offset }));
         offset += res.results.length;
         setResults([...all]);

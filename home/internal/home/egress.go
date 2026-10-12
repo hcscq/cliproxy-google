@@ -108,8 +108,9 @@ type egressState struct {
 
 // SetEgressRepo enables sticky egress management.
 type egressPin struct {
-	proxy  string
-	paused bool
+	proxy   string
+	paused  bool
+	version int64
 }
 
 const egressPinRefresh = 5 * time.Minute
@@ -118,14 +119,14 @@ func (r *Runtime) egressPinFor(ctx context.Context, a *coreauth.Auth, refresh bo
 	r.egress.mu.Lock()
 	pin, ok := r.egress.pins[a.ID]
 	r.egress.mu.Unlock()
-	if ok && !refresh {
+	if ok && !refresh && (a.StateVersion == 0 || pin.version == a.StateVersion) {
 		return pin, true
 	}
 	full := r.fullAuth(ctx, a.ID)
 	if full == nil {
 		return pin, ok
 	}
-	pin = egressPin{proxy: strings.TrimSpace(full.ProxyURL), paused: full.Disabled && metaString(full, EgressPausedReasonKey) == egressPausedDown}
+	pin = egressPin{proxy: strings.TrimSpace(full.ProxyURL), paused: full.Disabled && metaString(full, EgressPausedReasonKey) == egressPausedDown, version: a.StateVersion}
 	r.setPin(a.ID, pin)
 	return pin, true
 }
@@ -539,4 +540,49 @@ func credentialHTTPClient(auth *coreauth.Auth, timeout time.Duration) *http.Clie
 		egressTransports[proxyURL] = rt
 	}
 	return &http.Client{Timeout: timeout, Transport: rt}
+}
+
+// EgressAuto selects the least-loaded healthy egress.
+const EgressAuto = "auto"
+
+// ResolveEgress maps a panel/API choice to an egress: "" or "auto" picks the
+// least-loaded healthy one (ok=false when none is healthy); otherwise the egress
+// with that name (an unknown name is an error).
+func (r *Runtime) ResolveEgress(ctx context.Context, choice string) (EgressSpec, bool, error) {
+	choice = strings.TrimSpace(choice)
+	if choice == "" || strings.EqualFold(choice, EgressAuto) {
+		spec, ok := r.PickEgressForImport(ctx)
+		return spec, ok, nil
+	}
+	for _, s := range ParseEgressSpecs(os.Getenv(egressEnv)) {
+		if s.Name == choice || s.IP == choice {
+			return s, true, nil
+		}
+	}
+	return EgressSpec{}, false, fmt.Errorf("unknown egress %q", choice)
+}
+
+// ApplyEgressMetadata pins (spec set) or unpins (zero spec: auto-balance on the
+// next round) an auth in place.
+func ApplyEgressMetadata(a *coreauth.Auth, spec EgressSpec) {
+	if a.Metadata == nil {
+		a.Metadata = map[string]any{}
+	}
+	a.ProxyURL = spec.ProxyURL
+	a.Metadata["proxy_url"] = spec.ProxyURL
+	if spec.ProxyURL == "" {
+		delete(a.Metadata, EgressIDKey)
+		delete(a.Metadata, EgressIPKey)
+	} else {
+		a.Metadata[EgressIDKey] = spec.Name
+		a.Metadata[EgressIPKey] = spec.IP
+	}
+	// A pause belongs to the old egress; the new one's health decides next round.
+	if metaString(a, EgressPausedReasonKey) == egressPausedDown {
+		delete(a.Metadata, EgressPausedReasonKey)
+		a.Disabled = false
+		a.Status = coreauth.StatusActive
+		a.StatusMessage = ""
+		a.Metadata["disabled"] = false
+	}
 }

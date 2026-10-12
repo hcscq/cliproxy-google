@@ -94,3 +94,15 @@ func TestCredentialHTTPClientFailClosed(t *testing.T) {
 		t.Fatal("bad proxy must fail closed, not go direct")
 	}
 }
+
+func TestApplyEgressMetadata(t *testing.T) {
+	a := &coreauth.Auth{Disabled: true, Metadata: map[string]any{EgressPausedReasonKey: egressPausedDown}}
+	ApplyEgressMetadata(a, EgressSpec{Name: "e1", ProxyURL: "http://h:1", IP: "1.2.3.4"})
+	if a.ProxyURL != "http://h:1" || a.Metadata[EgressIPKey] != "1.2.3.4" || a.Disabled {
+		t.Fatalf("pin/unpause failed: %+v", a)
+	}
+	ApplyEgressMetadata(a, EgressSpec{})
+	if a.ProxyURL != "" || a.Metadata[EgressIDKey] != nil {
+		t.Fatalf("auto unpin failed: %+v", a)
+	}
+}

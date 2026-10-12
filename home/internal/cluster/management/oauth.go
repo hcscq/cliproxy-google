@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
@@ -162,7 +163,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 			results = append(results, res)
 		}
 		if len(agEntries) > 0 {
-			agResults, _, errImport := h.importAntigravityEntries(ctx, agEntries, rtImportOptions{DryRun: dryRun})
+			agResults, _, errImport := h.importAntigravityEntries(ctx, agEntries, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id")})
 			if errImport != nil {
 				respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 				return
@@ -209,7 +210,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		}
 		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
 		defer cancel()
-		results, summary, errImport := h.importAntigravityEntries(ctx, many, rtImportOptions{DryRun: dryRun})
+		results, summary, errImport := h.importAntigravityEntries(ctx, many, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id")})
 		if errImport != nil {
 			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 			return
@@ -220,7 +221,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 	if entry, ok := antigravityPayloadNeedsImport(bytes.TrimSpace(body)); ok {
 		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 2*time.Minute)
 		defer cancel()
-		results, _, errImport := h.importAntigravityEntries(ctx, []rtImportEntry{entry}, rtImportOptions{DryRun: dryRun})
+		results, _, errImport := h.importAntigravityEntries(ctx, []rtImportEntry{entry}, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id")})
 		if errImport != nil {
 			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 			return
@@ -397,10 +398,30 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 	}
 	removeOAuthFieldPatchIdentifierFields(body)
 	removeOAuthFieldPatchConcurrencyFields(body)
-	changed, errPatch := applyOAuthFieldPatch(auth, body)
-	if errPatch != nil {
-		respondError(c, http.StatusBadRequest, "invalid body", errPatch)
+	egressChanged, errEgress := h.applyEgressPatch(ctx, auth, body)
+	if errEgress != nil {
+		respondError(c, http.StatusBadRequest, "invalid egress", errEgress)
 		return
+	}
+	changed := egressChanged
+	if len(body) > 0 {
+		prevProxy := strings.TrimSpace(auth.ProxyURL)
+		fieldsChanged, errPatch := applyOAuthFieldPatch(auth, body)
+		if errPatch != nil {
+			respondError(c, http.StatusBadRequest, "invalid body", errPatch)
+			return
+		}
+		changed = changed || fieldsChanged
+		_, custom := body["proxy_url"]
+		if _, alias := body["proxy-url"]; alias {
+			custom = true
+		}
+		if custom && !egressChanged && strings.TrimSpace(auth.ProxyURL) != prevProxy {
+			// A custom URL replaces the managed egress pin.
+			home.ApplyEgressMetadata(auth, home.EgressSpec{ProxyURL: auth.ProxyURL})
+			delete(auth.Metadata, home.EgressIDKey)
+			delete(auth.Metadata, home.EgressIPKey)
+		}
 	}
 	policyChanged := concurrencyPatch.MaxInFlight.Set || concurrencyPatch.MaxInFlightByModel.Set
 	if !changed && !policyChanged {
@@ -1451,4 +1472,32 @@ func noteFromAuth(auth *coreauth.Auth) string {
 		return stringFromAny(auth.Metadata["note"])
 	}
 	return ""
+}
+
+// applyEgressPatch handles "egress_id" ("auto" = unpin, re-balanced within seconds;
+// otherwise an egress name/IP) and removes it from body.
+func (h *Handler) applyEgressPatch(ctx context.Context, auth *coreauth.Auth, body map[string]json.RawMessage) (bool, error) {
+	raw, ok := body["egress_id"]
+	if !ok {
+		return false, nil
+	}
+	delete(body, "egress_id")
+	var choice string
+	if err := json.Unmarshal(raw, &choice); err != nil {
+		return false, fmt.Errorf("egress_id must be a string")
+	}
+	choice = strings.TrimSpace(choice)
+	if choice == "" || strings.EqualFold(choice, home.EgressAuto) {
+		home.ApplyEgressMetadata(auth, home.EgressSpec{})
+		return true, nil
+	}
+	if h.runtime == nil {
+		return false, fmt.Errorf("egress management unavailable")
+	}
+	spec, _, err := h.runtime.ResolveEgress(ctx, choice)
+	if err != nil {
+		return false, err
+	}
+	home.ApplyEgressMetadata(auth, spec)
+	return true, nil
 }

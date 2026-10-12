@@ -20,6 +20,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -76,6 +77,7 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 	authURL := buildAntigravityAuthURL(state, redirectURI)
 	if errRegister := h.registerOAuthSession(c, "antigravity", state, map[string]any{
 		"redirect_uri": redirectURI,
+		"egress_id":    strings.TrimSpace(c.Query("egress_id")),
 	}); errRegister != nil {
 		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
 		return
@@ -334,6 +336,23 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 		redirectURI = fmt.Sprintf("http://localhost:%d/oauth-callback", antigravityCallbackPort)
 	}
 
+	// The whole login (token exchange, userinfo, onboarding) already uses the
+	// credential's egress, so Google sees one IP from the first call.
+	var egress home.EgressSpec
+	explicitEgress := false
+	if h.runtime != nil {
+		choice := stringFromAny(data["egress_id"])
+		spec, ok, errEgress := h.runtime.ResolveEgress(ctx, choice)
+		if errEgress != nil {
+			return errEgress
+		}
+		if ok {
+			egress = spec
+			explicitEgress = choice != "" && !strings.EqualFold(choice, home.EgressAuto)
+			ctx = withEgressProxy(ctx, spec.ProxyURL)
+		}
+	}
+
 	form := url.Values{}
 	form.Set("code", strings.TrimSpace(code))
 	form.Set("client_id", antigravity.ClientID)
@@ -401,7 +420,15 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 		metadata["project_id"] = projectID
 	}
 	if existing := h.findActiveCredentialByEmail(ctx, "antigravity", email); existing != nil {
+		if explicitEgress {
+			home.ApplyEgressMetadata(existing, egress)
+		}
 		return h.refreshExistingOAuthCredential(ctx, existing, metadata)
+	}
+	if egress.ProxyURL != "" {
+		metadata["proxy_url"] = egress.ProxyURL
+		metadata[home.EgressIDKey] = egress.Name
+		metadata[home.EgressIPKey] = egress.IP
 	}
 	return h.storeOAuthMetadataWithContext(ctx, metadata, antigravityCredentialFileName(email))
 }
