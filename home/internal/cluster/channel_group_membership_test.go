@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"testing"
+	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 )
@@ -57,5 +58,21 @@ func TestCredentialGroupMembershipLifecycle(t *testing.T) {
 	n, err := repo.PurgeOrphanChannelGroupDetails(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("purge = %d %v", n, err)
+	}
+}
+
+func TestPurgeOrphanRemovesCredentialDependents(t *testing.T) {
+	db, repo := openAPIKeyTestRepository(t)
+	ctx := context.Background()
+	if err := db.Create(&AffinityBindingRecord{BindingKey: "k1", AuthID: "gone-cred", ExpiresAt: time.Now().Add(time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.PurgeOrphanChannelGroupDetails(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	db.Table("session_affinity").Where("auth_id = ?", "gone-cred").Count(&n)
+	if n != 0 {
+		t.Fatalf("orphan affinity rows left: %d", n)
 	}
 }

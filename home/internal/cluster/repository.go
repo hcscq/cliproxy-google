@@ -831,6 +831,9 @@ func (r *Repository) SoftDeleteAuthWithVersion(ctx context.Context, uuid string)
 		if errDeleteMembers := tx.Where("auth_id = ?", uuid).Delete(&ChannelGroupDetailRecord{}).Error; errDeleteMembers != nil {
 			return errDeleteMembers
 		}
+		if errDependents := purgeCredentialDependents(tx, []string{uuid}); errDependents != nil {
+			return errDependents
+		}
 		if errDeleteSnapshot := tx.Where("credential_id = ?", uuid).Delete(&QuotaSnapshotRecord{}).Error; errDeleteSnapshot != nil {
 			return errDeleteSnapshot
 		}
