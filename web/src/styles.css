@@ -366,7 +366,7 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 /* credentials table: fixed layout, single-line cells except quota */
 .cred-table { table-layout: fixed; width: 100%; }
 .cred-table td, .cred-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
-.cred-table td.wrap-ok { white-space: normal; overflow: visible; }
+.cred-table td.wrap-ok { white-space: normal; overflow: hidden; }
 .cred-table .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cred-table .nowrap-row { flex-wrap: nowrap; overflow: hidden; }
 .cred-table .cell-status { display: inline-flex; max-width: 100%; cursor: default; }

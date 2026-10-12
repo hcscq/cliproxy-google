@@ -61,7 +61,7 @@ export function QuotaWindows({ item, compact, error, loading }: { item?: QuotaIt
     );
   }
   return (
-    <div className="stack" style={{ gap: compact ? 6 : 10, minWidth: compact ? 180 : undefined }}>
+    <div className="stack" style={{ gap: compact ? 6 : 10, minWidth: 0 }}>
       {item.primary_windows.map((w) => {
         const ratio = w.is_unlimited ? 1 : w.remaining_ratio ?? (w.limit ? (w.remaining ?? 0) / w.limit : undefined);
         const valueText = w.is_unlimited
