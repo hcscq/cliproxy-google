@@ -47,6 +47,10 @@ type antigravityEnrichment struct {
 	Email        string
 	ProjectID    string
 	ProjectError string // project resolution failed (credential still usable; proxy retries)
+	// EmailMismatch is the supplied email when Google reports a different account.
+	EmailMismatch string
+	// EmailUnverified means userinfo failed and the supplied email was used as-is.
+	EmailUnverified bool
 }
 
 // antigravityEnricher resolves an antigravity identity from a refresh token.
@@ -106,13 +110,21 @@ func (g *googleAntigravityEnricher) Enrich(ctx context.Context, refreshToken, kn
 	if out.AccessToken == "" {
 		return nil, &rtImportError{Code: "token_invalid", Reason: "token endpoint returned no access token"}
 	}
-	out.Email = strings.TrimSpace(knownEmail)
-	if out.Email == "" {
-		email, errEmail := g.h.fetchAntigravityEmail(ctx, out.AccessToken)
-		if errEmail != nil {
-			return nil, &rtImportError{Code: "userinfo_failed", Reason: "could not read account email (token may lack the userinfo.email scope): " + shortReason(errEmail.Error())}
-		}
+	// Always ask Google who the token belongs to; a supplied email is only a fallback
+	// (and is checked so an email----token mismatch cannot merge into the wrong account).
+	known := strings.TrimSpace(knownEmail)
+	email, errEmail := g.h.fetchAntigravityEmail(ctx, out.AccessToken)
+	switch {
+	case errEmail == nil:
 		out.Email = email
+		if known != "" && !strings.EqualFold(known, email) {
+			out.EmailMismatch = known
+		}
+	case known != "":
+		out.Email = known
+		out.EmailUnverified = true
+	default:
+		return nil, &rtImportError{Code: "userinfo_failed", Reason: "could not read account email (token may lack the userinfo.email scope): " + shortReason(errEmail.Error())}
 	}
 	out.ProjectID = strings.TrimSpace(knownProject)
 	if out.ProjectID == "" {
@@ -435,9 +447,17 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 					continue
 				}
 				res.Email, res.ProjectID = enriched.Email, enriched.ProjectID
-				if enriched.ProjectError != "" {
-					res.Warning = "project_id not resolved (" + enriched.ProjectError + "); the proxy will retry on first request"
+				var warnings []string
+				if enriched.EmailMismatch != "" {
+					warnings = append(warnings, "supplied email "+enriched.EmailMismatch+" differs from the token's account; using "+enriched.Email)
 				}
+				if enriched.EmailUnverified {
+					warnings = append(warnings, "email not verified (userinfo failed); using the supplied email")
+				}
+				if enriched.ProjectError != "" {
+					warnings = append(warnings, "project_id not resolved ("+enriched.ProjectError+"); the proxy will retry on first request")
+				}
+				res.Warning = strings.Join(warnings, "; ")
 				writeMu.Lock()
 				existing, matchedBy := idx.match(enriched.Email, e.RefreshToken)
 				if existing == nil && enriched.RefreshToken != "" {
