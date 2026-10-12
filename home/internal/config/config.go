@@ -246,13 +246,17 @@ type Config struct {
 	// skipped and the credential's quota is re-probed at this interval; the block is released
 	// as soon as a probe shows remaining quota (0 = env QUOTA_BUCKET_REPROBE_SECONDS or 300,
 	// negative = do not block on probe results).
-	QuotaBucketReprobeSeconds int                                 `yaml:"quota-bucket-reprobe-seconds" json:"quota-bucket-reprobe-seconds"`
-	Devin                     DevinConfig                         `yaml:"devin" json:"devin"`
-	XAI                       XAIConfig                           `yaml:"xai" json:"xai"`
-	Codex                     CodexConfig                         `yaml:"codex" json:"codex"`
-	Claude                    ClaudeConfig                        `yaml:"claude" json:"claude"`
-	DisableClaudeCloakMode    bool                                `yaml:"disable-claude-cloak-mode" json:"disable-claude-cloak-mode"`
-	OAuthRequestScopedErrors  map[string][]RequestScopedErrorRule `yaml:"oauth-request-scoped-errors,omitempty" json:"oauth-request-scoped-errors,omitempty"`
+	QuotaBucketReprobeSeconds int `yaml:"quota-bucket-reprobe-seconds" json:"quota-bucket-reprobe-seconds"`
+	// AccountBlockRecheckSeconds: credentials auto-disabled for an account-level 403 (e.g.
+	// "Verify your account") are re-probed at this interval and re-enabled on success
+	// (0 = env ACCOUNT_BLOCK_RECHECK_SECONDS or 21600, negative = never auto re-enable).
+	AccountBlockRecheckSeconds int                                 `yaml:"account-block-recheck-seconds" json:"account-block-recheck-seconds"`
+	Devin                      DevinConfig                         `yaml:"devin" json:"devin"`
+	XAI                        XAIConfig                           `yaml:"xai" json:"xai"`
+	Codex                      CodexConfig                         `yaml:"codex" json:"codex"`
+	Claude                     ClaudeConfig                        `yaml:"claude" json:"claude"`
+	DisableClaudeCloakMode     bool                                `yaml:"disable-claude-cloak-mode" json:"disable-claude-cloak-mode"`
+	OAuthRequestScopedErrors   map[string][]RequestScopedErrorRule `yaml:"oauth-request-scoped-errors,omitempty" json:"oauth-request-scoped-errors,omitempty"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests.
@@ -1730,6 +1734,24 @@ func (c *Config) QuotaBucketReprobeInterval() (time.Duration, bool) {
 	}
 	if secs < 30 {
 		secs = 30
+	}
+	return time.Duration(secs) * time.Second, true
+}
+
+// AccountBlockRecheckInterval returns the recheck interval for account-blocked credentials.
+func (c *Config) AccountBlockRecheckInterval() (time.Duration, bool) {
+	secs := 0
+	if c != nil {
+		secs = c.AccountBlockRecheckSeconds
+	}
+	if secs == 0 {
+		secs = envSeconds("ACCOUNT_BLOCK_RECHECK_SECONDS", 21600)
+	}
+	if secs < 0 {
+		return 0, false
+	}
+	if secs < 300 {
+		secs = 300
 	}
 	return time.Duration(secs) * time.Second, true
 }

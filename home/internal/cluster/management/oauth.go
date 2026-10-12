@@ -684,6 +684,13 @@ func applyAuthDisabledStatus(auth *coreauth.Auth, disabled bool) {
 		auth.Metadata = make(map[string]any)
 	}
 	auth.Metadata["disabled"] = disabled
+	if !disabled {
+		// Manual re-enable lifts an account-403 auto-disable; older 403 states are ignored.
+		delete(auth.Metadata, "auto_disabled_reason")
+		delete(auth.Metadata, "auto_disabled_at")
+		auth.Metadata["auto_disabled_cleared_at"] = time.Now().UTC().Format(time.RFC3339)
+		auth.LastError = nil
+	}
 	auth.UpdatedAt = time.Now()
 }
 
@@ -710,6 +717,9 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	}
 	if email := stringFromAny(auth.Metadata["email"]); email != "" {
 		entry["email"] = email
+	}
+	if reason := stringFromAny(auth.Metadata["auto_disabled_reason"]); reason != "" {
+		entry["auto_disabled_reason"] = reason
 	}
 	if priority := priorityFromAuth(auth); priority != nil {
 		entry["priority"] = *priority

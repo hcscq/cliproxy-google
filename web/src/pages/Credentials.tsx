@@ -47,6 +47,16 @@ export function credentialStatus(
   t: ReturnType<typeof useI18n>["t"],
   tr: ReturnType<typeof useI18n>["tr"],
 ) {
+  if (c.disabled && c.auto_disabled_reason)
+    return (
+      <span title={c.status_message}>
+        <Badge kind="err" dot>
+          {c.auto_disabled_reason === "account_verification_required"
+            ? tr("已停用 · 需验证账号（403）", "Disabled · account verification required (403)")
+            : tr("已停用 · 账号被封/违反条款（403）", "Disabled · account suspended (403)")}
+        </Badge>
+      </span>
+    );
   if (c.disabled) return <Badge>{t("disabled")}</Badge>;
   const buckets = bucketExhaustedMessages(c);
   if (buckets.length > 0 && !c.credential_scope_error)

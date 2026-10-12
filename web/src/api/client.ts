@@ -600,6 +600,8 @@ export interface Credential {
   status?: string;
   status_message?: string;
   disabled?: boolean;
+  /** Set when Home auto-disabled the credential for an account-level 403. */
+  auto_disabled_reason?: string;
   unavailable?: boolean;
   runtime_only?: boolean;
   source?: string;

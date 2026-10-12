@@ -346,6 +346,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	r.startKVCleanupLoop(runCtx)
 	r.startAntigravityCatalogLoop(runCtx)
 	r.startQuotaProber(runCtx)
+	r.startAccountBlockGuard(runCtx)
 
 	if !r.clusterAutoRefreshGated() && strings.TrimSpace(r.authDir) != "" {
 		if errEnsureAuthDir := os.MkdirAll(r.authDir, 0o755); errEnsureAuthDir != nil {

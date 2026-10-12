@@ -84,6 +84,7 @@ func buildV8Paths() []configPath {
 		{"quota-short-cooldown-seconds", "routing.cooldown.quota-short-cooldown-seconds"},
 		{"quota-probe-interval-seconds", "routing.cooldown.quota-probe-interval-seconds"},
 		{"quota-bucket-reprobe-seconds", "routing.cooldown.quota-bucket-reprobe-seconds"},
+		{"account-block-recheck-seconds", "routing.cooldown.account-block-recheck-seconds"},
 		{"proxy-url", "requests.proxy-url"}, {"passthrough-headers", "requests.passthrough-headers"},
 		{"nonstream-keepalive-interval", "requests.nonstream-keepalive-interval"}, {"streaming", "requests.streaming"}, {"payload", "requests.payload"},
 		{"auth-dir", "oauth.auth-dir"}, {"auth-auto-refresh-workers", "oauth.auth-auto-refresh-workers"},
