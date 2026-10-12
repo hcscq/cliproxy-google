@@ -56,6 +56,7 @@ spec:
           image: ghcr.io/hcscq/cliproxy-google-proxy:sha-b0d0d74c5383d851ecab0ccf24d387dbdd808d02
           imagePullPolicy: IfNotPresent
           env:
+            - {name: GOMEMLIMIT, value: "1700MiB"}
             - {name: HOME_ADDRESS, value: "cliproxy-home.cliproxy.svc.cluster.local:8327"}
             - name: HOME_BOOTSTRAP_TOKEN
               valueFrom:
@@ -86,7 +87,7 @@ spec:
             failureThreshold: 2
           resources:
             requests: {cpu: 200m, memory: 256Mi}
-            limits: {memory: 1Gi}
+            limits: {memory: 2Gi}  # large (10-30MB) prompts OOM-killed 1Gi pods
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -98,7 +99,7 @@ spec:
         - name: identity
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
         - name: tmp
-          emptyDir: {sizeLimit: 512Mi}
+          emptyDir: {sizeLimit: 2Gi}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
