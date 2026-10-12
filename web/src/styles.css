@@ -362,3 +362,13 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .pill-group { background: var(--primary-soft); color: var(--primary); }
 .pill-group::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .8; }
 .pill-tag { background: transparent; color: var(--text-2); border: 1px solid var(--border); }
+
+/* credentials table: fixed layout, single-line cells except quota */
+.cred-table { table-layout: fixed; width: 100%; }
+.cred-table td, .cred-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.cred-table td.wrap-ok { white-space: normal; overflow: visible; }
+.cred-table .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cred-table .nowrap-row { flex-wrap: nowrap; overflow: hidden; }
+.cred-table .cell-status { display: inline-flex; max-width: 100%; cursor: default; }
+.cred-table .cell-status .badge { overflow: hidden; text-overflow: ellipsis; }
+.cred-table td.actions { text-align: right; }

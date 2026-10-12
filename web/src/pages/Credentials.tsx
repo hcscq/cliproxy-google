@@ -89,6 +89,22 @@ export function CredentialsPage() {
             {busy === 'refresh-all' ? <Spinner /> : <IconRefresh />}
             {tr('全部刷新令牌', 'Refresh all tokens')}
           </button>
+          <button
+            className="btn"
+            data-testid="quota-refresh"
+            disabled={busy === 'quota-refresh'}
+            title={tr('立即重新探测全部凭据额度（Home 后台约每 30 分钟自动探测）', 'Re-probe quota for all credentials now (Home also probes ~every 30 min)')}
+            onClick={() =>
+              run('quota-refresh', async () => {
+                const r = await api.collectQuota();
+                toast(tr(`已触发 ${r.accepted} 个凭据的额度探测`, `Quota probe started for ${r.accepted} credential(s)`));
+                setTimeout(() => void quota.reload(), 4000);
+              })
+            }
+          >
+            {busy === 'quota-refresh' ? <Spinner /> : <IconRefresh />}
+            {tr('刷新额度', 'Refresh quota')}
+          </button>
           <button className="btn btn-primary" onClick={() => setAdding(true)} data-testid="add-credential">
             <IconPlus />
             {t('addCredential')}
@@ -136,33 +152,24 @@ export function CredentialsPage() {
         ) : items.length === 0 ? (
           <Empty>{creds.data.all ? tr('没有匹配的凭据', 'No matching credentials') : tr('还没有凭据，点击右上角“添加凭据”。', 'No credentials yet — click "Add credential".')}</Empty>
         ) : (
-          <table className="table" data-testid="credentials-table">
+          <table className="table cred-table" data-testid="credentials-table">
+            <colgroup>
+              <col style={{ width: 36 }} />
+              <col />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 170 }} />
+              <col className="hide-sm" style={{ width: 240 }} />
+              <col className="hide-sm" style={{ width: 70 }} />
+              <col className="hide-sm" style={{ width: 100 }} />
+              <col style={{ width: 70 }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={{ width: 28 }} />
                 <th>{tr('账号', 'Account')}</th>
                 <th>{t('provider')}</th>
                 <th>{t('status')}</th>
-                <th className="hide-sm">
-                  <span className="row" style={{ gap: 6 }}>
-                    {t('quota')}
-                    <button
-                      className="btn btn-sm btn-ghost"
-                      data-testid="quota-refresh"
-                      disabled={busy === 'quota-refresh'}
-                      title={tr('立即重新探测全部凭据额度（Home 后台约每 30 分钟自动探测）', 'Re-probe quota for all credentials now (Home also probes ~every 30 min)')}
-                      onClick={() =>
-                        run('quota-refresh', async () => {
-                          const r = await api.collectQuota();
-                          toast(tr(`已触发 ${r.accepted} 个凭据的额度探测`, `Quota probe started for ${r.accepted} credential(s)`));
-                          setTimeout(() => void quota.reload(), 4000);
-                        })
-                      }
-                    >
-                      {busy === 'quota-refresh' ? <Spinner /> : tr('刷新', 'Refresh')}
-                    </button>
-                  </span>
-                </th>
+                <th className="hide-sm">{t('quota')}</th>
                 <th className="hide-sm">{t('priority')}</th>
                 <th className="hide-sm">{t('updated')}</th>
                 <th style={{ textAlign: 'right' }}>{t('enabled')}</th>
@@ -175,14 +182,14 @@ export function CredentialsPage() {
                     <input type="checkbox" checked={sel.has(c.id)} onChange={() => sel.toggle(c.id)} aria-label="select" />
                   </td>
                   <td>
-                    <div className="cell-title ellipsis" style={{ maxWidth: 320 }} title={c.label || c.email || c.name}>
+                    <div className="cell-title ellipsis" title={c.label || c.email || c.name}>
                       {c.label || c.email || c.name}
                     </div>
-                    <div className="cell-sub ellipsis" style={{ maxWidth: 320 }} title={c.note || c.id}>
+                    <div className="cell-sub ellipsis" title={c.note || c.id}>
                       {c.note ? c.note : <span className="mono">{c.id.slice(0, 8)}</span>}
                     </div>
                     {((c.group_ids?.length ?? 0) > 0 || (c.tags?.length ?? 0) > 0) && (
-                      <div className="pill-row">
+                      <div className="pill-row nowrap-row" title={[...(c.group_ids ?? []).map((id) => groups.cgNames.get(id) ?? `#${id}`), ...(c.tags ?? []).map((tg) => `#${tg}`)].join(', ')}>
                         {(c.group_ids ?? []).slice(0, 4).map((id) => (
                           <span key={`g${id}`} className="pill pill-group" title={tr('所属凭据分组', 'Credential group')}>
                             {groups.cgNames.get(id) ?? `#${id}`}
@@ -197,26 +204,22 @@ export function CredentialsPage() {
                       </div>
                     )}
                   </td>
-                  <td>
+                  <td title={c.provider}>
                     <Badge kind="primary">{c.provider}</Badge>
                   </td>
                   <td>
-                    <div className="stack" style={{ gap: 4 }}>
+                    <span
+                      className="cell-status"
+                      title={coolingModels(c).length > 0 ? `${tr('冷却中的模型', 'Cooling models')}: ${coolingModels(c).map((m) => m.model).join(', ')}` : c.status_message || undefined}
+                    >
                       {credentialStatus(c, t, tr)}
-                      {coolingModels(c).length > 0 ? (
-                        <span className="faint small ellipsis" style={{ maxWidth: 220 }} title={coolingModels(c).map((m) => m.model).join(', ')}>
-                          {coolingModels(c).map((m) => m.model).join(', ')}
-                        </span>
-                      ) : (
-                        c.credential_scope_error && c.status_message && <span className="faint small ellipsis" style={{ maxWidth: 200 }} title={c.status_message}>{c.status_message}</span>
-                      )}
-                    </div>
+                    </span>
                   </td>
-                  <td className="hide-sm">
+                  <td className="hide-sm wrap-ok">
                     <QuotaWindows item={quotaById.get(c.id)} compact error={quota.error} loading={!quota.data && !quota.error} />
                   </td>
                   <td className="hide-sm">{c.priority ?? <span className="faint">0</span>}</td>
-                  <td className="hide-sm nowrap faint small">{fmtRelative(c.updated_at, lang)}</td>
+                  <td className="hide-sm faint small" title={c.updated_at ?? ''}>{fmtRelative(c.updated_at, lang)}</td>
                   <td className="actions" onClick={(e) => e.stopPropagation()}>
                     <Switch checked={!c.disabled} disabled={busy === `toggle-${c.id}`} onChange={(v) => toggle(c, v)} />
                   </td>
