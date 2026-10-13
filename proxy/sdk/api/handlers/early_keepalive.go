@@ -17,7 +17,10 @@ const (
 // stream that has not started yet (0 = disabled) and the repeat interval.
 func (h *BaseAPIHandler) EarlyKeepAliveSettings() (time.Duration, time.Duration) {
 	delay, interval := defaultEarlyKeepAlive, defaultEarlyKeepAliveInterval
-	if h != nil && h.Cfg != nil {
+	if h == nil || h.Cfg == nil || !h.Cfg.Streaming.EarlyKeepAlive {
+		return 0, 0 // off by default
+	}
+	{
 		switch s := h.Cfg.Streaming.EarlyKeepAliveSeconds; {
 		case s < 0:
 			return 0, 0

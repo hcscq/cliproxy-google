@@ -66,4 +66,12 @@ type StreamingConfig struct {
 	// to allow auth rotation / transient recovery.
 	// <= 0 disables bootstrap retries. Default is 0.
 	BootstrapRetries int `yaml:"bootstrap-retries,omitempty" json:"bootstrap-retries,omitempty"`
+
+	// EarlyKeepAlive commits SSE headers + keep-alives while credentials are
+	// switched (see proxy). Default false (keeps client cross-channel retry).
+	EarlyKeepAlive bool `yaml:"early-keepalive" json:"early-keepalive"`
+	// EarlyKeepAliveSeconds: 0 = default (30); < 0 disables.
+	EarlyKeepAliveSeconds int `yaml:"early-keepalive-seconds,omitempty" json:"early-keepalive-seconds,omitempty"`
+	// EarlyKeepAliveIntervalSeconds: 0 = default (15).
+	EarlyKeepAliveIntervalSeconds int `yaml:"early-keepalive-interval-seconds,omitempty" json:"early-keepalive-interval-seconds,omitempty"`
 }

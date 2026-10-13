@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
 func TestStartStreamWithEarlyKeepAlive(t *testing.T) {
@@ -39,5 +40,16 @@ func TestStartStreamWithEarlyKeepAlive(t *testing.T) {
 	}
 	if res, _ := run(50*time.Millisecond, 0); res.Committed {
 		t.Fatal("delay 0 disables early keep-alive")
+	}
+}
+
+func TestEarlyKeepAliveDefaultOff(t *testing.T) {
+	h := &BaseAPIHandler{Cfg: &sdkconfig.SDKConfig{}}
+	if d, _ := h.EarlyKeepAliveSettings(); d != 0 {
+		t.Fatalf("default should be off, got %s", d)
+	}
+	h.Cfg.Streaming.EarlyKeepAlive = true
+	if d, i := h.EarlyKeepAliveSettings(); d != 30*time.Second || i != 15*time.Second {
+		t.Fatalf("on: %s %s", d, i)
 	}
 }

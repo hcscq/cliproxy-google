@@ -77,6 +77,7 @@ const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
       { path: 'requests.proxy-url', type: 'text', zh: '全局出站代理', en: 'Global outbound proxy', hintZh: 'socks5:// 或 http://，留空为直连', hintEn: 'socks5:// or http://; empty = direct' },
       { path: 'requests.streaming.keepalive-seconds', type: 'number', zh: 'SSE 心跳间隔（秒）', en: 'SSE keepalive (s)' },
       { path: 'requests.streaming.bootstrap-retries', type: 'number', zh: '流式首字节前重试次数', en: 'Streaming bootstrap retries' },
+      { path: 'requests.streaming.early-keepalive', type: 'bool', zh: '提前心跳（会阻止 new-api 切换渠道）', en: 'Early keepalive (blocks new-api channel failover)' },
       { path: 'requests.passthrough-headers', type: 'bool', zh: '透传上游响应头', en: 'Pass through upstream headers' },
     ],
   },

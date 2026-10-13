@@ -115,6 +115,9 @@ type StreamingConfig struct {
 	// do not cut the connection. Later errors are sent as SSE error events.
 	// Committing early disables the client's own cross-channel retry for that
 	// request, hence a conservative delay. 0 = default (30); < 0 disables.
+	// EarlyKeepAlive turns the early keep-alive on. Default false: with it on,
+	// a committed 200 stops the client (e.g. new-api) from retrying another channel.
+	EarlyKeepAlive bool `yaml:"early-keepalive" json:"early-keepalive"`
 	EarlyKeepAliveSeconds int `yaml:"early-keepalive-seconds,omitempty" json:"early-keepalive-seconds,omitempty"`
 	// EarlyKeepAliveIntervalSeconds: 0 = default (15).
 	EarlyKeepAliveIntervalSeconds int `yaml:"early-keepalive-interval-seconds,omitempty" json:"early-keepalive-interval-seconds,omitempty"`
