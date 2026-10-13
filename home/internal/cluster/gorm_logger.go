@@ -24,7 +24,7 @@ type parameterizedGORMLogger struct {
 }
 
 func databaseGORMConfig(slowQueryThreshold time.Duration) *gorm.Config {
-	return &gorm.Config{Logger: newParameterizedGORMLogger(newHomeGORMLogger(log.StandardLogger(), slowQueryThreshold))}
+	return &gorm.Config{QueryFields: true, Logger: newParameterizedGORMLogger(newHomeGORMLogger(log.StandardLogger(), slowQueryThreshold))}
 }
 
 func newHomeGORMLogger(baseLogger *log.Logger, slowQueryThreshold time.Duration) gormlogger.Interface {

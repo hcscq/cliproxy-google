@@ -103,21 +103,3 @@ func (r *Repository) PoolStatus(ctx context.Context) PoolStatus {
 	return DatabasePoolStatus(ctx, db)
 }
 
-// dsnWithExecMode forces pgx simple protocol (one round trip, no server-side
-// prepared statements) unless the DSN already picks a mode.
-func dsnWithExecMode(dsn string) string {
-	if strings.Contains(dsn, "default_query_exec_mode") {
-		return dsn
-	}
-	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-		u, err := url.Parse(dsn)
-		if err != nil {
-			return dsn
-		}
-		q := u.Query()
-		q.Set("default_query_exec_mode", "simple_protocol")
-		u.RawQuery = q.Encode()
-		return u.String()
-	}
-	return strings.TrimSpace(dsn) + " default_query_exec_mode=simple_protocol"
-}

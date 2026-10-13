@@ -16,7 +16,7 @@ func applyClusterHealth(ctx context.Context, authID, model string, status int, b
 		return
 	}
 	h := coreauth.ClusterHealth()
-	s := coreauth.DefaultHealthSettings()
+	s := h.Settings()
 	o := coreauth.HealthObservation{AuthID: authID, Model: model, TTFBMs: ttftMs}
 	lower := strings.ToLower(body)
 	switch {

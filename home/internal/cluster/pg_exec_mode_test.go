@@ -8,8 +8,15 @@ import (
 	"testing"
 )
 
-// Through a transaction-mode pgbouncer with prepared statement support, an
-// ADD COLUMN must not break repeated "SELECT *" (cached plan result type).
+type shapeRecord struct {
+	ID   int    `gorm:"column:id;primaryKey"`
+	Name string `gorm:"column:name"`
+}
+
+func (shapeRecord) TableName() string { return "shape_t" }
+
+// Through a transaction-mode pgbouncer with prepared statements, an ADD COLUMN
+// (as a newer Home's migration does) must not break running model queries.
 func TestPoolerSchemaChangeNoCachedPlanFailure(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("CLIPROXY_HOME_TEST_POSTGRES_DSN"))
 	pooler := strings.TrimSpace(os.Getenv("CLIPROXY_HOME_TEST_PGBOUNCER_ADDR"))
@@ -25,13 +32,17 @@ func TestPoolerSchemaChangeNoCachedPlanFailure(t *testing.T) {
 		t.Fatal("not via pooler")
 	}
 	db.Exec(`DROP TABLE IF EXISTS shape_t`)
-	if err := db.Exec(`CREATE TABLE shape_t (id int)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE shape_t (id int primary key, name text)`).Error; err != nil {
 		t.Fatal(err)
 	}
-	db.Exec(`INSERT INTO shape_t VALUES (1)`)
+	db.Exec(`INSERT INTO shape_t VALUES (1, 'a')`)
 	read := func() error {
-		var rows []map[string]any
-		return db.Raw(`SELECT * FROM shape_t WHERE id = ?`, 1).Scan(&rows).Error
+		var rows []shapeRecord
+		if err := db.Where("id = ?", 1).Find(&rows).Error; err != nil {
+			return err
+		}
+		var one shapeRecord
+		return db.First(&one, 1).Error
 	}
 	for i := 0; i < 20; i++ { // warm every pooled server connection
 		if err := read(); err != nil {
@@ -45,17 +56,5 @@ func TestPoolerSchemaChangeNoCachedPlanFailure(t *testing.T) {
 		if err := read(); err != nil {
 			t.Fatal(fmt.Errorf("after ADD COLUMN, read %d: %w", i, err))
 		}
-	}
-}
-
-func TestDSNWithExecMode(t *testing.T) {
-	if got := dsnWithExecMode("postgres://u:p@h:5432/d?sslmode=disable"); !strings.Contains(got, "default_query_exec_mode=simple_protocol") || !strings.Contains(got, "sslmode=disable") {
-		t.Fatal(got)
-	}
-	if got := dsnWithExecMode("host=h dbname=d"); got != "host=h dbname=d default_query_exec_mode=simple_protocol" {
-		t.Fatal(got)
-	}
-	if got := dsnWithExecMode("host=h default_query_exec_mode=exec"); got != "host=h default_query_exec_mode=exec" {
-		t.Fatal(got)
 	}
 }
