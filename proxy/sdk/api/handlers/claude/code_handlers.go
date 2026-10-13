@@ -239,12 +239,36 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 	// This allows proper cleanup and cancellation of ongoing requests
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 
-	dataChan, upstreamHeaders, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
 	setSSEHeaders := func() {
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
 		c.Header("Access-Control-Allow-Origin", "*")
+	}
+	delay, interval := h.EarlyKeepAliveSettings()
+	started := handlers.StartStreamWithEarlyKeepAlive(c, flusher, delay, interval, setSSEHeaders, []byte("event: ping\ndata: {\"type\": \"ping\"}\n\n"), func() (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
+		return h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
+	})
+	if started.Aborted {
+		cliCancel(c.Request.Context().Err())
+		return
+	}
+	dataChan, upstreamHeaders, errChan := started.Data, started.Headers, started.Errs
+	writeError := func(errMsg *interfaces.ErrorMessage) {
+		if !started.Committed {
+			h.WriteErrorResponse(c, errMsg)
+			return
+		}
+		// Headers already sent: deliver the error as an Anthropic SSE error event.
+		if errMsg != nil {
+			errorBytes, _ := json.Marshal(h.toClaudeError(errMsg))
+			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
+			flusher.Flush()
+		}
+	}
+	if started.Committed {
+		setSSEHeaders = func() {}
+		upstreamHeaders = nil
 	}
 
 	// Peek at the first chunk to determine success or failure before setting headers
@@ -260,7 +284,7 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 				continue
 			}
 			// Upstream failed immediately. Return proper error status and JSON.
-			h.WriteErrorResponse(c, errMsg)
+			writeError(errMsg)
 			if errMsg != nil {
 				cliCancel(errMsg.Error)
 			} else {
@@ -270,7 +294,7 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 		case chunk, ok := <-dataChan:
 			if !ok {
 				if errMsg, hasPendingError := handlers.PendingStreamError(errChan); hasPendingError {
-					h.WriteErrorResponse(c, errMsg)
+					writeError(errMsg)
 					if errMsg != nil {
 						cliCancel(errMsg.Error)
 					} else {

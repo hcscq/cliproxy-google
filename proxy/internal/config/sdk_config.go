@@ -107,4 +107,15 @@ type StreamingConfig struct {
 	// to allow auth rotation / transient recovery.
 	// <= 0 disables bootstrap retries. Default is 0.
 	BootstrapRetries int `yaml:"bootstrap-retries,omitempty" json:"bootstrap-retries,omitempty"`
+
+	// EarlyKeepAliveSeconds: when a streaming request has produced no upstream
+	// bytes after this many seconds (credential switching / retry rounds), the
+	// server commits 200 + SSE headers and sends a keep-alive, then repeats it
+	// every EarlyKeepAliveIntervalSeconds, so edge proxies (Cloudflare 100s)
+	// do not cut the connection. Later errors are sent as SSE error events.
+	// Committing early disables the client's own cross-channel retry for that
+	// request, hence a conservative delay. 0 = default (30); < 0 disables.
+	EarlyKeepAliveSeconds int `yaml:"early-keepalive-seconds,omitempty" json:"early-keepalive-seconds,omitempty"`
+	// EarlyKeepAliveIntervalSeconds: 0 = default (15).
+	EarlyKeepAliveIntervalSeconds int `yaml:"early-keepalive-interval-seconds,omitempty" json:"early-keepalive-interval-seconds,omitempty"`
 }

@@ -120,6 +120,7 @@ func preferredExecutionAttemptError(fallback, upstream error) error {
 // Execute performs a non-streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	ctx = m.withRetryBudget(ctx)
 	return withCapacityRetry(ctx, m.capacityRetrySettings(), req.Model, func() (cliproxyexecutor.Response, error) {
 		return m.executeAttempt(ctx, providers, req, opts)
 	})
@@ -160,6 +161,9 @@ func (m *Manager) executeAttempt(ctx context.Context, providers []string, req cl
 		if !shouldRetry {
 			break
 		}
+		if retryBudgetFrom(ctx).wouldExceed(wait) {
+			break
+		}
 		if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
 			return cliproxyexecutor.Response{}, errWait
 		}
@@ -186,6 +190,7 @@ func (m *Manager) executeAttempt(ctx context.Context, providers []string, req cl
 
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	ctx = m.withRetryBudget(ctx)
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
 	req, opts = cliproxysession.Enrich(req, opts)
 	normalized := m.normalizeProviders(providers)
@@ -220,6 +225,9 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 		if !shouldRetry {
 			break
 		}
+		if retryBudgetFrom(ctx).wouldExceed(wait) {
+			break
+		}
 		if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
 			return cliproxyexecutor.Response{}, errWait
 		}
@@ -241,6 +249,7 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 // Capacity retries happen only while no stream was returned, i.e. before any
 // byte reached the client.
 func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	ctx = m.withRetryBudget(ctx)
 	return withCapacityRetry(ctx, m.capacityRetrySettings(), req.Model, func() (*cliproxyexecutor.StreamResult, error) {
 		return m.executeStreamAttempt(ctx, providers, req, opts)
 	})
@@ -283,6 +292,9 @@ func (m *Manager) executeStreamAttempt(ctx context.Context, providers []string, 
 				if retryRoundWaited {
 					return nil, unwrapExecutionBoundaryError(errStream)
 				}
+				if retryBudgetFrom(ctx).wouldExceed(wait) {
+					return nil, unwrapExecutionBoundaryError(errStream)
+				}
 				if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
 					return nil, errWait
 				}
@@ -298,6 +310,9 @@ func (m *Manager) executeStreamAttempt(ctx context.Context, providers []string, 
 		lastErr = errStream
 		wait, shouldRetry := m.shouldRetryAfterErrorWithAttempted(ctx, opts, errStream, attempt, normalized, retryModel, maxWait, homeRetryLimit, defaultRequestRetry, roundAttempted)
 		if !shouldRetry {
+			break
+		}
+		if retryBudgetFrom(ctx).wouldExceed(wait) {
 			break
 		}
 		if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
@@ -513,6 +528,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	var lastErr error
 	var upstreamErr error
 	for {
+		if errStop, stop := retryBudgetStop(ctx, lastErr, upstreamErr); stop {
+			return cliproxyexecutor.Response{}, errStop
+		}
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -551,6 +569,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
+		retryBudgetFrom(ctx).noteAttempt(auth.ID)
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
@@ -725,6 +744,9 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	var lastErr error
 	var upstreamErr error
 	for {
+		if errStop, stop := retryBudgetStop(ctx, lastErr, upstreamErr); stop {
+			return cliproxyexecutor.Response{}, errStop
+		}
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -763,6 +785,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
+		retryBudgetFrom(ctx).noteAttempt(auth.ID)
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
@@ -948,6 +971,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	var roundTiming homeRetryRoundTiming
 	for {
 		allowSameAuthRetry := homeMode && homeSameAuthRetryPending && lastHomeAuthID != "" && homeSameAuthRetries[lastHomeAuthID] == 0
+		if errStop, stop := retryBudgetStop(ctx, lastErr, upstreamErr); stop {
+			return nil, errStop
+		}
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials && !allowSameAuthRetry {
 			if lastErr != nil {
 				preferredErr := preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -1095,6 +1121,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
+		retryBudgetFrom(ctx).noteAttempt(auth.ID)
 		var errPrepare error
 		if selection != nil {
 			auth, errPrepare = m.prepareHomeRequestAuth(execCtx, executor, selection)

@@ -159,11 +159,16 @@ func withCapacityRetry[T any](ctx context.Context, s CapacityRetrySettings, mode
 	if !s.Enabled {
 		return res, err
 	}
-	for attempt := 1; attempt <= s.MaxAttempts && err != nil && IsCapacityError(err); attempt++ {
+	budget := retryBudgetFrom(ctx)
+	for attempt := 1; attempt <= s.MaxAttempts && err != nil && IsCapacityError(err) && !isRequestStopError(err); attempt++ {
 		if ctx != nil && ctx.Err() != nil {
 			return res, err
 		}
 		delay := capacityBackoff(s, attempt, retryAfterFromError(err), nil)
+		if remaining, bounded := budget.remaining(); bounded && delay >= remaining {
+			return res, err // the request-wide time budget would be exceeded
+		}
+		budget.resetCredentialCount()
 		log.WithField("model", model).Warnf("upstream has no capacity (HTTP %d); capacity retry %d/%d in %s (same model, all credentials)", statusCodeFromError(err), attempt, s.MaxAttempts, delay.Round(10*time.Millisecond))
 		if errSleep := capacitySleep(ctxOrBackground(ctx), delay); errSleep != nil {
 			return res, err

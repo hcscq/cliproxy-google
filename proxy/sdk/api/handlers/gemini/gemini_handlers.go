@@ -188,13 +188,46 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 	}
 
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-	dataChan, upstreamHeaders, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
-
 	setSSEHeaders := func() {
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
 		c.Header("Access-Control-Allow-Origin", "*")
+	}
+	delay, interval := h.EarlyKeepAliveSettings()
+	if alt != "" {
+		delay = 0 // raw JSON-array streaming has no comment syntax for keep-alives
+	}
+	started := handlers.StartStreamWithEarlyKeepAlive(c, flusher, delay, interval, setSSEHeaders, []byte(": keep-alive\n\n"), func() (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
+		return h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
+	})
+	if started.Aborted {
+		cliCancel(c.Request.Context().Err())
+		return
+	}
+	dataChan, upstreamHeaders, errChan := started.Data, started.Headers, started.Errs
+	writeError := func(errMsg *interfaces.ErrorMessage) {
+		if !started.Committed {
+			h.WriteErrorResponse(c, errMsg)
+			return
+		}
+		// Headers already sent: deliver the error in-stream (Gemini error object).
+		if errMsg != nil {
+			status := http.StatusInternalServerError
+			if errMsg.StatusCode > 0 {
+				status = errMsg.StatusCode
+			}
+			errText := http.StatusText(status)
+			if errMsg.Error != nil && errMsg.Error.Error() != "" {
+				errText = errMsg.Error.Error()
+			}
+			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", handlers.BuildErrorResponseBody(status, errText))
+			flusher.Flush()
+		}
+	}
+	if started.Committed {
+		setSSEHeaders = func() {}
+		upstreamHeaders = nil
 	}
 
 	// Peek at the first chunk
@@ -210,7 +243,7 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 				continue
 			}
 			// Upstream failed immediately. Return proper error status and JSON.
-			h.WriteErrorResponse(c, errMsg)
+			writeError(errMsg)
 			if errMsg != nil {
 				cliCancel(errMsg.Error)
 			} else {
@@ -220,7 +253,7 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 		case chunk, ok := <-dataChan:
 			if !ok {
 				if errMsg, hasPendingError := handlers.PendingStreamError(errChan); hasPendingError {
-					h.WriteErrorResponse(c, errMsg)
+					writeError(errMsg)
 					if errMsg != nil {
 						cliCancel(errMsg.Error)
 					} else {

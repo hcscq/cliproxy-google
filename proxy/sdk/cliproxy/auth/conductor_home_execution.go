@@ -35,6 +35,9 @@ func (m *Manager) executeHome(ctx context.Context, providers []string, req clipr
 				if retryRoundWaited {
 					return cliproxyexecutor.Response{}, errExecute
 				}
+				if retryBudgetFrom(ctx).wouldExceed(wait) {
+					return cliproxyexecutor.Response{}, unwrapExecutionBoundaryError(preferredExecutionAttemptError(errExecute, preferredUpstreamErr))
+				}
 				if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
 					return cliproxyexecutor.Response{}, errWait
 				}
@@ -53,6 +56,9 @@ func (m *Manager) executeHome(ctx context.Context, providers []string, req clipr
 				errExecute = preferredExecutionAttemptError(errExecute, preferredUpstreamErr)
 			}
 			return cliproxyexecutor.Response{}, unwrapExecutionBoundaryError(errExecute)
+		}
+		if retryBudgetFrom(ctx).wouldExceed(wait) {
+			return cliproxyexecutor.Response{}, unwrapExecutionBoundaryError(preferredExecutionAttemptError(errExecute, preferredUpstreamErr))
 		}
 		if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
 			return cliproxyexecutor.Response{}, errWait
@@ -78,6 +84,9 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 	var upstreamErr error
 	var roundTiming homeRetryRoundTiming
 	for homeAuthCount := 1; ; homeAuthCount++ {
+		if errStop, stop := retryBudgetStop(ctx, lastErr, upstreamErr); stop {
+			return cliproxyexecutor.Response{}, errStop
+		}
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, markHomeRetryRoundExhausted(preferredExecutionAttemptError(lastErr, upstreamErr), roundTiming.RetryAfter(), true)
@@ -117,6 +126,7 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 		}
 		tried[auth.ID] = struct{}{}
 		attempted[auth.ID] = struct{}{}
+		retryBudgetFrom(ctx).noteAttempt(auth.ID)
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, selection.Provider, routeModel)
 		if errRuntimeAuth := m.bindHomeSelectionRuntimeAuth(ctx, opts, selection); errRuntimeAuth != nil {

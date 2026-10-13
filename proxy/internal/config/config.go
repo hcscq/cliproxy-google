@@ -96,6 +96,15 @@ type Config struct {
 	// try in each credential retry round.
 	// Set to 0 or a negative value to keep trying all available credentials (legacy behavior).
 	MaxRetryCredentials int `yaml:"max-retry-credentials" json:"max-retry-credentials"`
+	// MaxRequestCredentials caps the distinct credentials one request switches
+	// through (same model, all retry rounds); the last upstream error is then
+	// returned. 0 = default (5); negative = unlimited.
+	MaxRequestCredentials int `yaml:"max-request-credentials" json:"max-request-credentials"`
+	// MaxRetryDuration bounds, in seconds, how long one request keeps switching
+	// credentials or waiting between retry rounds before the last upstream error
+	// is returned (keeps streaming clients under ~100s to first byte).
+	// 0 = default (90); negative = unlimited.
+	MaxRetryDuration int `yaml:"max-retry-duration" json:"max-retry-duration"`
 	// MaxRetryInterval defines the maximum positive cooldown wait, in seconds,
 	// allowed before starting another credential retry round. A non-positive value
 	// forbids positive cooldown waits; it does not disable same-round credential

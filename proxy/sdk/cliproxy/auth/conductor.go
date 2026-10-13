@@ -182,10 +182,12 @@ type Manager struct {
 	homeInFlightPublisherConfig atomic.Pointer[HomeInFlightPublisherConfig]
 
 	// Retry controls request retry behavior.
-	requestRetry        atomic.Int32
-	maxRetryCredentials atomic.Int32
-	maxRetryInterval    atomic.Int64
-	capacityRetry       atomic.Pointer[CapacityRetrySettings]
+	requestRetry          atomic.Int32
+	maxRetryCredentials   atomic.Int32
+	maxRetryInterval      atomic.Int64
+	maxRetryDuration      atomic.Int64
+	maxRequestCredentials atomic.Int32
+	capacityRetry         atomic.Pointer[CapacityRetrySettings]
 
 	// oauthModelAlias stores global OAuth model alias mappings (alias -> upstream name) keyed by channel.
 	oauthModelAlias atomic.Value

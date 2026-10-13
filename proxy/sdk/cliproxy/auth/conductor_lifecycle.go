@@ -32,6 +32,24 @@ func (m *Manager) SetRetryConfig(retry int, maxRetryInterval time.Duration, maxR
 	m.maxRetryInterval.Store(maxRetryInterval.Nanoseconds())
 }
 
+// SetMaxRequestCredentials sets the request-wide cap on distinct credentials
+// (0 = DefaultMaxRequestCredentials, negative = unlimited).
+func (m *Manager) SetMaxRequestCredentials(n int) {
+	if m == nil {
+		return
+	}
+	m.maxRequestCredentials.Store(int32(normalizeMaxRequestCredentials(n)))
+}
+
+// SetMaxRetryDuration sets the request-wide credential switching time budget
+// (0 = DefaultMaxRetryDuration, negative = unlimited).
+func (m *Manager) SetMaxRetryDuration(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.maxRetryDuration.Store(int64(normalizeMaxRetryDuration(d)))
+}
+
 // RegisterExecutor registers a provider executor with the manager.
 func (m *Manager) RegisterExecutor(executor ProviderExecutor) {
 	if executor == nil {
