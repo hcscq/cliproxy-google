@@ -161,6 +161,12 @@ func (r *Runtime) setPin(id string, pin egressPin) {
 	r.egress.mu.Unlock()
 }
 
+func (r *Runtime) hasEgressRepo() bool {
+	r.egress.mu.Lock()
+	defer r.egress.mu.Unlock()
+	return r.egress.repo != nil
+}
+
 func (r *Runtime) SetEgressRepo(repo EgressRepo) {
 	r.egress.mu.Lock()
 	r.egress.repo = repo
@@ -178,7 +184,8 @@ func (r *Runtime) startEgressManager(ctx context.Context) {
 		for {
 			if r.catalogLeader() && r.coreManager != nil {
 				specs, legacy := r.currentEgressSpecs(ctx, false)
-				if key := specsKey(specs); key != seededKey {
+				// repo is wired after start; seed only once it exists.
+				if key := specsKey(specs); key != seededKey && r.hasEgressRepo() {
 					if errSeed := r.seedEgressPool(ctx, specs); errSeed != nil {
 						log.WithError(errSeed).Warn("egress: seed proxy pool")
 					} else {
