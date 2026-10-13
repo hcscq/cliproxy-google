@@ -178,8 +178,12 @@ func (r *Runtime) startEgressManager(ctx context.Context) {
 		for {
 			if r.catalogLeader() && r.coreManager != nil {
 				specs, legacy := r.currentEgressSpecs(ctx, false)
-				if key := specsKey(specs); key != seededKey && r.seedEgressPool(ctx, specs) == nil {
-					seededKey = key
+				if key := specsKey(specs); key != seededKey {
+					if errSeed := r.seedEgressPool(ctx, specs); errSeed != nil {
+						log.WithError(errSeed).Warn("egress: seed proxy pool")
+					} else {
+						seededKey = key
+					}
 				}
 				r.egressRoundWith(ctx, specs, legacy)
 			}
@@ -209,6 +213,22 @@ func (r *Runtime) seedEgressPool(ctx context.Context, specs []EgressSpec) error 
 			byName[it.Name] = it
 		}
 	}
+	// Drop stale egress-scope rows (e.g. squid-era "egress-<node>") no longer in specs.
+	if del, ok := repo.(egressPoolDeleter); ok && len(specs) > 0 {
+		want := map[string]bool{}
+		for _, s := range specs {
+			want[s.Name] = true
+		}
+		for name, it := range byName {
+			if !want[name] {
+				if errDel := del.DeleteEgressPool(ctx, it.ID); errDel != nil {
+					log.WithError(errDel).Warnf("egress: delete stale pool row %s", name)
+				} else {
+					log.Infof("egress: deleted stale pool row %s", name)
+				}
+			}
+		}
+	}
 	for _, s := range specs {
 		upd := EgressPoolItem{Name: s.Name, ProxyURL: s.ProxyURL, Enabled: true, Scope: EgressScope, Note: egressNote(s)}
 		if cur, ok := byName[s.Name]; ok {
@@ -222,18 +242,6 @@ func (r *Runtime) seedEgressPool(ctx context.Context, specs []EgressSpec) error 
 		}
 		if err := repo.CreateEgressPool(ctx, upd); err != nil {
 			return err
-		}
-	}
-	// Drop stale egress-scope rows (e.g. squid-era "egress-<node>") no longer in specs.
-	if del, ok := repo.(egressPoolDeleter); ok && len(specs) > 0 {
-		want := map[string]bool{}
-		for _, s := range specs {
-			want[s.Name] = true
-		}
-		for name, it := range byName {
-			if !want[name] {
-				_ = del.DeleteEgressPool(ctx, it.ID)
-			}
 		}
 	}
 	return nil
