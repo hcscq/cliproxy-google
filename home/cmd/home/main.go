@@ -498,6 +498,7 @@ func run() int {
 	})
 	quotaCollector.Start(runCtx)
 	rt.SetEgressRepo(egressRepoAdapter{repo})
+	go runCredentialCallStatsRollup(runCtx, repo)
 
 	respSrv = respserver.New(addr, rt)
 	respSrv.SetClusterHandler(clusterRESPHandler)
@@ -1174,4 +1175,27 @@ func (a egressRepoAdapter) MarkEgressResult(ctx context.Context, id string, heal
 	}
 	_, err := a.repo.MarkProxyPoolTestResult(ctx, id, result, at)
 	return err
+}
+
+// runCredentialCallStatsRollup folds usage rows into per-credential stats every 30s
+// (exactly-once across Homes via an advisory lock + watermark).
+func runCredentialCallStatsRollup(ctx context.Context, repo *cluster.Repository) {
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	lastPrune := time.Time{}
+	for {
+		if _, err := repo.RollupCredentialCallStats(ctx); err != nil && ctx.Err() == nil {
+			log.WithError(err).Warn("credential call stats rollup failed")
+		}
+		if time.Since(lastPrune) > time.Hour {
+			if err := repo.PruneCredentialCallStats(ctx); err == nil {
+				lastPrune = time.Now()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }

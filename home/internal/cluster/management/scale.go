@@ -205,7 +205,9 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 	}
 	sortKey, desc := credentialSortParams(c)
 	stats := h.credentialSortStats(ctx, all)
-	sortCredentials(matched, sortKey, desc, statusOf, stats)
+	window, windowDur := callStatWindow(c.Query("stats_window"))
+	calls := h.credentialCallStats(ctx, window, windowDur)
+	sortCredentials(matched, sortKey, desc, statusOf, stats, calls)
 	page, size := pageParams(c, 50, 500)
 	start := (page - 1) * size
 	items := make([]gin.H, 0, size)
@@ -215,13 +217,16 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		if t, ok := stats.LastUsed[a.ID]; ok {
 			e["last_used_at"] = t
 		}
+		if cs := calls[a.ID]; cs != nil {
+			e["call_stats"] = cs
+		}
 		e["tags"] = cluster.CredentialTags(a)
 		e["group_ids"] = nonNilUints(groupsOf[a.ID])
 		e["state"] = statusOf[a.ID]
 		items = append(items, e)
 	}
 	h.annotateQuotaProbes(c.Request.Context(), items)
-	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(matched), "all": len(all), "page": page, "page_size": size, "facets": facets, "sort": sortKey, "order": map[bool]string{true: "desc", false: "asc"}[desc]})
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(matched), "all": len(all), "page": page, "page_size": size, "facets": facets, "sort": sortKey, "order": map[bool]string{true: "desc", false: "asc"}[desc], "stats_window": window})
 }
 
 func nonNilUints(v []uint) []uint {

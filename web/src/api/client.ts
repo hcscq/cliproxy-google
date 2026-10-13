@@ -323,6 +323,9 @@ export class ApiClient {
   searchCredentials(q: CredentialQuery & { page?: number; page_size?: number }) {
     return this.get<CredentialSearch>('/credentials/search', q as Query);
   }
+  credentialCallStats(id: string, window: StatsWindow) {
+    return this.get<{ window: StatsWindow; total: CallStats; models: (CallStats & { model: string })[] }>(`/credentials/${encodeURIComponent(id)}/call-stats`, { stats_window: window });
+  }
   credentialIds(q: CredentialQuery) {
     return this.get<{ ids: string[]; total: number }>('/credentials/search', { ...(q as Query), ids_only: '1' });
   }
@@ -987,10 +990,19 @@ export interface CredentialQuery {
   /** created (default, newest first) | name | status | quota | last_used | egress */
   sort?: CredentialSortKey;
   order?: 'asc' | 'desc';
+  /** call-stats window (default 24h) */
+  stats_window?: StatsWindow;
 }
-export type CredentialSortKey = 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress';
+export type CredentialSortKey = 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress' | 'success';
 export type CredentialState = 'ok' | 'cooling' | 'error' | 'disabled';
-export type CredentialSearchItem = Credential & { tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string };
+export type StatsWindow = '1h' | '24h' | '7d';
+export interface CallStats {
+  calls: number;
+  ok: number;
+  /** error class -> count: 429 | 503 | 403 | 404 | 400 | 5xx | net | cancel | other */
+  by_class?: Record<string, number>;
+}
+export type CredentialSearchItem = Credential & { tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
 export interface CredentialSearch {
   items: CredentialSearchItem[];
   total: number;

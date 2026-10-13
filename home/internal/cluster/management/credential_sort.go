@@ -20,6 +20,7 @@ const (
 	sortQuota    = "quota"
 	sortLastUsed = "last_used"
 	sortEgress   = "egress"
+	sortSuccess  = "success"
 )
 
 const (
@@ -30,7 +31,7 @@ const (
 func credentialSortParams(c *gin.Context) (string, bool) {
 	key := strings.ToLower(strings.TrimSpace(c.Query("sort")))
 	switch key {
-	case sortName, sortStatus, sortQuota, sortLastUsed, sortEgress, sortCreated:
+	case sortName, sortStatus, sortQuota, sortLastUsed, sortEgress, sortCreated, sortSuccess:
 	default:
 		key = sortCreated
 	}
@@ -89,7 +90,7 @@ func credentialEgress(a *coreauth.Auth) string {
 
 // sortCredentials orders list in place (stable, ties by id). Missing values
 // (no quota / never used / no egress) always sort last.
-func sortCredentials(list []*coreauth.Auth, key string, desc bool, statusOf map[string]string, stats cluster.CredentialSortStats) {
+func sortCredentials(list []*coreauth.Auth, key string, desc bool, statusOf map[string]string, stats cluster.CredentialSortStats, calls map[string]*cluster.CredentialCallStats) {
 	// cmp returns <0, 0, >0 for a vs b ascending; missing reports whether a value is absent.
 	cmp := func(a, b *coreauth.Auth) (int, bool, bool) {
 		switch key {
@@ -105,6 +106,13 @@ func sortCredentials(list []*coreauth.Auth, key string, desc bool, statusOf map[
 			ta, okA := stats.LastUsed[a.ID]
 			tb, okB := stats.LastUsed[b.ID]
 			return ta.Compare(tb), !okA, !okB
+		case sortSuccess:
+			ra, okA := successRate(calls[a.ID])
+			rb, okB := successRate(calls[b.ID])
+			if c := cmpFloat(ra, rb); c != 0 || !okA || !okB {
+				return c, !okA, !okB
+			}
+			return cmpFloat(float64(calls[a.ID].Calls), float64(calls[b.ID].Calls)), false, false
 		case sortEgress:
 			ea, eb := credentialEgress(a), credentialEgress(b)
 			return strings.Compare(ea, eb), ea == "", eb == ""

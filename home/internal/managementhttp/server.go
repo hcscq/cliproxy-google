@@ -229,6 +229,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/credentials/:credential_id/concurrency-policy", handler.GetCredentialConcurrencyPolicy)
 	r.Set(http.MethodPatch, "/credentials/:credential_id/concurrency-policy", handler.PatchCredentialConcurrencyPolicy)
 	r.Set(http.MethodDelete, "/credentials/:credential_id/cooldown", handler.ClearCredentialCooldown)
+	r.Set(http.MethodGet, "/credentials/:credential_id/call-stats", handler.GetCredentialCallStats)
 	r.Set(http.MethodGet, "/models/health", handler.GetModelHealth)
 	r.Set(http.MethodPost, "/models/health/retest", handler.RetestModelHealth)
 	r.Set(http.MethodGet, "/models/catalog", handler.GetAntigravityCatalog)

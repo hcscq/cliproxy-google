@@ -44,9 +44,18 @@ func TestSortCredentials(t *testing.T) {
 		{sortEgress, false, "cab"},
 	}
 	for _, tc := range cases {
-		sortCredentials(list, tc.key, tc.desc, nil, stats)
+		sortCredentials(list, tc.key, tc.desc, nil, stats, nil)
 		if got := ids(list); got != tc.want {
 			t.Errorf("%s desc=%v = %s, want %s", tc.key, tc.desc, got, tc.want)
 		}
+	}
+}
+
+func TestSortCredentialsBySuccess(t *testing.T) {
+	list := []*coreauth.Auth{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	calls := map[string]*cluster.CredentialCallStats{"a": {Calls: 10, OK: 9}, "b": {Calls: 10, OK: 5}}
+	sortCredentials(list, sortSuccess, false, nil, cluster.CredentialSortStats{}, calls)
+	if list[0].ID != "b" || list[1].ID != "a" || list[2].ID != "c" {
+		t.Fatalf("got %s %s %s", list[0].ID, list[1].ID, list[2].ID)
 	}
 }

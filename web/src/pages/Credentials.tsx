@@ -9,6 +9,7 @@ import {
   type CredentialQuery,
   type CredentialSortKey,
   type EgressMove,
+  type StatsWindow,
   type EgressStatus,
   type CredentialSearchItem,
   type ModelCooldown,
@@ -35,6 +36,7 @@ import {
   Switch,
 } from "../components/ui";
 import { useFlexColumns, type FlexCol } from "../components/flexCols";
+import { CallStatsCell, CallStatsPanel, StatsWindowSelect } from "../components/CallStats";
 import { QuotaStatusBadge, QuotaWindows, fmtRecover, fmtResetShort } from "../components/quota";
 import {
   IconDownload,
@@ -197,6 +199,7 @@ const CRED_COLUMNS: FlexCol[] = [
   { min: 112, max: 130, weight: 0.3 },
   { min: 172, max: 210, weight: 0.8 },
   { min: 150, weight: 3 },
+  { min: 96 },
   { min: 64 },
   { min: 92 },
   { min: 80 },
@@ -205,7 +208,8 @@ const CRED_COLUMNS: FlexCol[] = [
 
 type CredSort = { sort: CredentialSortKey; order: "asc" | "desc" };
 const CRED_SORT_KEY = "cred-sort";
-const SORT_KEYS: CredentialSortKey[] = ["created", "name", "status", "quota", "last_used", "egress"];
+const SORT_KEYS: CredentialSortKey[] = ["created", "name", "status", "quota", "last_used", "egress", "success"];
+const STATS_WINDOW_KEY = "cred-stats-window";
 /** Default direction per key: newest / most recent first, otherwise ascending. */
 export const defaultOrder = (k: CredentialSortKey): "asc" | "desc" =>
   k === "created" || k === "last_used" ? "desc" : "asc";
@@ -281,9 +285,17 @@ export function CredentialsPage() {
     window.history.replaceState(window.history.state, "", url);
   }, [sort]);
   useEffect(() => setPage(1), [filter, sort]);
+  const [statsWindow, setStatsWindowState] = useState<StatsWindow>(() => {
+    const v = localStorage.getItem(STATS_WINDOW_KEY);
+    return v === "1h" || v === "7d" ? v : "24h";
+  });
+  const setStatsWindow = (w: StatsWindow) => {
+    localStorage.setItem(STATS_WINDOW_KEY, w);
+    setStatsWindowState(w);
+  };
   const creds = useAsync(
-    () => api.searchCredentials({ ...filter, ...sort, page, page_size: size }),
-    [filter, sort, page, size],
+    () => api.searchCredentials({ ...filter, ...sort, stats_window: statsWindow, page, page_size: size }),
+    [filter, sort, page, size, statsWindow],
     20000,
   );
   const groups = useGroupLookup();
@@ -526,7 +538,7 @@ export function CredentialsPage() {
                 {credCols.widths.map((w, i) => (
                   <col
                     key={i}
-                    className={i >= 6 && i <= 9 ? "hide-sm" : undefined}
+                    className={i >= 6 && i <= 10 ? "hide-sm" : undefined}
                     style={{ width: w }}
                   />
                 ))}
@@ -547,6 +559,10 @@ export function CredentialsPage() {
                   </th>
                   <th className="hide-sm">
                     <SortTh k="quota" cur={sort} onSort={onSort}>{t("quota")}</SortTh>
+                  </th>
+                  <th className="hide-sm nowrap">
+                    <SortTh k="success" cur={sort} onSort={onSort}>{tr("成功率", "OK %")}</SortTh>
+                    <StatsWindowSelect value={statsWindow} onChange={setStatsWindow} />
                   </th>
                   <th className="hide-sm">{t("priority")}</th>
                   <th className="hide-sm">
@@ -676,6 +692,9 @@ export function CredentialsPage() {
                       />
                     </td>
                     <td className="hide-sm">
+                      <CallStatsCell s={c.call_stats} window={statsWindow} />
+                    </td>
+                    <td className="hide-sm">
                       {c.priority ?? <span className="faint">0</span>}
                     </td>
                     <td
@@ -753,6 +772,8 @@ export function CredentialsPage() {
       {current && (
         <CredentialDrawer
           cred={current}
+          statsWindow={statsWindow}
+          onStatsWindow={setStatsWindow}
           quota={quotaById.get(current.id)}
           onClose={() => setSelected(null)}
           onChanged={async () => {
@@ -933,8 +954,12 @@ function CredentialDrawer({
   onClose,
   onChanged,
   onDeleted,
+  statsWindow,
+  onStatsWindow,
 }: {
   cred: CredentialSearchItem;
+  statsWindow: StatsWindow;
+  onStatsWindow: (w: StatsWindow) => void;
   quota?: QuotaItem;
   onClose: () => void;
   onChanged: () => Promise<void>;
@@ -1105,6 +1130,8 @@ function CredentialDrawer({
           <h3 style={{ marginBottom: 8 }}>{t("quota")}</h3>
           <QuotaWindows item={quota} />
         </div>
+
+        <CallStatsPanel credentialId={cred.id} window={statsWindow} onWindow={onStatsWindow} />
 
         <CredentialGroupsEditor cred={cred} onChanged={onChanged} />
 
