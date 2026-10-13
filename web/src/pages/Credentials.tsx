@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAction, useApi, useAsync, useUi } from "../app-context";
 import {
   coolingModels,
@@ -473,7 +473,12 @@ export function CredentialsPage() {
         }
       >
         {(egress.data?.items?.length ?? 0) > 0 && (
-          <EgressStrip items={egress.data!.items} onChanged={async () => { await egress.reload(); await reloadAll(); }} />
+          <EgressStrip
+            items={egress.data!.items}
+            onChanged={async () => { await egress.reload(); await reloadAll(); }}
+            active={filter.egress}
+            onFilter={(id) => { setFilter({ ...filter, egress: id }); setPage(1); }}
+          />
         )}
         <SelectionBar
           selected={sel.size}
@@ -1604,13 +1609,41 @@ function BulkEgressModal({
   );
 }
 
-function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: () => Promise<void> }) {
+const EGRESS_OPEN_KEY = "cred.egress.expanded";
+
+function EgressStrip({
+  items,
+  onChanged,
+  active,
+  onFilter,
+}: {
+  items: EgressStatus[];
+  onChanged: () => Promise<void>;
+  active?: string;
+  onFilter: (id: string | undefined) => void;
+}) {
   const api = useApi();
   const { tr } = useI18n();
   const { toast, toastError, confirm } = useUi();
   const [plan, setPlan] = useState<EgressMove[] | null>(null);
   const [allowPrimary, setAllowPrimary] = useState<boolean | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(EGRESS_OPEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    const v = !open;
+    setOpen(v);
+    try {
+      localStorage.setItem(EGRESS_OPEN_KEY, v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
   const preview = async (ap: boolean | undefined) => {
     setBusy(true);
     try {
@@ -1630,38 +1663,43 @@ function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: (
       toastError(e);
     }
   };
+  const live = items.filter((e) => !e.removed);
+  const primaries = live.filter((e) => e.primary).length;
+  const loads = live.map((e) => e.credentials);
+  const lo = loads.length ? Math.min(...loads) : 0;
+  const hi = loads.length ? Math.max(...loads) : 0;
+  const down = live.filter((e) => !e.healthy).length;
+  const removed = items.length - live.length;
+  const changed = live.filter((e) => e.healthy && e.public_changed).length;
+  const nodes = new Map<string, EgressStatus[]>();
+  for (const e of items) {
+    const n = egressNode(e);
+    if (!nodes.has(n)) nodes.set(n, []);
+    nodes.get(n)!.push(e);
+  }
+  const ipKey = (e: EgressStatus) => egressIP(e).split(".").map((x) => x.padStart(3, "0")).join(".");
+  const grouped = [...nodes.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+    .map(([n, list]) => [n, list.sort((a, b) => Number(!!b.primary) - Number(!!a.primary) || ipKey(a).localeCompare(ipKey(b)))] as const);
+  const activeEg = active ? items.find((e) => e.name === active) : undefined;
   return (
-    <div className="card-body small" data-testid="egress-list" style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-      <span className="faint">{tr("出口", "Egress")} {items.filter((e) => !e.removed).length}</span>
-      {items.map((e) => (
-        <span
-          key={e.name}
-          title={[
-            e.name,
-            e.ip !== egressIP(e) ? tr(`本地 ${e.ip}`, `local ${e.ip}`) : "",
-            e.primary ? tr("节点主 IP", "node primary IP") : "",
-            e.public_changed ? tr(`公网 IP ${e.expected_public_ip} → ${e.public_ip}（凭据继续运行）`, `public IP ${e.expected_public_ip} → ${e.public_ip} (credentials keep running)`) : "",
-            e.last_error ?? "",
-          ].filter(Boolean).join(" · ")}
-          style={{ display: "inline-flex", gap: 4, alignItems: "center" }}
-        >
-          <Badge kind={e.removed || !e.healthy ? "err" : e.public_changed ? "warn" : "ok"} dot>
-            {egressIP(e)} {egressRole(e)} · {egressNode(e)} · {e.credentials}
-            {e.paused > 0 ? tr(` · 暂停${e.paused}`, ` · ${e.paused} paused`) : ""}
-            {e.removed || !e.healthy || e.public_changed ? ` · ${egressState(e, tr)}` : ""}
-          </Badge>
-          {e.public_changed && (
-            <button className="btn btn-xs" onClick={() => void act(() => api.egressAck(e.name), tr("已确认新 IP", "Acknowledged"))}>
-              {tr("确认", "Ack")}
-            </button>
-          )}
-          {e.removed && e.credentials === 0 && (
-            <button className="btn btn-xs" onClick={() => void act(() => api.egressForget(e.name), tr("已移除", "Removed"))}>
-              {tr("移除", "Forget")}
-            </button>
-          )}
+    <div className="card-body small" data-testid="egress-list">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <button className="btn btn-xs" onClick={toggle} data-testid="egress-toggle">
+          {open ? tr("收起", "Collapse") : tr("展开", "Expand")}
+        </button>
+        <span data-testid="egress-summary">
+          {tr("出口", "Egress")} {live.length}
+          <span className="faint"> · {tr("主", "P")} {primaries} / {tr("副", "S")} {live.length - primaries} · {tr("负载", "load")} {lo === hi ? lo : `${lo}–${hi}`}</span>
         </span>
-      ))}
+        {down > 0 && <Badge kind="err" dot>{tr(`不可用 ${down}`, `${down} down`)}</Badge>}
+        {removed > 0 && <Badge kind="err" dot>{tr(`IP 已移除 ${removed}`, `${removed} removed`)}</Badge>}
+        {changed > 0 && <Badge kind="warn" dot>{tr(`⚠ IP 变更 ${changed}`, `⚠ ${changed} changed`)}</Badge>}
+        {active && (
+          <button className="btn btn-xs" onClick={() => onFilter(undefined)} title={tr("清除出口筛选", "Clear egress filter")}>
+            {tr("筛选", "Filter")}: {activeEg ? egressIP(activeEg) : active} ✕
+          </button>
+        )}
       <button
         className="btn btn-sm"
         data-testid="egress-rebalance"
@@ -1670,6 +1708,50 @@ function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: (
       >
         {tr("均衡到新出口", "Rebalance")}
       </button>
+      </div>
+      {open && (
+        <div data-testid="egress-nodes" style={{ marginTop: 6, maxHeight: 140, overflowY: "auto", display: "grid", gridTemplateColumns: "max-content 1fr", columnGap: 10, rowGap: 4, alignItems: "start" }}>
+          {grouped.map(([node, list]) => (
+            <Fragment key={node}>
+              <span className="faint mono nowrap" style={{ lineHeight: "20px" }}>{node}</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {list.map((e) => (
+                  <span key={e.name} style={{ display: "inline-flex", gap: 2, alignItems: "center" }}>
+                    <span
+                      role="button"
+                      style={{ cursor: "pointer", outline: active === e.name ? "1px solid currentColor" : undefined, borderRadius: 999 }}
+                      onClick={() => onFilter(active === e.name ? undefined : e.name)}
+                      title={[
+                        e.name,
+                        e.ip !== egressIP(e) ? tr(`本地 ${e.ip}`, `local ${e.ip}`) : "",
+                        e.removed || !e.healthy || e.public_changed ? egressState(e, tr) : "",
+                        e.paused > 0 ? tr(`暂停 ${e.paused}`, `${e.paused} paused`) : "",
+                        e.public_changed ? `${e.expected_public_ip} → ${e.public_ip}` : "",
+                        e.last_error ?? "",
+                        tr("点击筛选凭据", "Click to filter"),
+                      ].filter(Boolean).join(" · ")}
+                    >
+                      <Badge kind={e.removed || !e.healthy ? "err" : e.public_changed ? "warn" : "ok"} dot>
+                        <span className="mono">{egressIP(e)}</span> {egressRole(e)} · {e.credentials}
+                      </Badge>
+                    </span>
+                    {e.public_changed && (
+                      <button className="btn btn-xs" onClick={() => void act(() => api.egressAck(e.name), tr("已确认新 IP", "Acknowledged"))}>
+                        {tr("确认", "Ack")}
+                      </button>
+                    )}
+                    {e.removed && e.credentials === 0 && (
+                      <button className="btn btn-xs" onClick={() => void act(() => api.egressForget(e.name), tr("已移除", "Removed"))}>
+                        {tr("移除", "Forget")}
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </Fragment>
+          ))}
+        </div>
+      )}
       {plan && (
         <Modal
           title={tr(`均衡预览（${plan.length} 个凭据换 IP）`, `Rebalance preview (${plan.length} moves)`)}

@@ -987,6 +987,8 @@ export interface CredentialQuery {
   group?: string;
   /** hide current members of this credential group */
   exclude_group?: number;
+  /** pinned egress id */
+  egress?: string;
   /** created (default, newest first) | name | status | quota | last_used | egress */
   sort?: CredentialSortKey;
   order?: 'asc' | 'desc';

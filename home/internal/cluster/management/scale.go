@@ -93,6 +93,7 @@ func csvSet(raw string) map[string]bool {
 
 type credFilter struct {
 	q, domain, tag, group string
+	egress                string // pinned egress id (exact)
 	providers, statuses   map[string]bool
 	exclude               uint // credential group id whose effective members are excluded
 }
@@ -102,6 +103,7 @@ func credFilterFromQuery(c *gin.Context) credFilter {
 		q: strings.ToLower(strings.TrimSpace(c.Query("q"))), domain: strings.ToLower(strings.TrimSpace(c.Query("domain"))),
 		tag: strings.ToLower(strings.TrimSpace(c.Query("tag"))), group: strings.TrimSpace(c.Query("group")),
 		providers: csvSet(c.Query("provider")), statuses: csvSet(c.Query("status")),
+		egress: strings.TrimSpace(c.Query("egress")),
 	}
 	if v, err := strconv.ParseUint(c.Query("exclude_group"), 10, 64); err == nil {
 		f.exclude = uint(v)
@@ -114,6 +116,9 @@ func (f credFilter) match(a *coreauth.Auth, status string, groups []uint, exclud
 		return false
 	}
 	if len(f.statuses) > 0 && !f.statuses[status] {
+		return false
+	}
+	if f.egress != "" && strings.TrimSpace(stringFromAny(a.Metadata["egress_id"])) != f.egress {
 		return false
 	}
 	email := cluster.CredentialEmail(a)
