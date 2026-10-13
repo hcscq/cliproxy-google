@@ -48,6 +48,7 @@ type HealthSettings struct {
 	MaxDegradedFrac float64       // at most this fraction of a family's sampled pairs is down-weighted/quarantined
 	UpstreamFail    float64       // family median fail >= this → upstream-wide, no penalties
 	UpstreamTTFB    time.Duration // family median TTFB >= this → upstream-wide, no penalties
+	SlowMinExtra    time.Duration // TTFB must also exceed the family median by this much
 	MinPeers        int           // fewer sampled pairs than this → no relative judgement, no penalties
 }
 
@@ -67,7 +68,7 @@ func DefaultHealthSettings() HealthSettings {
 		CapacitySteps:  []time.Duration{time.Second, 10 * time.Second, time.Minute},
 		SlowClientWait: 45 * time.Second, MinSamples: 5, SlowFactor: 2, ProbeFloor: 0.15,
 		Idle: 30 * time.Minute, MaxEntries: 100000, SyncInterval: 10 * time.Second,
-		FailMargin: 0.25, MaxDegradedFrac: 0.3, UpstreamFail: 0.5, UpstreamTTFB: 45 * time.Second, MinPeers: 4,
+		FailMargin: 0.25, MaxDegradedFrac: 0.3, UpstreamFail: 0.5, UpstreamTTFB: 45 * time.Second, MinPeers: 4, SlowMinExtra: 5 * time.Second,
 	}
 	return applyHealthEnv(s)
 }
@@ -100,6 +101,7 @@ func applyHealthEnv(s HealthSettings) HealthSettings {
 	f("CPA_HEALTH_UPSTREAM_FAIL", &s.UpstreamFail)
 	d("CPA_HEALTH_UPSTREAM_TTFB", &s.UpstreamTTFB)
 	i("CPA_HEALTH_MIN_PEERS", &s.MinPeers)
+	d("CPA_HEALTH_SLOW_MIN_EXTRA", &s.SlowMinExtra)
 	if s.QuarantineMax < s.Quarantine {
 		s.QuarantineMax = s.Quarantine
 	}
@@ -435,7 +437,7 @@ func (t *HealthTracker) rawWeight(e healthEntry, st familyStat, now int64) float
 	if excess := e.fail - st.fail - s.FailMargin; excess > 0 {
 		w -= excess / math.Max(1-st.fail-s.FailMargin, 0.05)
 	}
-	if st.ttfb > 0 && e.ttfb > st.ttfb*s.SlowFactor {
+	if st.ttfb > 0 && e.ttfb > st.ttfb*s.SlowFactor && e.ttfb-st.ttfb > float64(s.SlowMinExtra.Milliseconds()) {
 		w *= st.ttfb * s.SlowFactor / e.ttfb
 	}
 	if w < s.ProbeFloor {
