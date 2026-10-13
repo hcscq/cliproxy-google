@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,14 @@ func TestDiscoverAddRemoveExclude(t *testing.T) {
 	added, removed, _ = a.Discover()
 	if fmt.Sprint(added) != "[154.40.47.200]" || fmt.Sprint(removed) != "[154.40.47.179]" {
 		t.Fatalf("added=%v removed=%v", added, removed)
+	}
+	// File exclusions apply on the next discovery, no restart.
+	f := t.TempDir() + "/exclude"
+	_ = os.WriteFile(f, []byte("# primary\n154.40.47.154\n"), 0o644)
+	a.cfg.ExcludeFile = f
+	_, removed, _ = a.Discover()
+	if fmt.Sprint(removed) != "[154.40.47.154]" || a.Snapshot().Excluded[1] != "154.40.47.154" {
+		t.Fatalf("file exclude: removed=%v excluded=%v", removed, a.Snapshot().Excluded)
 	}
 }
 

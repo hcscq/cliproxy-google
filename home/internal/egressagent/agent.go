@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -27,10 +28,13 @@ import (
 
 // Config tunes the agent.
 type Config struct {
-	Node          string
-	Listen        string          // e.g. 172.16.1.2:3141
-	Exclude       map[string]bool // local IPs never offered
-	AllowSources  []netip.Prefix  // client CIDRs allowed to use the proxy
+	Node    string
+	Listen  string          // e.g. 172.16.1.2:3141
+	Exclude map[string]bool // local IPs never offered
+	// ExcludeFile, when set, is re-read on every discovery (one IP per line or
+	// comma-separated; # comments) so exclusions change without a restart.
+	ExcludeFile   string
+	AllowSources  []netip.Prefix // client CIDRs allowed to use the proxy
 	DiscoverEvery time.Duration
 	ProbeEvery    time.Duration
 	ProbeURL      string
@@ -67,9 +71,31 @@ type Inventory struct {
 
 // Agent is the running proxy.
 type Agent struct {
-	cfg Config
-	mu  sync.RWMutex
-	ips map[string]*IP
+	cfg      Config
+	mu       sync.RWMutex
+	ips      map[string]*IP
+	excluded map[string]bool
+}
+
+// excludeSet merges static and file exclusions (a missing file means none).
+func (a *Agent) excludeSet() map[string]bool {
+	out := map[string]bool{}
+	for k := range a.cfg.Exclude {
+		out[k] = true
+	}
+	if a.cfg.ExcludeFile != "" {
+		if b, err := os.ReadFile(a.cfg.ExcludeFile); err == nil {
+			for _, line := range strings.Split(string(b), "\n") {
+				line, _, _ = strings.Cut(line, "#")
+				for _, f := range strings.Split(line, ",") {
+					if ip, err := netip.ParseAddr(strings.TrimSpace(f)); err == nil {
+						out[ip.String()] = true
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // New builds an agent with defaults filled in.
@@ -148,11 +174,13 @@ func (a *Agent) Discover() (added, removed []string, err error) {
 		return nil, nil, err
 	}
 	primary, _ := a.cfg.PrimaryAddr()
+	exclude := a.excludeSet()
 	seen := map[string]bool{}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.excluded = exclude
 	for _, ip := range list {
-		if !a.cfg.Usable(ip) || a.cfg.Exclude[ip.String()] {
+		if !a.cfg.Usable(ip) || exclude[ip.String()] {
 			continue
 		}
 		s := ip.String()
@@ -233,7 +261,7 @@ func (a *Agent) Snapshot() Inventory {
 		inv.IPs = append(inv.IPs, *ip)
 	}
 	sort.Slice(inv.IPs, func(i, j int) bool { return inv.IPs[i].IP < inv.IPs[j].IP })
-	for s := range a.cfg.Exclude {
+	for s := range a.excluded {
 		inv.Excluded = append(inv.Excluded, s)
 	}
 	sort.Strings(inv.Excluded)

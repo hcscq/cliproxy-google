@@ -18,7 +18,7 @@ func main() {
 	if listen == "" {
 		listen = os.Getenv("HOST_IP") + ":3141"
 	}
-	cfg := egressagent.Config{Node: os.Getenv("NODE_NAME"), Listen: listen, Exclude: map[string]bool{}, ProbeURL: os.Getenv("EGRESS_PROBE_URL")}
+	cfg := egressagent.Config{Node: os.Getenv("NODE_NAME"), Listen: listen, Exclude: map[string]bool{}, ProbeURL: os.Getenv("EGRESS_PROBE_URL"), ExcludeFile: os.Getenv("EGRESS_EXCLUDE_FILE")}
 	for _, ip := range strings.Split(os.Getenv("EGRESS_EXCLUDE_IPS"), ",") {
 		if ip = strings.TrimSpace(ip); ip != "" {
 			cfg.Exclude[ip] = true
