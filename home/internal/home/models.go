@@ -209,7 +209,10 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 	// If this attribute is present, it represents the complete list of exclusions and overrides the global config.
 	if a.Attributes != nil {
 		if val, ok := a.Attributes["excluded_models"]; ok && strings.TrimSpace(val) != "" {
-			excluded = strings.Split(val, ",")
+			// The attribute is persisted with the auth, so it can predate the current
+			// global oauth-excluded-models. Union both so a hot-reloaded global exclusion
+			// takes effect without re-synthesizing every credential.
+			excluded = mergeExcludedModelLists(strings.Split(val, ","), excluded)
 		}
 	}
 	configModels := modelInfosFromAuthMetadata(a, homeConfigModelsMetadataKey)
@@ -1067,6 +1070,27 @@ func applyOAuthModelAlias(cfg *config.Config, provider, authKind string, models 
 			}
 			seen[key] = struct{}{}
 			out = append(out, model)
+		}
+	}
+	return out
+}
+
+// mergeExcludedModelLists returns the de-duplicated union of exclusion lists.
+func mergeExcludedModelLists(lists ...[]string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, list := range lists {
+		for _, item := range list {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			key := strings.ToLower(item)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, item)
 		}
 	}
 	return out
