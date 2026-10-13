@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -35,9 +34,12 @@ func applyAntigravityPromptRewrites(payload []byte, rules []config.PromptRewrite
 		if !parts.IsArray() {
 			continue
 		}
-		for i, part := range parts.Array() {
+		changed := false
+		kept := []byte(`[]`)
+		for _, part := range parts.Array() {
 			text := part.Get("text")
 			if text.Type != gjson.String {
+				kept, _ = sjson.SetRawBytes(kept, "-1", []byte(part.Raw))
 				continue
 			}
 			orig := text.String()
@@ -50,20 +52,46 @@ func applyAntigravityPromptRewrites(payload []byte, rules []config.PromptRewrite
 				if name == "" {
 					name = r.Match
 				}
+				rewrites := r.RemoveLine || r.Replace != ""
 				if !seen[name] {
 					seen[name] = true
 					hits = append(hits, name)
-					if r.Replace == "" {
+					if !rewrites {
 						detectOnly = append(detectOnly, name)
 					}
 				}
-				if r.Replace != "" {
+				switch {
+				case r.RemoveLine:
+					lines := strings.Split(updated, "\n")
+					out := lines[:0]
+					for _, l := range lines {
+						if !strings.Contains(l, r.Match) {
+							out = append(out, l)
+						}
+					}
+					updated = strings.Join(out, "\n")
+				case r.Replace != "":
 					updated = strings.ReplaceAll(updated, r.Match, r.Replace)
 				}
 			}
-			if updated != orig {
-				payload, _ = sjson.SetBytes(payload, path+".parts."+strconv.Itoa(i)+".text", updated)
+			if updated == orig {
+				kept, _ = sjson.SetRawBytes(kept, "-1", []byte(part.Raw))
+				continue
 			}
+			changed = true
+			if strings.TrimSpace(updated) == "" {
+				continue // drop parts that only held removed lines
+			}
+			np, _ := sjson.SetBytes([]byte(part.Raw), "text", updated)
+			kept, _ = sjson.SetRawBytes(kept, "-1", np)
+		}
+		if !changed {
+			continue
+		}
+		if gjson.ParseBytes(kept).Get("#").Int() == 0 {
+			payload, _ = sjson.DeleteBytes(payload, path)
+		} else {
+			payload, _ = sjson.SetRawBytes(payload, path+".parts", kept)
 		}
 	}
 	return payload, hits, detectOnly

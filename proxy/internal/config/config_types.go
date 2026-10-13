@@ -179,6 +179,9 @@ type PromptRewriteRule struct {
 	Match string `yaml:"match" json:"match"`
 	// Replace is the substitute text; empty means detect-only.
 	Replace string `yaml:"replace,omitempty" json:"replace,omitempty"`
+	// RemoveLine drops every line containing Match instead of replacing the
+	// literal text (Replace is ignored).
+	RemoveLine bool `yaml:"remove-line,omitempty" json:"remove-line,omitempty"`
 	// Disabled turns the rule off without removing it.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
@@ -192,6 +195,13 @@ func DefaultAntigravityPromptRewrites() []PromptRewriteRule {
 		Name:    "claude-agent-sdk-identity",
 		Match:   "You are a Claude agent, built on Anthropic's Claude Agent SDK",
 		Replace: "You are an AI coding agent operating inside a CLI agent harness",
+	}, {
+		// Claude Code's billing/attribution line. The Claude translator strips
+		// it, but Claude->Gemini relays (e.g. new-api) forward it as system
+		// text and Antigravity answers it with a bare 429.
+		Name:       "claude-code-billing-header",
+		Match:      "x-anthropic-billing-header:",
+		RemoveLine: true,
 	}}
 }
 
