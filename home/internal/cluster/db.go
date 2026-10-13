@@ -1146,6 +1146,21 @@ func quoteDSNValue(value string) string {
 
 // ensureExtraTables creates tables added by this fork (idempotent).
 func ensureExtraTables(ctx context.Context, db *gorm.DB) error {
+	if db.Dialector.Name() == "postgres" {
+		// Several Homes may start against a fresh database at once; these
+		// table creators run outside the schema-version lock, so serialize
+		// them to avoid "relation already exists" races.
+		return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('cliproxy_home_extra_tables'))`).Error; err != nil {
+				return err
+			}
+			return ensureExtraTablesUnlocked(ctx, tx)
+		})
+	}
+	return ensureExtraTablesUnlocked(ctx, db)
+}
+
+func ensureExtraTablesUnlocked(ctx context.Context, db *gorm.DB) error {
 	if err := ensureModelHealthTable(ctx, db); err != nil {
 		return err
 	}
