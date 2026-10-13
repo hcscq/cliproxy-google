@@ -2,3 +2,4 @@ deploy/k3s/secrets.yaml
 deploy/k3s/*.secret.yaml
 *.pem
 *.jwt
+/home/home
