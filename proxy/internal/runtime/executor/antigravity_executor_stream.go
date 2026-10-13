@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -134,7 +135,52 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	if emulateStream {
 		streamAlt = ""
 	}
-	httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, !emulateStream, streamAlt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	health := antigravityHealthSettingsFrom(e.cfg)
+	healthKey := antigravityHealthKey(auth.ID, baseModel)
+	ttfbLimit := health.ttfb
+	if emulateStream {
+		ttfbLimit = health.nonStream
+	}
+	attemptCtx, cancelAttempt := context.WithCancel(ctx)
+	attemptStarted := time.Now()
+	var ttfbTimedOut atomic.Bool
+	var ttfbTimer *time.Timer
+	if ttfbLimit > 0 {
+		ttfbTimer = time.AfterFunc(ttfbLimit, func() {
+			ttfbTimedOut.Store(true)
+			cancelAttempt()
+		})
+	}
+	stopTTFB := func() {
+		if ttfbTimer != nil {
+			ttfbTimer.Stop()
+		}
+	}
+	attemptHandedOff := false
+	defer func() {
+		stopTTFB()
+		if !attemptHandedOff {
+			cancelAttempt()
+		}
+	}()
+	// slowFailure converts a TTFB timeout / long-wait client disconnect into a
+	// credential health penalty. It returns a replacement error (or nil).
+	slowFailure := func(cause error) error {
+		now := time.Now()
+		if ttfbTimedOut.Load() {
+			cd := antigravityHealth.slow(healthKey, now, health)
+			log.Warnf("antigravity executor: no first byte within %s (auth=%s model=%s), switching credential; quarantine=%s", ttfbLimit, auth.ID, baseModel, cd)
+			return antigravityTTFBTimeoutErr(baseModel, ttfbLimit, cd)
+		}
+		if ctx.Err() != nil && health.slow > 0 && now.Sub(attemptStarted) >= health.slow {
+			if cd := antigravityHealth.slow(healthKey, now, health); cd > 0 {
+				log.Warnf("antigravity executor: client left after %s without first byte (auth=%s model=%s); quarantine=%s", now.Sub(attemptStarted).Round(time.Second), auth.ID, baseModel, cd)
+				_ = markAntigravityShortCooldownRequired(context.Background(), auth, baseModel, now, cd)
+			}
+		}
+		return nil
+	}
+	httpReq, errReq := e.buildRequest(attemptCtx, auth, token, baseModel, requestPayload, !emulateStream, streamAlt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
 		err = errReq
 		return nil, err
@@ -142,6 +188,10 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	httpResp, errDo := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate_stream").Do(httpReq)
 	if errDo != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
+		if errSlow := slowFailure(errDo); errSlow != nil {
+			err = errSlow
+			return nil, err
+		}
 		if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 			return nil, errDo
 		}
@@ -156,6 +206,10 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		}
 		if errRead != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
+			if errSlow := slowFailure(errRead); errSlow != nil {
+				err = errSlow
+				return nil, err
+			}
 			if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
 				err = errRead
 				return nil, err
@@ -198,6 +252,15 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			// Report the upstream failure rather than the cleanup failure.
 			logAntigravityReasoningReplayDegraded(replayScope, "invalidate", errClear)
 		}
+		if httpResp.StatusCode == http.StatusServiceUnavailable && isAntigravityCapacityBody(bodyBytes) {
+			cd := antigravityHealth.capacity(healthKey, health)
+			capErr := newAntigravityStatusErrWithHeaders(httpResp.StatusCode, withAntigravityCooldownHint(bodyBytes, cd), httpResp.Header)
+			if cd > 0 {
+				capErr.retryAfter = &cd
+			}
+			err = capErr
+			return nil, err
+		}
 		err = newAntigravityStatusErrWithHeaders(httpResp.StatusCode, bodyBytes, httpResp.Header)
 		return nil, err
 	}
@@ -220,11 +283,24 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			log.Errorf("antigravity executor: close response body error: %v", errClose)
 		}
 		helps.RecordAPIResponseError(ctx, e.cfg, errRetired)
+		if errSlow := slowFailure(errRetired); errSlow != nil {
+			err = errSlow
+			return nil, err
+		}
 		err = errRetired
 		return nil, err
 	} else {
 		httpResp.Body = peeked
 	}
+	stopTTFB()
+	if ttfbTimedOut.Load() {
+		// The timer fired just as the first byte arrived; the body is cancelled.
+		_ = httpResp.Body.Close()
+		err = slowFailure(context.Canceled)
+		return nil, err
+	}
+	antigravityHealth.success(healthKey, time.Now())
+	attemptHandedOff = true
 	if useCredits {
 		clearAntigravityCreditsFailureState(auth)
 	}
@@ -232,6 +308,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	out := make(chan cliproxyexecutor.StreamChunk)
 	stopDeliverySupport := usage.SupportStreamDelivery(ctx)
 	go func(resp *http.Response) {
+		defer cancelAttempt()
 		defer func() {
 			if errClose := resp.Body.Close(); errClose != nil {
 				log.Errorf("antigravity executor: close response line error: %v", errClose)

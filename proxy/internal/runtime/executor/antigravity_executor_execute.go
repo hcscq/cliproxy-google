@@ -128,15 +128,26 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	}
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 
-	httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	health := antigravityHealthSettingsFrom(e.cfg)
+	attemptTimer := newAntigravityAttemptTimer(ctx, health.nonStream)
+	defer attemptTimer.cancel()
+	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, requestPayload, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
 		err = errReq
 		return resp, err
 	}
 
 	httpResp, errDo := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReq)
+	if !attemptTimer.firstByte() && errDo == nil {
+		_ = httpResp.Body.Close()
+		errDo = context.Canceled
+	}
 	if errDo != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
+		if errSlow := attemptTimer.penalty(ctx, auth, baseModel, health); errSlow != nil {
+			err = errSlow
+			return resp, err
+		}
 		if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 			return resp, errDo
 		}
@@ -187,6 +198,10 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			// Report the upstream failure rather than the cleanup failure.
 			logAntigravityReasoningReplayDegraded(replayScope, "invalidate", errClear)
 		}
+		if httpResp.StatusCode == http.StatusServiceUnavailable && isAntigravityCapacityBody(bodyBytes) {
+			err = antigravityCapacityErr(auth, baseModel, health, httpResp.StatusCode, bodyBytes, httpResp.Header)
+			return resp, err
+		}
 		err = newAntigravityStatusErrWithHeaders(httpResp.StatusCode, bodyBytes, httpResp.Header)
 		return resp, err
 	}
@@ -197,6 +212,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 		return resp, err
 	}
 
+	antigravityHealth.success(antigravityHealthKey(auth.ID, baseModel), time.Now())
 	// Success
 	if useCredits {
 		clearAntigravityCreditsFailureState(auth)
@@ -352,15 +368,26 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 		}
 	}
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
-	httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	health := antigravityHealthSettingsFrom(e.cfg)
+	attemptTimer := newAntigravityAttemptTimer(ctx, health.ttfb)
+	defer attemptTimer.cancel()
+	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
 		err = errReq
 		return resp, err
 	}
 
 	httpResp, errDo := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReq)
+	if !attemptTimer.firstByte() && errDo == nil {
+		_ = httpResp.Body.Close()
+		errDo = context.Canceled
+	}
 	if errDo != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
+		if errSlow := attemptTimer.penalty(ctx, auth, baseModel, health); errSlow != nil {
+			err = errSlow
+			return resp, err
+		}
 		if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 			return resp, errDo
 		}
@@ -417,6 +444,10 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			// Report the upstream failure rather than the cleanup failure.
 			logAntigravityReasoningReplayDegraded(replayScope, "invalidate", errClear)
 		}
+		if httpResp.StatusCode == http.StatusServiceUnavailable && isAntigravityCapacityBody(bodyBytes) {
+			err = antigravityCapacityErr(auth, baseModel, health, httpResp.StatusCode, bodyBytes, httpResp.Header)
+			return resp, err
+		}
 		err = newAntigravityStatusErrWithHeaders(httpResp.StatusCode, bodyBytes, httpResp.Header)
 		return resp, err
 	}
@@ -432,6 +463,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	} else {
 		httpResp.Body = peeked
 	}
+	antigravityHealth.success(antigravityHealthKey(auth.ID, baseModel), time.Now())
 	if useCredits {
 		clearAntigravityCreditsFailureState(auth)
 	}

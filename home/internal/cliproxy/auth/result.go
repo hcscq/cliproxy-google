@@ -233,8 +233,14 @@ func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel s
 		// Upstream had no capacity for this model right now; that says nothing
 		// about the credential, so do not cool it down (the proxy retries the
 		// same model with backoff).
+		// The proxy escalates repeated capacity failures of one credential via
+		// RetryAfter (account-level degradation); honour it when present.
 		state.NextRetryAfter = time.Time{}
 		state.Unavailable = false
+		if !disableCooling && result.RetryAfter != nil && *result.RetryAfter > 0 {
+			state.NextRetryAfter = now.Add(*result.RetryAfter)
+			state.Unavailable = true
+		}
 	} else if isModelSupportResultError(result.Error) {
 		next := now.Add(12 * time.Hour)
 		state.NextRetryAfter = next
@@ -289,6 +295,9 @@ func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel s
 		case http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 			if disableCooling {
 				state.NextRetryAfter = time.Time{}
+			} else if result.RetryAfter != nil && *result.RetryAfter > 0 {
+				// Proxy health quarantine (slow / TTFB timeout) carries its own duration.
+				state.NextRetryAfter = now.Add(*result.RetryAfter)
 			} else {
 				state.NextRetryAfter = now.Add(time.Minute)
 			}
@@ -1065,6 +1074,13 @@ func NewUsageResult(authIndex, provider, model string, statusCode int, body stri
 }
 
 func parseUsageRetryHints(provider, body string, statusCode int) (*time.Duration, *time.Time) {
+	// Proxy-issued health cooldown (TTFB timeout / capacity escalation).
+	if statusCode >= http.StatusBadRequest && gjson.Valid(body) {
+		if ms := gjson.Get(body, "error.cpa_cooldown_ms").Int(); ms > 0 {
+			d := time.Duration(ms) * time.Millisecond
+			return &d, nil
+		}
+	}
 	if statusCode != http.StatusTooManyRequests || !gjson.Valid(body) {
 		return nil, nil
 	}

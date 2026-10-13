@@ -167,8 +167,34 @@ type AntigravityConfig struct {
 	// prompt block (no credential cooldown, no rotation).
 	PromptRewrites *[]PromptRewriteRule `yaml:"prompt-rewrites,omitempty" json:"prompt-rewrites,omitempty"`
 
+	// Health configures per-credential slow/degraded detection.
+	Health AntigravityHealthConfig `yaml:"health,omitempty" json:"health,omitempty"`
+
 	// ConnectionPool configures upstream HTTP connection pooling behavior for Antigravity.
 	ConnectionPool AntigravityConnectionPoolConfig `yaml:"connection-pool,omitempty" json:"connection-pool,omitempty"`
+}
+
+// AntigravityHealthConfig tunes per-credential degradation handling. Zero
+// values mean the defaults noted on each field; negative disables.
+type AntigravityHealthConfig struct {
+	// TTFBTimeoutSeconds abandons a streaming attempt with no first upstream
+	// byte after this long and switches credential. Default 75.
+	TTFBTimeoutSeconds int `yaml:"ttfb-timeout-seconds,omitempty" json:"ttfb-timeout-seconds,omitempty"`
+	// NonStreamTimeoutSeconds is the same for non-streaming attempts (response
+	// headers arrive only after generation, so it is longer). Default 180.
+	NonStreamTimeoutSeconds int `yaml:"nonstream-timeout-seconds,omitempty" json:"nonstream-timeout-seconds,omitempty"`
+	// SlowThresholdSeconds: a client disconnect (499) after waiting this long
+	// with no first byte counts as a slow event for the credential. Default 45.
+	SlowThresholdSeconds int `yaml:"slow-threshold-seconds,omitempty" json:"slow-threshold-seconds,omitempty"`
+	// QuarantineMinutes is the first quarantine after SlowEvents slow events
+	// within 10 minutes; it doubles per repeat up to QuarantineMaxMinutes.
+	// Defaults 5 / 15; SlowEvents default 2.
+	QuarantineMinutes    int `yaml:"quarantine-minutes,omitempty" json:"quarantine-minutes,omitempty"`
+	QuarantineMaxMinutes int `yaml:"quarantine-max-minutes,omitempty" json:"quarantine-max-minutes,omitempty"`
+	SlowEvents           int `yaml:"slow-events,omitempty" json:"slow-events,omitempty"`
+	// CapacityCooldownSeconds is the escalation ladder for repeated 503 "No
+	// capacity" on the same credential+model, reset on success. Default [1,10,60].
+	CapacityCooldownSeconds []int `yaml:"capacity-cooldown-seconds,omitempty" json:"capacity-cooldown-seconds,omitempty"`
 }
 
 // PromptRewriteRule is one literal prompt rewrite (see AntigravityConfig.PromptRewrites).

@@ -1,0 +1,307 @@
+package executor
+
+import (
+	"container/list"
+	"context"
+	"regexp"
+	"sync/atomic"
+
+	"fmt"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+)
+
+// Per-credential+model health tracking (per proxy pod, bounded LRU). Penalties
+// are enforced through ordinary cooldowns: the error returned for an attempt
+// carries RetryAfter (local conductor) and error.cpa_cooldown_ms in its body
+// (Home derives the shared cooldown from it), so the scheduler skips the
+// credential for that model. When the cooldown ends the credential gets normal
+// traffic again (the probe); a repeat failure quarantines it longer.
+
+const (
+	antigravityHealthMaxEntries = 50000 // ~10k credentials x a few models
+	antigravityHealthWindow     = 10 * time.Minute
+)
+
+type antigravityHealthSettings struct {
+	ttfb, nonStream, slow time.Duration
+	quarantine, maxQ      time.Duration
+	slowEvents            int
+	capacitySteps         []time.Duration
+}
+
+func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings {
+	s := antigravityHealthSettings{
+		ttfb: 75 * time.Second, nonStream: 180 * time.Second, slow: 45 * time.Second,
+		quarantine: 5 * time.Minute, maxQ: 15 * time.Minute, slowEvents: 2,
+		capacitySteps: []time.Duration{time.Second, 10 * time.Second, time.Minute},
+	}
+	if cfg == nil {
+		return s
+	}
+	h := cfg.Antigravity.Health
+	sec := func(v int, d *time.Duration, unit time.Duration) {
+		switch {
+		case v < 0:
+			*d = 0
+		case v > 0:
+			*d = time.Duration(v) * unit
+		}
+	}
+	sec(h.TTFBTimeoutSeconds, &s.ttfb, time.Second)
+	sec(h.NonStreamTimeoutSeconds, &s.nonStream, time.Second)
+	sec(h.SlowThresholdSeconds, &s.slow, time.Second)
+	sec(h.QuarantineMinutes, &s.quarantine, time.Minute)
+	sec(h.QuarantineMaxMinutes, &s.maxQ, time.Minute)
+	if h.SlowEvents > 0 {
+		s.slowEvents = h.SlowEvents
+	}
+	if len(h.CapacityCooldownSeconds) > 0 {
+		s.capacitySteps = s.capacitySteps[:0:0]
+		for _, v := range h.CapacityCooldownSeconds {
+			if v > 0 {
+				s.capacitySteps = append(s.capacitySteps, time.Duration(v)*time.Second)
+			}
+		}
+	}
+	if s.maxQ < s.quarantine {
+		s.maxQ = s.quarantine
+	}
+	return s
+}
+
+type antigravityHealthEntry struct {
+	key           string
+	capacityLevel int
+	slowAt        []time.Time
+	quarantineLvl int
+	lastPenalty   time.Time
+}
+
+type antigravityHealthTracker struct {
+	mu    sync.Mutex
+	ll    *list.List
+	items map[string]*list.Element
+	max   int
+}
+
+func newAntigravityHealthTracker(max int) *antigravityHealthTracker {
+	return &antigravityHealthTracker{ll: list.New(), items: make(map[string]*list.Element), max: max}
+}
+
+var antigravityHealth = newAntigravityHealthTracker(antigravityHealthMaxEntries)
+
+// antigravityHealthBucket groups models that share upstream degradation
+// (e.g. every gemini-3.8-* tier) so health is tracked per credential+bucket,
+// never per whole credential.
+var antigravityHealthBucketRe = regexp.MustCompile(`^(gemini|claude)-(\d+(?:\.\d+)?)`)
+
+func antigravityHealthBucket(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if g := antigravityHealthBucketRe.FindStringSubmatch(m); g != nil {
+		return g[1] + "-" + g[2]
+	}
+	return m
+}
+
+func antigravityHealthLabel(model string) string {
+	b := antigravityHealthBucket(model)
+	if g := antigravityHealthBucketRe.FindStringSubmatch(b); g != nil && g[1] == "gemini" {
+		return g[2]
+	}
+	return b
+}
+
+func antigravityHealthKey(authID, model string) string {
+	return authID + "\x00" + antigravityHealthBucket(model)
+}
+
+func (t *antigravityHealthTracker) get(key string, create bool) *antigravityHealthEntry {
+	if el, ok := t.items[key]; ok {
+		t.ll.MoveToFront(el)
+		return el.Value.(*antigravityHealthEntry)
+	}
+	if !create {
+		return nil
+	}
+	e := &antigravityHealthEntry{key: key}
+	t.items[key] = t.ll.PushFront(e)
+	for t.ll.Len() > t.max {
+		last := t.ll.Back()
+		t.ll.Remove(last)
+		delete(t.items, last.Value.(*antigravityHealthEntry).key)
+	}
+	return e
+}
+
+// success clears capacity escalation and slow history; the quarantine level
+// decays only after a quiet window so a flapping credential keeps escalating.
+func (t *antigravityHealthTracker) success(key string, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e := t.get(key, false)
+	if e == nil {
+		return
+	}
+	e.capacityLevel = 0
+	e.slowAt = e.slowAt[:0]
+	if e.quarantineLvl > 0 && now.Sub(e.lastPenalty) > antigravityHealthWindow {
+		e.quarantineLvl = 0
+	}
+	if e.capacityLevel == 0 && e.quarantineLvl == 0 {
+		t.ll.Remove(t.items[key])
+		delete(t.items, key)
+	}
+}
+
+// capacity returns the cooldown for another 503 "No capacity" on key.
+func (t *antigravityHealthTracker) capacity(key string, s antigravityHealthSettings) time.Duration {
+	if len(s.capacitySteps) == 0 {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e := t.get(key, true)
+	i := e.capacityLevel
+	if i >= len(s.capacitySteps) {
+		i = len(s.capacitySteps) - 1
+	}
+	e.capacityLevel++
+	return s.capacitySteps[i]
+}
+
+// slow records a slow event (TTFB timeout or long-wait client disconnect).
+// It returns the quarantine to apply (0 if the threshold is not yet reached).
+func (t *antigravityHealthTracker) slow(key string, now time.Time, s antigravityHealthSettings) time.Duration {
+	if s.quarantine <= 0 {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e := t.get(key, true)
+	kept := e.slowAt[:0]
+	for _, at := range e.slowAt {
+		if now.Sub(at) <= antigravityHealthWindow {
+			kept = append(kept, at)
+		}
+	}
+	e.slowAt = append(kept, now)
+	if len(e.slowAt) > s.slowEvents {
+		e.slowAt = e.slowAt[len(e.slowAt)-s.slowEvents:]
+	}
+	if len(e.slowAt) < s.slowEvents {
+		return 0
+	}
+	d := s.quarantine << uint(e.quarantineLvl)
+	if d > s.maxQ || d <= 0 {
+		d = s.maxQ
+	}
+	e.quarantineLvl++
+	e.lastPenalty = now
+	e.slowAt = e.slowAt[:0]
+	return d
+}
+
+func (t *antigravityHealthTracker) len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.ll.Len()
+}
+
+// antigravityTTFBTimeoutErr is returned when an attempt produced no first byte
+// in time; it is a credential failure so the conductor switches credentials.
+func antigravityTTFBTimeoutErr(model string, wait, cooldown time.Duration) statusErr {
+	state := antigravityHealthLabel(model) + " 慢"
+	if cooldown >= time.Minute {
+		state = antigravityHealthLabel(model) + " 降级"
+	}
+	if cooldown <= 0 {
+		cooldown = 30 * time.Second
+	}
+	body := fmt.Sprintf(`{"error":{"code":504,"status":"DEADLINE_EXCEEDED","message":"%s: no first byte from upstream within %s","cpa_cooldown_ms":%d}}`, state, wait.Round(time.Second), cooldown.Milliseconds())
+	return statusErr{code: http.StatusGatewayTimeout, msg: body, retryAfter: &cooldown}
+}
+
+func isAntigravityCapacityBody(body []byte) bool {
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "no capacity available") || strings.Contains(lower, "model_capacity_exhausted")
+}
+
+// withAntigravityCooldownHint annotates an upstream error body with the
+// cooldown Home should apply.
+func withAntigravityCooldownHint(body []byte, d time.Duration) []byte {
+	if d <= 0 || !gjson.GetBytes(body, "error").IsObject() {
+		return body
+	}
+	out, err := sjson.SetBytes(body, "error.cpa_cooldown_ms", d.Milliseconds())
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// antigravityAttemptTimer bounds the wait for an attempt's first response.
+type antigravityAttemptTimer struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	timer    *time.Timer
+	timedOut atomic.Bool
+	limit    time.Duration
+	started  time.Time
+}
+
+func newAntigravityAttemptTimer(parent context.Context, limit time.Duration) *antigravityAttemptTimer {
+	t := &antigravityAttemptTimer{limit: limit, started: time.Now()}
+	t.ctx, t.cancel = context.WithCancel(parent)
+	if limit > 0 {
+		t.timer = time.AfterFunc(limit, func() {
+			t.timedOut.Store(true)
+			t.cancel()
+		})
+	}
+	return t
+}
+
+// firstByte stops the timer; it reports false if the timer already fired.
+func (t *antigravityAttemptTimer) firstByte() bool {
+	if t.timer != nil {
+		t.timer.Stop()
+	}
+	return !t.timedOut.Load()
+}
+
+// penalty applies the health penalty for a failed wait and returns the
+// replacement error (nil when the failure is not a slow event).
+func (t *antigravityAttemptTimer) penalty(parent context.Context, auth *cliproxyauth.Auth, model string, s antigravityHealthSettings) error {
+	now := time.Now()
+	key := antigravityHealthKey(auth.ID, model)
+	if t.timedOut.Load() {
+		cd := antigravityHealth.slow(key, now, s)
+		log.Warnf("antigravity executor: no response within %s (auth=%s model=%s), switching credential; quarantine=%s", t.limit, auth.ID, model, cd)
+		return antigravityTTFBTimeoutErr(model, t.limit, cd)
+	}
+	if parent.Err() != nil && s.slow > 0 && now.Sub(t.started) >= s.slow {
+		if cd := antigravityHealth.slow(key, now, s); cd > 0 {
+			_ = markAntigravityShortCooldownRequired(context.Background(), auth, model, now, cd)
+		}
+	}
+	return nil
+}
+
+// capacityErr builds the 503 capacity error with an escalating cooldown.
+func antigravityCapacityErr(auth *cliproxyauth.Auth, model string, s antigravityHealthSettings, code int, body []byte, hdr http.Header) statusErr {
+	cd := antigravityHealth.capacity(antigravityHealthKey(auth.ID, model), s)
+	err := newAntigravityStatusErrWithHeaders(code, withAntigravityCooldownHint(body, cd), hdr)
+	if cd > 0 {
+		err.retryAfter = &cd
+	}
+	return err
+}

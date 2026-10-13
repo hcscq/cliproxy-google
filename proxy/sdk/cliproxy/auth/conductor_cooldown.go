@@ -865,6 +865,10 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						// problem: keep the credential eligible; capacity retry backs off.
 						state.NextRetryAfter = time.Time{}
 						state.Unavailable = false
+						if !disableCooling && result.RetryAfter != nil && *result.RetryAfter > 0 {
+							state.NextRetryAfter = now.Add(*result.RetryAfter)
+							state.Unavailable = true
+						}
 					} else if isModelSupportResultError(result.Error) {
 						if disableCooling {
 							state.NextRetryAfter = time.Time{}
