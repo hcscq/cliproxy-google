@@ -41,6 +41,10 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 		return nil, errDSN
 	}
 
+	// No server-side prepared statement caching: a schema change (ADD COLUMN)
+	// would otherwise fail cached "SELECT *" plans with "cached plan must not
+	// change result type" on every pooled/direct connection until reconnect.
+	dsn = dsnWithExecMode(dsn)
 	directDSN := dsn
 	pooler := PoolStatus{PoolerAddr: pgPoolerAddr()}
 	if pooler.PoolerAddr != "" {
