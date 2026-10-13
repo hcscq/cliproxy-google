@@ -215,11 +215,21 @@ func (a *Auth) RecentRequestsSnapshot(now time.Time) []RecentRequestBucket {
 
 // Clone copies the Auth structure, duplicating mutable fields to avoid accidental mutation.
 func (a *Auth) Clone() *Auth {
-	// Keep validation before state changes so failures leave existing data intact.
+	return a.clone(true)
+}
+
+func (a *Auth) cloneWithoutModelStates() *Auth {
+	return a.clone(false)
+}
+
+func (a *Auth) clone(withStates bool) *Auth {
 	if a == nil {
 		return nil
 	}
 	copyAuth := *a
+	if !withStates {
+		copyAuth.ModelStates = nil
+	}
 	copyAuth.LastError = cloneError(a.LastError)
 	copyAuth.LastRefreshError = cloneError(a.LastRefreshError)
 	if a.RuntimeDisableCooling != nil {
@@ -238,7 +248,7 @@ func (a *Auth) Clone() *Auth {
 			copyAuth.Metadata[key] = value
 		}
 	}
-	if len(a.ModelStates) > 0 {
+	if withStates && len(a.ModelStates) > 0 {
 		copyAuth.ModelStates = make(map[string]*ModelState, len(a.ModelStates))
 		for key, state := range a.ModelStates {
 			copyAuth.ModelStates[key] = state.Clone()

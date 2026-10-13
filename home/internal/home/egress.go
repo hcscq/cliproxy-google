@@ -434,7 +434,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 	for _, s := range specs {
 		known[s.ProxyURL] = s
 	}
-	auths := r.coreManager.List()
+	auths := r.coreManager.ListLight(isAntigravity)
 	sort.Slice(auths, func(i, j int) bool { return auths[i].ID < auths[j].ID })
 	allowPrimary := r.EgressSettings(ctx).AllowPrimary
 	r.egress.mu.Lock()
@@ -632,7 +632,7 @@ func (r *Runtime) PickEgressForImport(ctx context.Context, allowPrimary *bool) (
 	}
 	counts := map[string]int{}
 	if r.coreManager != nil {
-		for _, a := range r.coreManager.List() {
+		for _, a := range r.coreManager.ListLight(isAntigravity) {
 			if isAntigravity(a) && a.ProxyURL != "" {
 				counts[a.ProxyURL]++
 			}

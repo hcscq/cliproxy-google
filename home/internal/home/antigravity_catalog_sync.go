@@ -61,14 +61,35 @@ type AntigravityCatalogStore interface {
 	SaveAntigravityCatalog(ctx context.Context, row AntigravityCatalogRow) error
 }
 
+// AntigravityCatalogIncrementalStore is optionally implemented by stores that
+// can return only rows attempted/fetched after a time (avoids re-reading every
+// catalog blob each tick at thousands of credentials).
+type AntigravityCatalogIncrementalStore interface {
+	LoadAntigravityCatalogsSince(ctx context.Context, since time.Time) (map[string]AntigravityCatalogRow, error)
+}
+
+// catalogFullReloadEvery forces a full reload periodically (safety net).
+const catalogFullReloadEvery = 10 * time.Minute
+
+// catalogFetchConcurrency bounds parallel leader fetches; env
+// HOME_CATALOG_FETCH_CONCURRENCY overrides (default 4).
+func catalogFetchConcurrency() int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("HOME_CATALOG_FETCH_CONCURRENCY"))); err == nil && v > 0 {
+		return v
+	}
+	return 4
+}
+
 type antigravityCatalogSync struct {
-	leaderFn  atomic.Value // func() bool
-	mu        sync.Mutex
-	rows      map[string]AntigravityCatalogRow // latest known row per credential
-	inFlight  map[string]bool
-	lastEvent map[string]time.Time
-	started   atomic.Bool
-	kick      atomic.Bool
+	loadedAt   time.Time
+	fullLoadAt time.Time
+	leaderFn   atomic.Value // func() bool
+	mu         sync.Mutex
+	rows       map[string]AntigravityCatalogRow // latest known row per credential
+	inFlight   map[string]bool
+	lastEvent  map[string]time.Time
+	started    atomic.Bool
+	kick       atomic.Bool
 }
 
 // SetLeaderFunc tells the runtime how to know whether this replica is the
@@ -147,11 +168,9 @@ func (r *Runtime) antigravityAuths() []*coreauth.Auth {
 	if r == nil || r.coreManager == nil {
 		return out
 	}
-	for _, a := range r.coreManager.List() {
-		if a != nil && !a.Disabled && strings.EqualFold(a.Provider, "antigravity") {
-			out = append(out, a)
-		}
-	}
+	out = r.coreManager.ListLight(func(a *coreauth.Auth) bool {
+		return !a.Disabled && strings.EqualFold(a.Provider, "antigravity")
+	})
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
@@ -196,8 +215,30 @@ func (r *Runtime) antigravityCatalogTick(ctx context.Context, trigger string) {
 	}
 	if store := r.catalogStore(); store != nil {
 		loadCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		rows, err := store.LoadAntigravityCatalogs(loadCtx)
+		start := time.Now()
+		r.agCatalog.mu.Lock()
+		since, fullAt := r.agCatalog.loadedAt, r.agCatalog.fullLoadAt
+		r.agCatalog.mu.Unlock()
+		var rows map[string]AntigravityCatalogRow
+		var err error
+		inc, incremental := store.(AntigravityCatalogIncrementalStore)
+		if incremental && !since.IsZero() && start.Sub(fullAt) < catalogFullReloadEvery {
+			// small overlap guards against clock skew between Homes
+			rows, err = inc.LoadAntigravityCatalogsSince(loadCtx, since.Add(-time.Minute))
+		} else {
+			rows, err = store.LoadAntigravityCatalogs(loadCtx)
+			if err == nil {
+				r.agCatalog.mu.Lock()
+				r.agCatalog.fullLoadAt = start
+				r.agCatalog.mu.Unlock()
+			}
+		}
 		cancel()
+		if err == nil {
+			r.agCatalog.mu.Lock()
+			r.agCatalog.loadedAt = start
+			r.agCatalog.mu.Unlock()
+		}
 		if err != nil {
 			log.Warnf("antigravity catalog: load stored rows: %v", err)
 		}
@@ -207,18 +248,48 @@ func (r *Runtime) antigravityCatalogTick(ctx context.Context, trigger string) {
 			}
 		}
 	}
+	r.pruneCatalogState(auths)
 	if !r.catalogLeader() {
 		return
 	}
 	interval := r.AntigravityCatalogInterval()
 	now := time.Now()
+	sem := make(chan struct{}, catalogFetchConcurrency())
+	var wg sync.WaitGroup
 	for _, a := range auths {
 		row, ok := r.catalogRow(a.ID)
 		if !catalogDue(row, ok, interval, now) {
 			continue
 		}
-		if _, err := r.refreshAntigravityCatalogNow(ctx, a.ID, trigger); err != nil {
-			log.Warnf("antigravity catalog refresh (%s) for %s: %v", trigger, a.ID, err)
+		id := a.ID
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			if _, err := r.refreshAntigravityCatalogNow(ctx, id, trigger); err != nil && !errors.Is(err, errCatalogInFlight) {
+				log.Warnf("antigravity catalog refresh (%s) for %s: %v", trigger, id, err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// pruneCatalogState drops cached rows/event marks of deleted or disabled credentials.
+func (r *Runtime) pruneCatalogState(auths []*coreauth.Auth) {
+	live := make(map[string]struct{}, len(auths))
+	for _, a := range auths {
+		live[a.ID] = struct{}{}
+	}
+	r.agCatalog.mu.Lock()
+	defer r.agCatalog.mu.Unlock()
+	for id := range r.agCatalog.rows {
+		if _, ok := live[id]; !ok && !r.agCatalog.inFlight[id] {
+			delete(r.agCatalog.rows, id)
+		}
+	}
+	for id := range r.agCatalog.lastEvent {
+		if _, ok := live[id]; !ok {
+			delete(r.agCatalog.lastEvent, id)
 		}
 	}
 }

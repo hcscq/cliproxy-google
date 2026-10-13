@@ -5,7 +5,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   clusterIP: None
   selector:
@@ -18,7 +18,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   serviceName: postgres
   replicas: 1

@@ -7,6 +7,8 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +58,35 @@ type quotaProber struct {
 type quotaProbeTarget struct {
 	auth  *coreauth.Auth
 	model string
+	reset time.Time
+}
+
+func envInt(name string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
+// quotaProbeRate scales the probe rate with the number of cooling pairs so a
+// full pass fits in one reprobe interval, bounded by HOME_QUOTA_PROBE_RPS
+// (floor, default 5) and HOME_QUOTA_PROBE_RPS_MAX (ceiling, default 50).
+func quotaProbeRate(pairs int, interval time.Duration) int {
+	floor := envInt("HOME_QUOTA_PROBE_RPS", quotaProbeMaxPerSecond)
+	ceil := envInt("HOME_QUOTA_PROBE_RPS_MAX", 50)
+	if ceil < floor {
+		ceil = floor
+	}
+	need := floor
+	if secs := int(interval / time.Second); secs > 0 {
+		if n := (pairs + secs - 1) / secs; n > need {
+			need = n
+		}
+	}
+	if need > ceil {
+		need = ceil
+	}
+	return need
 }
 
 func (r *Runtime) quotaProbeInterval() time.Duration {
@@ -76,9 +107,7 @@ func (r *Runtime) startQuotaProber(ctx context.Context) {
 	r.prober.running = map[string]bool{}
 	r.prober.mu.Unlock()
 	go func() {
-		sem := make(chan struct{}, quotaProbeConcurrency)
-		limiter := time.NewTicker(time.Second / quotaProbeMaxPerSecond)
-		defer limiter.Stop()
+		sem := make(chan struct{}, envInt("HOME_QUOTA_PROBE_CONCURRENCY", quotaProbeConcurrency*4))
 		tick := time.NewTicker(quotaProbeTick)
 		defer tick.Stop()
 		for {
@@ -93,11 +122,13 @@ func (r *Runtime) startQuotaProber(ctx context.Context) {
 			if n := r.coreManager.NormalizeModelScopedErrorStatuses(ctx); n > 0 {
 				log.Infof("auth status: %d credential(s) with only per-model failures set back to active", n)
 			}
-			for _, target := range r.dueQuotaProbes(time.Now()) {
+			due, rate := r.dueQuotaProbes(time.Now())
+			gap := time.Second / time.Duration(rate)
+			for _, target := range due {
 				select {
 				case <-ctx.Done():
 					return
-				case <-limiter.C:
+				case <-time.After(gap):
 				}
 				sem <- struct{}{}
 				go func(t quotaProbeTarget) {
@@ -107,6 +138,20 @@ func (r *Runtime) startQuotaProber(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// hasCoolingQuotaPair is the read-only pre-filter used under the manager lock
+// so only cooling credentials are cloned.
+func hasCoolingQuotaPair(a *coreauth.Auth, now time.Time) bool {
+	if a == nil || a.Disabled || !strings.EqualFold(a.Provider, "antigravity") {
+		return false
+	}
+	for _, st := range a.ModelStates {
+		if st != nil && st.Unavailable && st.NextRetryAfter.After(now) && st.LastError != nil && st.LastError.HTTPStatus == http.StatusTooManyRequests {
+			return true
+		}
+	}
+	return false
 }
 
 // coolingQuotaPairs lists (credential, model) pairs under a model-scoped 429 cooldown.
@@ -127,18 +172,22 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 				// Bucket blocks are re-checked by the quota collector, not per-model probes.
 				continue
 			}
-			out = append(out, quotaProbeTarget{auth: a, model: model})
+			out = append(out, quotaProbeTarget{auth: a, model: model, reset: st.NextRetryAfter})
 		}
 	}
 	return out
 }
 
-func (r *Runtime) dueQuotaProbes(now time.Time) []quotaProbeTarget {
-	pairs := coolingQuotaPairs(r.coreManager.List(), now)
+func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
+	pairs := coolingQuotaPairs(r.coreManager.ListMatching(func(a *coreauth.Auth) bool { return hasCoolingQuotaPair(a, now) }), now)
 	interval := r.quotaProbeInterval()
 	r.prober.mu.Lock()
 	defer r.prober.mu.Unlock()
 	live := make(map[string]bool, len(pairs))
+	rate := quotaProbeRate(len(pairs), interval)
+	budget := rate * int((quotaProbeTick+time.Second-1)/time.Second)
+	// Nearest reset first: those credentials come back soonest.
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].reset.Before(pairs[j].reset) })
 	var due []quotaProbeTarget
 	for _, p := range pairs {
 		key := p.auth.ID + "|" + p.model
@@ -149,7 +198,7 @@ func (r *Runtime) dueQuotaProbes(now time.Time) []quotaProbeTarget {
 			next = now.Add(time.Duration(rand.Int63n(int64(interval)/4 + 1)))
 			r.prober.next[key] = next
 		}
-		if r.prober.running[key] || now.Before(next) {
+		if r.prober.running[key] || now.Before(next) || len(due) >= budget {
 			continue
 		}
 		r.prober.running[key] = true
@@ -160,7 +209,7 @@ func (r *Runtime) dueQuotaProbes(now time.Time) []quotaProbeTarget {
 			delete(r.prober.next, key)
 		}
 	}
-	return due
+	return due, rate
 }
 
 func jitter(d time.Duration) time.Duration {

@@ -316,7 +316,7 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	}
 	m.mu.Unlock()
 
-	m.scheduler.upsertAuth(next)
+	m.scheduler.upsertAuth(next.Clone())
 	m.queueRefreshReschedule(next.ID)
 	return next.Clone(), nil
 }
@@ -467,7 +467,7 @@ func (m *Manager) updateWithAcceptance(ctx context.Context, auth *Auth) (*Auth, 
 		}
 	}
 	m.mu.Unlock()
-	m.scheduler.upsertAuth(next)
+	m.scheduler.upsertAuth(next.Clone())
 	m.queueRefreshReschedule(next.ID)
 	return next.Clone(), true, nil
 }
@@ -658,7 +658,7 @@ func (m *Manager) adoptAuthoritativeAuthLocked(ctx context.Context, authID strin
 		m.indexAuth[newIndex] = authoritative
 	}
 	m.mu.Unlock()
-	m.scheduler.upsertAuth(authoritative)
+	m.scheduler.upsertAuth(authoritative.Clone())
 	m.reconcileRegistryModelStatesLocked(authID)
 	m.queueRefreshReschedule(authID)
 	return authoritative.Clone(), nil
@@ -955,6 +955,41 @@ func (m *Manager) List() []*Auth {
 	return out
 }
 
+// ListMatching clones only auths accepted by pred. pred runs under the read
+// lock: it must be fast, read-only and must not call back into the manager.
+func (m *Manager) ListMatching(pred func(*Auth) bool) []*Auth {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*Auth
+	for _, a := range m.auths {
+		if a != nil && (pred == nil || pred(a)) {
+			out = append(out, a.Clone())
+		}
+	}
+	return out
+}
+
+// ListLight returns copies without ModelStates (the bulk of an auth) for
+// background loops that only need identity/flags/metadata.
+func (m *Manager) ListLight(pred func(*Auth) bool) []*Auth {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*Auth, 0, len(m.auths))
+	for _, a := range m.auths {
+		if a == nil || (pred != nil && !pred(a)) {
+			continue
+		}
+		out = append(out, a.cloneWithoutModelStates())
+	}
+	return out
+}
+
 // GetByID returns a by id.
 func (m *Manager) GetByID(id string) (*Auth, bool) {
 	if m == nil {
@@ -965,12 +1000,12 @@ func (m *Manager) GetByID(id string) (*Auth, bool) {
 		return nil, false
 	}
 	m.mu.RLock()
-	a := m.auths[id]
+	a := m.auths[id].Clone()
 	m.mu.RUnlock()
 	if a == nil {
 		return nil, false
 	}
-	return a.Clone(), true
+	return a, true
 }
 
 // GetByIndex returns a by index.
@@ -983,12 +1018,12 @@ func (m *Manager) GetByIndex(index string) (*Auth, bool) {
 		return nil, false
 	}
 	m.mu.RLock()
-	a := m.indexAuth[index]
+	a := m.indexAuth[index].Clone()
 	m.mu.RUnlock()
 	if a == nil {
 		return nil, false
 	}
-	return a.Clone(), true
+	return a, true
 }
 
 // RefreshSchedulerEntry refreshes refresh scheduler entry.

@@ -74,6 +74,67 @@ type modelScheduler struct {
 	blocked               cooldownQueue
 	retryRoundAll         dispatchAvailabilityAggregate
 	retryRoundAlphaSearch dispatchAvailabilityAggregate
+	// dirty marks ready/blocked views as stale; large shards rebuild at most
+	// once per SchedulerRebuildInterval (picks re-check entry state, so a stale
+	// view never yields a cooling/disabled/removed credential).
+	dirty       bool
+	lastRebuild time.Time
+	// order holds entries sorted by auth ID so rebuilds are linear (no sort).
+	order []*scheduledAuth
+}
+
+func (m *modelScheduler) orderInsertLocked(entry *scheduledAuth) {
+	id := entry.auth.ID
+	i := sort.Search(len(m.order), func(i int) bool { return m.order[i].auth.ID >= id })
+	if i < len(m.order) && m.order[i] == entry {
+		return
+	}
+	m.order = append(m.order, nil)
+	copy(m.order[i+1:], m.order[i:])
+	m.order[i] = entry
+}
+
+func (m *modelScheduler) orderRemoveLocked(entry *scheduledAuth) {
+	for i, e := range m.order {
+		if e == entry {
+			copy(m.order[i:], m.order[i+1:])
+			m.order[len(m.order)-1] = nil
+			m.order = m.order[:len(m.order)-1]
+			return
+		}
+	}
+}
+
+// SchedulerRebuildInterval bounds how often a large model shard rebuilds its
+// sorted ready/blocked views. Shards at or below SchedulerEagerRebuildMax
+// entries rebuild immediately (previous behaviour).
+var (
+	SchedulerRebuildInterval = 100 * time.Millisecond
+	SchedulerEagerRebuildMax = 256
+)
+
+func (e *scheduledAuth) liveReady() bool {
+	return e != nil && e.auth != nil && !e.removed && e.schedulerEligible && e.state == scheduledStateReady
+}
+
+// markDirtyLocked records a view change; small shards rebuild eagerly.
+func (m *modelScheduler) markDirtyLocked() {
+	m.dirty = true
+	if len(m.entries) <= SchedulerEagerRebuildMax {
+		m.rebuildIndexesLocked()
+	}
+}
+
+// refreshViewsLocked rebuilds stale views when forced or the interval elapsed.
+func (m *modelScheduler) refreshViewsLocked(now time.Time, force bool) bool {
+	if m == nil || !m.dirty {
+		return false
+	}
+	if !force && now.Sub(m.lastRebuild) < SchedulerRebuildInterval {
+		return false
+	}
+	m.rebuildIndexesLocked()
+	return true
 }
 
 // scheduledAuth stores the runtime scheduling state for a single auth inside a model shard.
@@ -89,6 +150,7 @@ type scheduledAuth struct {
 	requestRetryOverride    int
 	hasRequestRetryOverride bool
 	alphaSearchAllowed      bool
+	removed                 bool
 }
 
 // dispatchAvailabilityAggregate stores request-independent retry-round state
@@ -384,6 +446,24 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 		if !hasCandidate || priorityReady > bestPriority {
 			bestPriority = priorityReady
 			hasCandidate = true
+		}
+	}
+	if !hasCandidate {
+		refreshed := false
+		for _, shard := range candidateShards {
+			if shard != nil && shard.refreshViewsLocked(now, true) {
+				refreshed = true
+			}
+		}
+		if refreshed {
+			for _, shard := range candidateShards {
+				if shard == nil {
+					continue
+				}
+				if priorityReady, okPriority := shard.highestReadyPriorityLocked(false, predicate); okPriority && (!hasCandidate || priorityReady > bestPriority) {
+					bestPriority, hasCandidate = priorityReady, true
+				}
+			}
 		}
 	}
 	if !hasCandidate {
@@ -779,7 +859,9 @@ func (p *providerScheduler) ensureModelLocked(modelKey string, now time.Time) *m
 		}
 		shard.refreshEntryStateLocked(entry, now)
 		shard.entries[meta.auth.ID] = entry
+		shard.order = append(shard.order, entry)
 	}
+	sort.Slice(shard.order, func(i, j int) bool { return shard.order[i].auth.ID < shard.order[j].auth.ID })
 	shard.rebuildIndexesLocked()
 	p.modelShards[modelKey] = shard
 	return shard
@@ -886,8 +968,9 @@ func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Tim
 	}
 	entry, ok := m.entries[meta.auth.ID]
 	if !ok || entry == nil {
-		entry = &scheduledAuth{}
+		entry = &scheduledAuth{auth: meta.auth}
 		m.entries[meta.auth.ID] = entry
+		m.orderInsertLocked(entry)
 	}
 	previousState := entry.state
 	previousNextRetryAt := entry.nextRetryAt
@@ -926,7 +1009,7 @@ func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Tim
 		previousWebsocketEnabled == meta.websocketEnabled {
 		return
 	}
-	m.rebuildIndexesLocked()
+	m.markDirtyLocked()
 }
 
 // removeEntryLocked deletes one auth entry and rebuilds the shard indexes if needed.
@@ -934,23 +1017,35 @@ func (m *modelScheduler) removeEntryLocked(authID string) {
 	if m == nil || authID == "" {
 		return
 	}
-	if _, ok := m.entries[authID]; !ok {
+	entry, ok := m.entries[authID]
+	if !ok {
 		return
 	}
+	if entry != nil {
+		entry.removed = true
+		m.orderRemoveLocked(entry)
+	}
 	delete(m.entries, authID)
-	m.rebuildIndexesLocked()
+	m.markDirtyLocked()
 }
 
 // promoteExpiredLocked reevaluates blocked auths whose retry time has elapsed.
 func (m *modelScheduler) promoteExpiredLocked(now time.Time) {
 	// Keep validation before state changes so failures leave existing data intact.
-	if m == nil || len(m.blocked) == 0 {
+	if m == nil {
+		return
+	}
+	m.refreshViewsLocked(now, false)
+	if len(m.blocked) == 0 {
 		return
 	}
 	changed := false
 	for _, entry := range m.blocked {
-		if entry == nil || entry.auth == nil {
+		if entry == nil || entry.auth == nil || entry.removed {
 			continue
+		}
+		if entry.state == scheduledStateReady || entry.state == scheduledStateDisabled {
+			continue // already re-evaluated; waiting for the next view rebuild
 		}
 		if entry.nextRetryAt.IsZero() || entry.nextRetryAt.After(now) {
 			// blocked is ordered by retry deadline with zero deadlines last, so
@@ -961,7 +1056,7 @@ func (m *modelScheduler) promoteExpiredLocked(now time.Time) {
 		changed = true
 	}
 	if changed {
-		m.rebuildIndexesLocked()
+		m.markDirtyLocked()
 	}
 }
 
@@ -970,10 +1065,16 @@ func (m *modelScheduler) pickReadyLocked(preferWebsocket bool, strategy schedule
 	if m == nil {
 		return nil
 	}
-	m.promoteExpiredLocked(time.Now())
+	now := time.Now()
+	m.promoteExpiredLocked(now)
 	priorityReady, okPriority := m.highestReadyPriorityLocked(preferWebsocket, predicate)
 	if !okPriority {
-		return nil
+		if !m.refreshViewsLocked(now, true) {
+			return nil
+		}
+		if priorityReady, okPriority = m.highestReadyPriorityLocked(preferWebsocket, predicate); !okPriority {
+			return nil
+		}
 	}
 	return m.pickReadyAtPriorityLocked(preferWebsocket, priorityReady, strategy, predicate)
 }
@@ -1105,7 +1206,8 @@ func (m *modelScheduler) availabilitySummaryLocked(predicate func(*scheduledAuth
 
 // rebuildIndexesLocked reconstructs ready and blocked views from the current entry map.
 func (m *modelScheduler) rebuildIndexesLocked() {
-	// Keep validation before state changes so failures leave existing data intact.
+	m.dirty = false
+	m.lastRebuild = time.Now()
 	cursorStates := make(map[int]readyBucketCursorState, len(m.readyByPriority))
 	for priority, bucket := range m.readyByPriority {
 		if bucket == nil {
@@ -1123,7 +1225,7 @@ func (m *modelScheduler) rebuildIndexesLocked() {
 	m.retryRoundAll = dispatchAvailabilityAggregate{}
 	m.retryRoundAlphaSearch = dispatchAvailabilityAggregate{}
 	priorityBuckets := make(map[int][]*scheduledAuth)
-	for _, entry := range m.entries {
+	for _, entry := range m.order {
 		if entry == nil || entry.auth == nil {
 			continue
 		}
@@ -1147,9 +1249,6 @@ func (m *modelScheduler) rebuildIndexesLocked() {
 		}
 	}
 	for priority, entries := range priorityBuckets {
-		sort.Slice(entries, func(i, j int) bool {
-			return entries[i].auth.ID < entries[j].auth.ID
-		})
 		bucket := buildReadyBucket(entries)
 		if cursorState, ok := cursorStates[priority]; ok && bucket != nil {
 			restoreReadyViewCursors(&bucket.all, cursorState.all)
@@ -1203,6 +1302,9 @@ func buildReadyView(entries []*scheduledAuth) readyView {
 // pickFirst returns the first ready entry that satisfies predicate without advancing cursors.
 func (v *readyView) pickFirst(predicate func(*scheduledAuth) bool) *scheduledAuth {
 	for _, entry := range v.flat {
+		if !entry.liveReady() {
+			continue
+		}
 		if predicate == nil || predicate(entry) {
 			return entry
 		}
@@ -1222,7 +1324,7 @@ func (v *readyView) pickRoundRobin(predicate func(*scheduledAuth) bool) *schedul
 	for offset := 0; offset < len(v.flat); offset++ {
 		index := (start + offset) % len(v.flat)
 		entry := v.flat[index]
-		if predicate != nil && !predicate(entry) {
+		if !entry.liveReady() || (predicate != nil && !predicate(entry)) {
 			continue
 		}
 		v.cursor = index + 1

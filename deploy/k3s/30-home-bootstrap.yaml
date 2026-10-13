@@ -1,11 +1,11 @@
 # One-off bootstrap: imports config (and optional legacy auth files) into the Home database.
 # Home refuses to start with an empty database ("run with -import first").
-# Import is idempotent. Re-run after editing the ConfigMap:  kubectl -n cliproxy delete job home-import && kubectl apply -f 30-home-bootstrap.yaml
+# Import is idempotent. Re-run after editing the ConfigMap:  kubectl -n cliproxy-google delete job home-import && kubectl apply -f 30-home-bootstrap.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: home-import-config
-  namespace: cliproxy
+  namespace: cliproxy-google
 data:
   # Minimal V8 config exchanged into the DB. See home/config.example.yaml for every option.
   # Upstream API keys (Gemini / Vertex) and OAuth accounts (Antigravity) are better managed
@@ -30,7 +30,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: home-import
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   backoffLimit: 6
   template:

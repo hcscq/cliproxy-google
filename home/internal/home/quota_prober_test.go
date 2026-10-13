@@ -49,3 +49,15 @@ func TestQuotaProbeHintAndSend(t *testing.T) {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
 }
+
+func TestQuotaProbeRateScales(t *testing.T) {
+	if got := quotaProbeRate(10, 300*time.Second); got != 5 {
+		t.Fatalf("floor: %d", got)
+	}
+	if got := quotaProbeRate(6000, 300*time.Second); got != 20 {
+		t.Fatalf("scaled: %d", got)
+	}
+	if got := quotaProbeRate(1_000_000, 300*time.Second); got != 50 {
+		t.Fatalf("ceiling: %d", got)
+	}
+}

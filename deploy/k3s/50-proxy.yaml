@@ -8,7 +8,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cliproxy
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   selector:
     app: cliproxy
@@ -21,7 +21,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cliproxy
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   replicas: 3
   strategy:
@@ -57,7 +57,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - {name: GOMEMLIMIT, value: "1700MiB"}
-            - {name: HOME_ADDRESS, value: "cliproxy-home.cliproxy.svc.cluster.local:8327"}
+            - {name: HOME_ADDRESS, value: "cliproxy-home.cliproxy-google.svc.cluster.local:8327"}
             - name: HOME_BOOTSTRAP_TOKEN
               valueFrom:
                 secretKeyRef: {name: home-bootstrap, key: token}
@@ -105,7 +105,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: cliproxy
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   maxUnavailable: 1
   selector:

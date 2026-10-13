@@ -7,7 +7,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: redis-headless
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -20,7 +20,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: redis-scripts
-  namespace: cliproxy
+  namespace: cliproxy-google
 data:
   init.sh: |
     #!/bin/sh
@@ -74,7 +74,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: redis
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   serviceName: redis-headless
   replicas: 3
@@ -157,7 +157,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: redis
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
   maxUnavailable: 1
   selector:

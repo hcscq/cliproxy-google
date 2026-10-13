@@ -133,7 +133,10 @@ func (r *Runtime) startAccountBlockGuard(ctx context.Context) {
 			now := time.Now().UTC()
 			interval, recheck := r.accountBlockRecheckInterval()
 			recheck = recheck && r.catalogLeader()
-			for _, a := range r.coreManager.List() {
+			for _, a := range r.coreManager.ListMatching(func(a *coreauth.Auth) bool {
+				_, blocked := findAccountBlock(a)
+				return blocked || (recheck && a.Disabled && a.Metadata != nil && a.Metadata[AccountBlockReasonKey] != nil)
+			}) {
 				if f, ok := findAccountBlock(a); ok {
 					r.disableForAccountBlock(ctx, a.ID, f, now)
 					continue

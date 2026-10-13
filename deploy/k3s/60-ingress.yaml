@@ -1,86 +1,174 @@
-# Public ingress exposes ONLY the Home management panel and the Management API
-# paths it uses. The proxy API (/v1, /v1beta, ...) is NOT published: callers use
-# the in-cluster Service http://cliproxy.<namespace>.svc.cluster.local:8317.
-# Replace panel.example.com; TLS via cert-manager (Certificate below) or a pre-created secret.
+# Live panel ingress for gai.vkm2.com (exported from ns cliproxy-google; apply-safe).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: cliproxy-home-panel
-  namespace: cliproxy
+  name: gai-vkm2-com
+  namespace: cliproxy-google
 spec:
-  dnsNames: [panel.example.com]
-  issuerRef: {kind: ClusterIssuer, name: letsencrypt}   # use your existing issuer
-  secretName: cliproxy-home-panel-tls
+  dnsNames:
+  - gai.vkm2.com
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-cloudflare
+  secretName: gai-vkm2-com-tls
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: management-ratelimit
+  namespace: cliproxy-google
+spec:
+  rateLimit:
+    average: 20
+    burst: 60
+    period: 1s
 ---
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: redirect-https
-  namespace: cliproxy
+  namespace: cliproxy-google
 spec:
-  redirectScheme: {scheme: https, permanent: true}
----
-# Coarse per-client-IP rate limit in front of the Management API (Home additionally
-# bans an IP for 30 minutes after 5 wrong management keys).
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: management-ratelimit
-  namespace: cliproxy
-spec:
-  rateLimit:
-    average: 20
-    period: 1s
-    burst: 60
+  redirectScheme:
+    permanent: true
+    scheme: https
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: cliproxy-home-panel
-  namespace: cliproxy
+  namespace: cliproxy-google
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.middlewares: cliproxy-management-ratelimit@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: cliproxy-google-management-ratelimit@kubernetescrd
+    traefik.ingress.kubernetes.io/router.tls: 'true'
 spec:
   ingressClassName: traefik
-  tls:
-    - hosts: [panel.example.com]
-      secretName: cliproxy-home-panel-tls
   rules:
-    - host: panel.example.com
-      http:
-        paths:
-          - {path: /, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /index.html, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /management.html, pathType: Exact, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /assets, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          # panel client routes (SPA deep links / reloads; Home answers them with index.html)
-          - {path: /credentials, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /provider-keys, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /models, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /access-keys, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /groups, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /usage, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /logs, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /nodes, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          - {path: /settings, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
-          # Management API v8 used by the panel. Every route requires the management key,
-          # except /v8/management/oauth/callback which is validated by its pending OAuth state.
-          - {path: /v8/management, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+  - host: gai.vkm2.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /
+        pathType: Exact
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /index.html
+        pathType: Exact
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /management.html
+        pathType: Exact
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /assets
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /v8/management
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /credentials
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /provider-keys
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /models
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /access-keys
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /groups
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /usage
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /logs
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /nodes
+        pathType: Prefix
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /settings
+        pathType: Prefix
+  tls:
+  - hosts:
+    - gai.vkm2.com
+    secretName: gai-vkm2-com-tls
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: cliproxy-home-panel-http-redirect
-  namespace: cliproxy
+  namespace: cliproxy-google
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
-    traefik.ingress.kubernetes.io/router.middlewares: cliproxy-redirect-https@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: cliproxy-google-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
   rules:
-    - host: panel.example.com
-      http:
-        paths:
-          - {path: /, pathType: Prefix, backend: {service: {name: cliproxy-home, port: {number: 8327}}}}
+  - host: gai.vkm2.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: cliproxy-home
+            port:
+              number: 8327
+        path: /
+        pathType: Prefix

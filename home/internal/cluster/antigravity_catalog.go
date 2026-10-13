@@ -80,6 +80,22 @@ func (r *Repository) ListAntigravityCatalogs(ctx context.Context) (map[string]An
 	return out, nil
 }
 
+// ListAntigravityCatalogsSince returns rows attempted or fetched after since.
+func (r *Repository) ListAntigravityCatalogsSince(ctx context.Context, since time.Time) (map[string]AntigravityCatalogRecord, error) {
+	out := map[string]AntigravityCatalogRecord{}
+	if r == nil || r.db == nil {
+		return out, nil
+	}
+	var rows []AntigravityCatalogRecord
+	if err := r.db.WithContext(contextOrBackground(ctx)).Where("attempted_at > ? OR fetched_at > ?", since, since).Find(&rows).Error; err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		out[row.AuthID] = row
+	}
+	return out, nil
+}
+
 func catalogRecordToRow(rec AntigravityCatalogRecord) home.AntigravityCatalogRow {
 	return home.AntigravityCatalogRow{
 		AuthID: rec.AuthID, Raw: []byte(rec.Raw), FetchedAt: rec.FetchedAt, AttemptedAt: rec.AttemptedAt,
@@ -103,6 +119,22 @@ func (a *RuntimeAdapter) LoadAntigravityCatalogs(ctx context.Context) (map[strin
 		return out, errors.New("cluster repository unavailable")
 	}
 	recs, err := a.repo.ListAntigravityCatalogs(ctx)
+	if err != nil {
+		return out, err
+	}
+	for id, rec := range recs {
+		out[id] = catalogRecordToRow(rec)
+	}
+	return out, nil
+}
+
+// LoadAntigravityCatalogsSince implements home.AntigravityCatalogIncrementalStore.
+func (a *RuntimeAdapter) LoadAntigravityCatalogsSince(ctx context.Context, since time.Time) (map[string]home.AntigravityCatalogRow, error) {
+	out := map[string]home.AntigravityCatalogRow{}
+	if a == nil || a.repo == nil {
+		return out, errors.New("cluster repository unavailable")
+	}
+	recs, err := a.repo.ListAntigravityCatalogsSince(ctx, since)
 	if err != nil {
 		return out, err
 	}
