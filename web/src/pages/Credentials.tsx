@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAction, useApi, useAsync, useUi } from "../app-context";
 import {
   coolingModels,
@@ -7,6 +7,7 @@ import {
   type Credential,
   type CredentialGroupSummary,
   type CredentialQuery,
+  type CredentialSortKey,
   type CredentialSearchItem,
   type ModelCooldown,
   type ModelInfo,
@@ -32,7 +33,7 @@ import {
   Switch,
 } from "../components/ui";
 import { useFlexColumns, type FlexCol } from "../components/flexCols";
-import { QuotaStatusBadge, QuotaWindows, fmtRecover } from "../components/quota";
+import { QuotaStatusBadge, QuotaWindows, fmtRecover, fmtResetShort } from "../components/quota";
 import {
   IconDownload,
   IconPlus,
@@ -183,7 +184,7 @@ export function probeLine(m: ModelCooldown, tr: ReturnType<typeof useI18n>["tr"]
   return parts.join(" · ");
 }
 
-// checkbox, ID, account, groups, provider, status, quota, priority, updated, enabled
+// checkbox, ID, account, groups, provider, status, quota, priority, created, last used, enabled
 const CRED_COLUMNS: FlexCol[] = [
   { min: 36 },
   { min: 92, max: 104, weight: 0.2 },
@@ -193,9 +194,64 @@ const CRED_COLUMNS: FlexCol[] = [
   { min: 172, max: 210, weight: 0.8 },
   { min: 150, weight: 3 },
   { min: 64 },
+  { min: 92 },
   { min: 80 },
   { min: 64 },
 ];
+
+type CredSort = { sort: CredentialSortKey; order: "asc" | "desc" };
+const CRED_SORT_KEY = "cred-sort";
+const SORT_KEYS: CredentialSortKey[] = ["created", "name", "status", "quota", "last_used", "egress"];
+/** Default direction per key: newest / most recent first, otherwise ascending. */
+export const defaultOrder = (k: CredentialSortKey): "asc" | "desc" =>
+  k === "created" || k === "last_used" ? "desc" : "asc";
+
+/** URL (?sort=&order=) wins, then localStorage, then created/desc. */
+export function loadCredSort(search: string, stored: string | null): CredSort {
+  const parse = (sort?: string | null, order?: string | null): CredSort | null => {
+    if (!sort || !SORT_KEYS.includes(sort as CredentialSortKey)) return null;
+    const k = sort as CredentialSortKey;
+    return { sort: k, order: order === "asc" || order === "desc" ? order : defaultOrder(k) };
+  };
+  const q = new URLSearchParams(search);
+  const fromUrl = parse(q.get("sort"), q.get("order"));
+  if (fromUrl) return fromUrl;
+  try {
+    const v = stored ? (JSON.parse(stored) as Partial<CredSort>) : null;
+    const fromStore = parse(v?.sort, v?.order);
+    if (fromStore) return fromStore;
+  } catch {
+    /* ignore */
+  }
+  return { sort: "created", order: "desc" };
+}
+
+function SortTh({
+  k,
+  cur,
+  onSort,
+  children,
+  className,
+}: {
+  k: CredentialSortKey;
+  cur: CredSort;
+  onSort: (k: CredentialSortKey) => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  const active = cur.sort === k;
+  return (
+    <span
+      className={`sortable ${className ?? ""}`}
+      style={{ cursor: "pointer", userSelect: "none", fontWeight: active ? 600 : undefined }}
+      onClick={() => onSort(k)}
+      data-testid={`sort-${k}`}
+    >
+      {children}
+      {active ? (cur.order === "desc" ? " ↓" : " ↑") : ""}
+    </span>
+  );
+}
 
 export function CredentialsPage() {
   const api = useApi();
@@ -205,10 +261,25 @@ export function CredentialsPage() {
   const [filter, setFilter] = useState<CredentialQuery>({});
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(50);
-  useEffect(() => setPage(1), [filter]);
+  const [sort, setSort] = useState<CredSort>(() =>
+    loadCredSort(window.location.search, localStorage.getItem(CRED_SORT_KEY)),
+  );
+  const onSort = (k: CredentialSortKey) =>
+    setSort((cur) => ({
+      sort: k,
+      order: cur.sort === k ? (cur.order === "desc" ? "asc" : "desc") : defaultOrder(k),
+    }));
+  useEffect(() => {
+    localStorage.setItem(CRED_SORT_KEY, JSON.stringify(sort));
+    const url = new URL(window.location.href);
+    url.searchParams.set("sort", sort.sort);
+    url.searchParams.set("order", sort.order);
+    window.history.replaceState(window.history.state, "", url);
+  }, [sort]);
+  useEffect(() => setPage(1), [filter, sort]);
   const creds = useAsync(
-    () => api.searchCredentials({ ...filter, page, page_size: size }),
-    [filter, page, size],
+    () => api.searchCredentials({ ...filter, ...sort, page, page_size: size }),
+    [filter, sort, page, size],
     20000,
   );
   const groups = useGroupLookup();
@@ -461,7 +532,7 @@ export function CredentialsPage() {
                 {credCols.widths.map((w, i) => (
                   <col
                     key={i}
-                    className={i >= 6 && i <= 8 ? "hide-sm" : undefined}
+                    className={i >= 6 && i <= 9 ? "hide-sm" : undefined}
                     style={{ width: w }}
                   />
                 ))}
@@ -470,13 +541,26 @@ export function CredentialsPage() {
                 <tr>
                   <th style={{ width: 28 }} />
                   <th>ID</th>
-                  <th>{tr("账号", "Account")}</th>
+                  <th>
+                    <SortTh k="name" cur={sort} onSort={onSort}>{tr("账号", "Account")}</SortTh>
+                  </th>
                   <th>{tr("分组", "Groups")}</th>
                   <th>{t("provider")}</th>
-                  <th>{t("status")}</th>
-                  <th className="hide-sm">{t("quota")}</th>
+                  <th>
+                    <SortTh k="status" cur={sort} onSort={onSort}>{t("status")}</SortTh>
+                    <span className="faint"> / </span>
+                    <SortTh k="egress" cur={sort} onSort={onSort}>{tr("出口", "Egress")}</SortTh>
+                  </th>
+                  <th className="hide-sm">
+                    <SortTh k="quota" cur={sort} onSort={onSort}>{t("quota")}</SortTh>
+                  </th>
                   <th className="hide-sm">{t("priority")}</th>
-                  <th className="hide-sm">{t("updated")}</th>
+                  <th className="hide-sm">
+                    <SortTh k="created" cur={sort} onSort={onSort}>{tr("创建时间", "Created")}</SortTh>
+                  </th>
+                  <th className="hide-sm">
+                    <SortTh k="last_used" cur={sort} onSort={onSort}>{tr("最近使用", "Last used")}</SortTh>
+                  </th>
                   <th style={{ textAlign: "right" }}>{t("enabled")}</th>
                 </tr>
               </thead>
@@ -592,10 +676,19 @@ export function CredentialsPage() {
                       {c.priority ?? <span className="faint">0</span>}
                     </td>
                     <td
-                      className="hide-sm faint small"
-                      title={c.updated_at ?? ""}
+                      className="hide-sm small nowrap"
+                      title={c.created_at ? new Date(c.created_at).toLocaleString() : ""}
                     >
-                      {fmtRelative(c.updated_at, lang)}
+                      {c.created_at ? fmtResetShort(c.created_at) : <span className="faint">—</span>}
+                    </td>
+                    <td
+                      className="hide-sm faint small nowrap"
+                      title={
+                        (c.last_used_at ? new Date(c.last_used_at).toLocaleString() : tr("3 天内未使用", "unused in 3 days")) +
+                        (c.updated_at ? ` · ${tr("更新", "updated")} ${new Date(c.updated_at).toLocaleString()}` : "")
+                      }
+                    >
+                      {c.last_used_at ? fmtRelative(c.last_used_at, lang) : "—"}
                     </td>
                     <td
                       className="actions"

@@ -203,19 +203,25 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ids": ids, "total": len(ids)})
 		return
 	}
+	sortKey, desc := credentialSortParams(c)
+	stats := h.credentialSortStats(ctx, all)
+	sortCredentials(matched, sortKey, desc, statusOf, stats)
 	page, size := pageParams(c, 50, 500)
 	start := (page - 1) * size
 	items := make([]gin.H, 0, size)
 	for i := start; i < len(matched) && i < start+size; i++ {
 		a := matched[i]
 		e := authFileEntry(a)
+		if t, ok := stats.LastUsed[a.ID]; ok {
+			e["last_used_at"] = t
+		}
 		e["tags"] = cluster.CredentialTags(a)
 		e["group_ids"] = nonNilUints(groupsOf[a.ID])
 		e["state"] = statusOf[a.ID]
 		items = append(items, e)
 	}
 	h.annotateQuotaProbes(c.Request.Context(), items)
-	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(matched), "all": len(all), "page": page, "page_size": size, "facets": facets})
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(matched), "all": len(all), "page": page, "page_size": size, "facets": facets, "sort": sortKey, "order": map[bool]string{true: "desc", false: "asc"}[desc]})
 }
 
 func nonNilUints(v []uint) []uint {

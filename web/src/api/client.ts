@@ -966,9 +966,13 @@ export interface CredentialQuery {
   group?: string;
   /** hide current members of this credential group */
   exclude_group?: number;
+  /** created (default, newest first) | name | status | quota | last_used | egress */
+  sort?: CredentialSortKey;
+  order?: 'asc' | 'desc';
 }
+export type CredentialSortKey = 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress';
 export type CredentialState = 'ok' | 'cooling' | 'error' | 'disabled';
-export type CredentialSearchItem = Credential & { tags?: string[]; group_ids?: number[]; state?: CredentialState };
+export type CredentialSearchItem = Credential & { tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string };
 export interface CredentialSearch {
   items: CredentialSearchItem[];
   total: number;

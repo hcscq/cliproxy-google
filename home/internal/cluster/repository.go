@@ -163,6 +163,9 @@ func RecordToAuth(record *AuthRecord) (*coreauth.Auth, error) {
 	}
 	auth.Index = record.Index
 	auth.StateVersion = record.Version
+	if auth.CreatedAt.IsZero() && !record.CreatedAt.IsZero() {
+		auth.CreatedAt = record.CreatedAt.UTC()
+	}
 
 	return auth, nil
 }

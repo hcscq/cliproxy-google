@@ -446,7 +446,22 @@ func TestListAuthFilesIncludesInFlightObservationFixture(t *testing.T) {
 	seedInFlightManagementSnapshot(t, handler.repo, db)
 
 	response := performManagementGET(t, handler.ListAuthFiles, "/auth-files")
-	assertJSONFixture(t, response.Body.Bytes(), "testdata/auth_files_in_flight_observation_only.json")
+	// created_at is the DB row's insert time (dynamic); the fixture covers the rest.
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := payload["files"].([]any)
+	for _, f := range files {
+		if m, ok := f.(map[string]any); ok {
+			if _, has := m["created_at"]; !has {
+				t.Fatal("created_at missing")
+			}
+			delete(m, "created_at")
+		}
+	}
+	body, _ := json.Marshal(payload)
+	assertJSONFixture(t, body, "testdata/auth_files_in_flight_observation_only.json")
 }
 
 func TestGetCapabilitiesReturnsIndependentInFlightCapability(t *testing.T) {
