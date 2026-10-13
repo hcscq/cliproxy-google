@@ -17,10 +17,12 @@ import (
 // plus hourly per-model buckets (drawer split). Every Home runs the rollup; on
 // Postgres an advisory lock + watermark row make it exactly-once.
 
+// callStatBatchSize is a var for tests.
+var callStatBatchSize = 50000
+
 const (
 	CallStatBucket       = 10 * time.Minute
 	callStatRetention    = 8 * 24 * time.Hour
-	callStatBatch        = 50000
 	callStatLookback     = 3 * time.Hour // partition pruning for incremental passes
 	callStatAdvisoryLock = 724311001
 )
@@ -92,6 +94,9 @@ func (CredentialModelStatRecord) TableName() string { return "credential_model_s
 type CredentialCallStatState struct {
 	ID     int   `gorm:"column:id;primaryKey"`
 	LastID int64 `gorm:"column:last_id;not null"`
+	// CaughtUp is set once the initial backfill over the full retention finished;
+	// later passes only look back callStatLookback (partition pruning).
+	CaughtUp bool `gorm:"column:caught_up;not null;default:false"`
 }
 
 func (CredentialCallStatState) TableName() string { return "credential_call_stat_state" }
@@ -105,6 +110,7 @@ func ensureCredentialCallStatTables(ctx context.Context, db *gorm.DB) error {
 			`CREATE TABLE IF NOT EXISTS "credential_model_stat" ("auth_index" text NOT NULL, "bucket" timestamptz NOT NULL, "model" text NOT NULL, "class" text NOT NULL, "calls" bigint NOT NULL, PRIMARY KEY ("auth_index","bucket","model","class"))`,
 			`CREATE INDEX IF NOT EXISTS "idx_credential_model_stat_bucket" ON "credential_model_stat" ("bucket")`,
 			`CREATE TABLE IF NOT EXISTS "credential_call_stat_state" ("id" bigint PRIMARY KEY, "last_id" bigint NOT NULL)`,
+			`ALTER TABLE "credential_call_stat_state" ADD COLUMN IF NOT EXISTS "caught_up" boolean NOT NULL DEFAULT false`,
 		} {
 			if err := tx.Exec(q).Error; err != nil {
 				return err
@@ -136,7 +142,7 @@ func (r *Repository) RollupCredentialCallStats(ctx context.Context) (int, error)
 	for i := 0; i < 20; i++ { // bounded catch-up per call
 		n, err := r.rollupCallStatsBatch(ctx, db)
 		total += n
-		if err != nil || n < callStatBatch {
+		if err != nil || n < callStatBatchSize {
 			return total, err
 		}
 	}
@@ -161,17 +167,21 @@ func (r *Repository) rollupCallStatsBatch(ctx context.Context, db *gorm.DB) (int
 			return err
 		}
 		lookback := callStatLookback
-		if st.LastID == 0 {
-			lookback = callStatRetention // first run: backfill
+		if !st.CaughtUp {
+			lookback = callStatRetention // initial backfill
 		}
 		since := time.Now().UTC().Add(-lookback)
 		var rows []callStatRow
 		if err := tx.Raw(`SELECT id, timestamp, COALESCE(auth_index, '') AS auth_index, COALESCE(model, '') AS model, failed, fail_status_code,
 			CASE WHEN failed AND fail_status_code IN (0, 502, 504) THEN substr(COALESCE(fail_body, ''), 1, 300) ELSE '' END AS body
-			FROM usage WHERE id > ? AND timestamp > ? ORDER BY id LIMIT ?`, st.LastID, since, callStatBatch).Scan(&rows).Error; err != nil {
+			FROM usage WHERE id > ? AND timestamp > ? ORDER BY id LIMIT ?`, st.LastID, since, callStatBatchSize).Scan(&rows).Error; err != nil {
 			return err
 		}
 		if len(rows) == 0 {
+			if !st.CaughtUp {
+				return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"caught_up"})}).
+					Create(&CredentialCallStatState{ID: 1, LastID: st.LastID, CaughtUp: true}).Error
+			}
 			return nil
 		}
 		type ck struct {
@@ -223,8 +233,8 @@ func (r *Repository) rollupCallStatsBatch(ctx context.Context, db *gorm.DB) (int
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"last_id"}),
-		}).Create(&CredentialCallStatState{ID: 1, LastID: maxID}).Error; err != nil {
+			DoUpdates: clause.AssignmentColumns([]string{"last_id", "caught_up"}),
+		}).Create(&CredentialCallStatState{ID: 1, LastID: maxID, CaughtUp: st.CaughtUp || len(rows) < callStatBatchSize}).Error; err != nil {
 			return err
 		}
 		n = len(rows)

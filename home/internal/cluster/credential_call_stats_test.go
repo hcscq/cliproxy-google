@@ -67,3 +67,26 @@ func TestRollupCredentialCallStats(t *testing.T) {
 		t.Fatalf("models %+v %v", models, err)
 	}
 }
+
+func TestRollupBackfillsAcrossBatches(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	for i := 0; i < 3; i++ {
+		rec := UsageRecord{Timestamp: old, AuthIndex: "a", PayloadJSON: JSONB(`{}`), CreatedAt: old}
+		if err := repo.db.Create(&rec).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	saved := callStatBatchSize
+	callStatBatchSize = 1
+	defer func() { callStatBatchSize = saved }()
+	if _, err := repo.RollupCredentialCallStats(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stats, _ := repo.LoadCredentialCallStats(ctx, old.Add(-time.Hour))
+	if stats["a"] == nil || stats["a"].Calls != 3 {
+		t.Fatalf("got %+v", stats["a"])
+	}
+}
