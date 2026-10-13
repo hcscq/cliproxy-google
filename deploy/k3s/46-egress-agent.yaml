@@ -5,7 +5,7 @@
 # without new ports or firewall rules. IPs are re-discovered every 30s; each one's real
 # public exit IP is probed every 5 min. Home reads GET /inventory via the headless
 # Service below (HOME_EGRESS_AGENTS) and registers egresses "<node>/<ip>".
-# - Runs on nodes labelled cliproxy.io/egress=true. kiro-rs (3128/3129) is untouched.
+# - Runs on nodes labelled cliproxy.io/egress-agent=true (not rainyun-sandbox-gvisor). kiro-rs (3128/3129) is untouched.
 # - EGRESS_EXCLUDE_IPS: local IPs never offered (master primary = control plane / panel IP).
 # - Master host firewall (/usr/local/sbin/hostfw-restore.sh) allows tcp 3140,3141 from
 #   172.16.0.0/16 on ens19 (added 2026-10-12/13).
@@ -42,7 +42,7 @@ spec:
         app: cliproxy-egress-agent
     spec:
       nodeSelector:
-        cliproxy.io/egress: "true"
+        cliproxy.io/egress-agent: "true"
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       priorityClassName: system-node-critical
