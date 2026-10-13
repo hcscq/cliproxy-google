@@ -127,6 +127,7 @@ export function SettingsPage() {
       {tab === 'form' ? (
         <>
           <SettingsForm />
+          <EgressPolicy />
           <RequestLogStorage />
         </>
       ) : (
@@ -276,6 +277,44 @@ function YamlEditor() {
 }
 
 /** Request-log storage: partitions, size and retention (read-only status). */
+function EgressPolicy() {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast, toastError } = useUi();
+  const st = useAsync(() => api.egressSettings(), []);
+  const [saving, setSaving] = useState(false);
+  if (st.error) return <ErrorBox error={st.error} onRetry={st.reload} />;
+  if (!st.data) return <Loading />;
+  return (
+    <Card title={tr('出口分配', 'Egress assignment')}>
+      <label
+        style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+        title={tr('自动分配（新凭据、自动均衡）的默认值。关闭时只用副 IP，没有健康副 IP 时失败，不会改用主 IP。已有凭据不受影响。', 'Default for automatic assignment. Off: secondary IPs only; fails instead of using a primary IP. Existing credentials are not moved.')}
+      >
+        <input
+          type="checkbox"
+          checked={st.data.allow_primary}
+          disabled={saving}
+          data-testid="settings-allow-primary"
+          onChange={async (e) => {
+            setSaving(true);
+            try {
+              await api.saveEgressSettings({ allow_primary: e.target.checked });
+              toast(tr('已保存', 'Saved'));
+              await st.reload();
+            } catch (err) {
+              toastError(err);
+            } finally {
+              setSaving(false);
+            }
+          }}
+        />
+        {tr('默认允许分配到主 IP', 'Allow primary IP by default')}
+      </label>
+    </Card>
+  );
+}
+
 function RequestLogStorage() {
   const api = useApi();
   const { tr } = useI18n();

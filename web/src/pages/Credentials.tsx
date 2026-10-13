@@ -43,7 +43,7 @@ import {
   IconTrash,
 } from "../components/icons";
 import { AddCredentialModal } from "./AddCredential";
-import { EgressSelect, egressIP, egressNode, egressState, useEgressList } from "../components/EgressSelect";
+import { AllowPrimaryToggle, EgressSelect, egressIP, egressNode, egressRole, egressState, useEgressList } from "../components/EgressSelect";
 import { GroupChecklist, useGroupLookup } from "./Groups";
 
 export function credentialStatus(
@@ -661,6 +661,7 @@ export function CredentialsPage() {
                             }
                           >
                             {shown}
+                            {eg && <span className="faint"> {egressRole(eg)}</span>}
                             {eg?.public_changed && <span style={{ color: "var(--warn, #b7791f)" }}> ⚠</span>}
                           </div>
                         );
@@ -1498,16 +1499,17 @@ function BulkEgressModal({
   const { tr } = useI18n();
   const { toast, toastError } = useUi();
   const [egress, setEgress] = useState("auto");
+  const [allowPrimary, setAllowPrimary] = useState<boolean | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const apply = async () => {
     setBusy(true);
-    let ok = 0;
     try {
-      for (const id of ids) {
-        await api.updateCredentialFields(id, { egress_id: egress });
-        ok++;
+      const r = await api.egressAssign(ids, egress, egress === "auto" ? allowPrimary : undefined);
+      if (r.failed.length > 0) {
+        toastError(new Error(tr(`已更新 ${r.applied} 个，失败 ${r.failed.length} 个：${r.failed[0].error}`, `Set ${r.applied}, failed ${r.failed.length}: ${r.failed[0].error}`)));
+      } else {
+        toast(tr(`已更新 ${r.applied} 个凭据出口`, `Egress set for ${r.applied}`));
       }
-      toast(tr(`已更新 ${ok} 个凭据出口`, `Egress set for ${ok}`));
       await onDone();
     } catch (e) {
       toastError(e);
@@ -1534,6 +1536,7 @@ function BulkEgressModal({
     >
       <div className="field">
         <EgressSelect value={egress} onChange={setEgress} testId="bulk-egress-select" />
+        {egress === "auto" && <AllowPrimaryToggle value={allowPrimary} onChange={setAllowPrimary} testId="bulk-allow-primary" />}
         <span className="hint">
           {tr("所选凭据的出口 IP 将切换，所有流量随之改变。", "Selected credentials switch exit IP for all traffic.")}
         </span>
@@ -1547,7 +1550,18 @@ function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: (
   const { tr } = useI18n();
   const { toast, toastError, confirm } = useUi();
   const [plan, setPlan] = useState<EgressMove[] | null>(null);
+  const [allowPrimary, setAllowPrimary] = useState<boolean | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const preview = async (ap: boolean | undefined) => {
+    setBusy(true);
+    try {
+      setPlan((await api.egressRebalance(true, ap)).moves);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
   const act = async (fn: () => Promise<unknown>, done: string) => {
     try {
       await fn();
@@ -1573,7 +1587,7 @@ function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: (
           style={{ display: "inline-flex", gap: 4, alignItems: "center" }}
         >
           <Badge kind={e.removed || !e.healthy ? "err" : e.public_changed ? "warn" : "ok"} dot>
-            {egressIP(e)} · {egressNode(e)} · {e.credentials}
+            {egressIP(e)} {egressRole(e)} · {egressNode(e)} · {e.credentials}
             {e.paused > 0 ? tr(` · 暂停${e.paused}`, ` · ${e.paused} paused`) : ""}
             {e.removed || !e.healthy || e.public_changed ? ` · ${egressState(e, tr)}` : ""}
           </Badge>
@@ -1593,16 +1607,7 @@ function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: (
         className="btn btn-sm"
         data-testid="egress-rebalance"
         disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            setPlan((await api.egressRebalance(true)).moves);
-          } catch (e) {
-            toastError(e);
-          } finally {
-            setBusy(false);
-          }
-        }}
+        onClick={() => void preview(allowPrimary)}
       >
         {tr("均衡到新出口", "Rebalance")}
       </button>
@@ -1625,7 +1630,7 @@ function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: (
                   if (!ok) return;
                   setBusy(true);
                   await act(async () => {
-                    const r = await api.egressRebalance(false);
+                    const r = await api.egressRebalance(false, allowPrimary);
                     setPlan(null);
                     return r;
                   }, tr("已均衡", "Rebalanced"));
@@ -1637,6 +1642,14 @@ function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: (
             </>
           }
         >
+          <AllowPrimaryToggle
+            value={allowPrimary}
+            onChange={(v) => {
+              setAllowPrimary(v);
+              void preview(v);
+            }}
+            testId="rebalance-allow-primary"
+          />
           {plan.length === 0 ? (
             <Empty>{tr("已均衡，无需移动", "Already balanced")}</Empty>
           ) : (

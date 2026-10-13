@@ -21,12 +21,12 @@ func TestPickEgressLeastLoadedHealthy(t *testing.T) {
 	status := map[string]*EgressStatus{
 		"http://h1:1": {Healthy: true}, "http://h2:1": {Healthy: true}, "http://h3:1": {Healthy: false},
 	}
-	got, ok := pickEgress(specs, status, map[string]int{"http://h1:1": 2, "http://h2:1": 1})
+	got, ok := pickEgress(specs, status, map[string]int{"http://h1:1": 2, "http://h2:1": 1}, true)
 	if !ok || got.Name != "b" {
 		t.Fatalf("pick = %+v %v", got, ok)
 	}
 	status["http://h1:1"].Healthy, status["http://h2:1"].Healthy = false, false
-	if _, ok := pickEgress(specs, status, nil); ok {
+	if _, ok := pickEgress(specs, status, nil, true); ok {
 		t.Fatal("picked an unhealthy egress")
 	}
 }
@@ -104,5 +104,21 @@ func TestApplyEgressMetadata(t *testing.T) {
 	ApplyEgressMetadata(a, EgressSpec{})
 	if a.ProxyURL != "" || a.Metadata[EgressIDKey] != nil {
 		t.Fatalf("auto unpin failed: %+v", a)
+	}
+}
+
+func TestPickEgressSecondaryOnly(t *testing.T) {
+	specs := []EgressSpec{{Name: "n/1", ProxyURL: "u1", Primary: true}, {Name: "n/2", ProxyURL: "u2"}}
+	status := map[string]*EgressStatus{"u1": {Healthy: true}, "u2": {Healthy: true}}
+	counts := map[string]int{"u2": 5}
+	if got, _ := pickEgress(specs, status, counts, false); got.Name != "n/2" {
+		t.Fatalf("secondary-only picked %q", got.Name)
+	}
+	if got, _ := pickEgress(specs, status, counts, true); got.Name != "n/1" {
+		t.Fatalf("allow primary picked %q", got.Name)
+	}
+	status["u2"].Healthy = false
+	if _, ok := pickEgress(specs, status, counts, false); ok {
+		t.Fatal("must not fall back to primary")
 	}
 }

@@ -4,7 +4,7 @@ import { stateFromRedirect, type OAuthResult, type RTImportResult } from '../api
 import { useI18n } from '../i18n';
 import { CopyButton, Modal, Spinner } from '../components/ui';
 import { IconExternal, IconUpload } from '../components/icons';
-import { EgressSelect } from '../components/EgressSelect';
+import { AllowPrimaryToggle, EgressSelect } from '../components/EgressSelect';
 
 type Tab = 'oauth' | 'tokens' | 'upload' | 'paste' | 'vertex';
 
@@ -13,6 +13,7 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
   const [tab, setTab] = useState<Tab>('oauth');
   const [rtPrefill, setRtPrefill] = useState('');
   const [egress, setEgress] = useState('auto');
+  const [allowPrimary, setAllowPrimary] = useState<boolean | undefined>(undefined);
   const { tr } = useI18n();
   const tabs: [Tab, string][] = [
     ['oauth', t('antigravityLogin')],
@@ -34,18 +35,19 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
         <div className="field" style={{ maxWidth: 420, marginBottom: 12 }}>
           <label>{tr('出口', 'Egress')}</label>
           <EgressSelect value={egress} onChange={setEgress} testId="add-egress" />
+          {egress === 'auto' && <AllowPrimaryToggle value={allowPrimary} onChange={setAllowPrimary} testId="add-allow-primary" />}
         </div>
       )}
-      {tab === 'oauth' && <OAuthFlow onDone={onAdded} egress={egress} />}
-      {tab === 'tokens' && <RefreshTokenImport key={rtPrefill} initialText={rtPrefill} onDone={onAdded} egress={egress} />}
-      {tab === 'upload' && <UploadFiles onDone={onAdded} egress={egress} />}
-      {tab === 'paste' && <PasteJson onDone={onAdded} egress={egress} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
+      {tab === 'oauth' && <OAuthFlow allowPrimary={allowPrimary} onDone={onAdded} egress={egress} />}
+      {tab === 'tokens' && <RefreshTokenImport allowPrimary={allowPrimary} key={rtPrefill} initialText={rtPrefill} onDone={onAdded} egress={egress} />}
+      {tab === 'upload' && <UploadFiles allowPrimary={allowPrimary} onDone={onAdded} egress={egress} />}
+      {tab === 'paste' && <PasteJson allowPrimary={allowPrimary} onDone={onAdded} egress={egress} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
       {tab === 'vertex' && <VertexImport onDone={onAdded} />}
     </Modal>
   );
 }
 
-function OAuthFlow({ onDone, egress }: { onDone: () => void; egress: string }) {
+function OAuthFlow({ onDone, egress, allowPrimary }: { onDone: () => void; egress: string; allowPrimary?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -99,7 +101,7 @@ function OAuthFlow({ onDone, egress }: { onDone: () => void; egress: string }) {
     setStarting(true);
     setError(undefined);
     try {
-      const res = await api.oauthStart('antigravity', egress);
+      const res = await api.oauthStart('antigravity', egress, allowPrimary);
       setSession({ url: res.url, state: res.state });
       setPhase('waiting');
       startPoll(res.state);
@@ -201,7 +203,7 @@ function OAuthFlow({ onDone, egress }: { onDone: () => void; egress: string }) {
   );
 }
 
-function UploadFiles({ onDone, egress }: { onDone: () => void; egress: string }) {
+function UploadFiles({ onDone, egress, allowPrimary }: { onDone: () => void; egress: string; allowPrimary?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -216,7 +218,7 @@ function UploadFiles({ onDone, egress }: { onDone: () => void; egress: string })
   const upload = async () => {
     setBusy(true);
     try {
-      const res = await api.uploadCredentialFiles(files, egress);
+      const res = await api.uploadCredentialFiles(files, egress, allowPrimary);
       toast(tr(`已上传 ${res.uploaded ?? files.length} 个凭据`, `Uploaded ${res.uploaded ?? files.length} credential(s)`));
       setFiles([]);
       onDone();
@@ -281,7 +283,7 @@ export function looksLikeRefreshTokenText(text: string): boolean {
   return lines.every((l) => /^(\S+@\S+?\s*[-\u2010-\u2015\u2212\uff0d]{3,}\s*)?1\/\/\S+/.test(l));
 }
 
-function PasteJson({ onDone, onUseTokens, egress }: { onDone: () => void; onUseTokens?: (text: string) => void; egress: string }) {
+function PasteJson({ onDone, onUseTokens, egress, allowPrimary }: { onDone: () => void; onUseTokens?: (text: string) => void; egress: string; allowPrimary?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -301,7 +303,7 @@ function PasteJson({ onDone, onUseTokens, egress }: { onDone: () => void; onUseT
   const submit = async () => {
     setBusy(true);
     try {
-      const res = await api.uploadCredentialJSON(text, egress);
+      const res = await api.uploadCredentialJSON(text, egress, allowPrimary);
       toast(tr(`已导入 ${res.name ?? ''}`, `Imported ${res.name ?? ''}`));
       setText('');
       onDone();
@@ -423,7 +425,7 @@ const RT_STATUS: Record<string, [string, 'ok' | 'warn' | 'err' | 'primary']> = {
   skipped: ['跳过', 'warn'],
 };
 
-function RefreshTokenImport({ onDone, initialText = '', egress }: { onDone: () => void; initialText?: string; egress: string }) {
+function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary }: { onDone: () => void; initialText?: string; egress: string; allowPrimary?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const [text, setText] = useState(initialText);
@@ -443,7 +445,7 @@ function RefreshTokenImport({ onDone, initialText = '', egress }: { onDone: () =
     try {
       for (let i = 0; i < chunks.length; i++) {
         setProgress(`${i + 1} / ${chunks.length}`);
-        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry, egress_id: egress });
+        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry, egress_id: egress, allow_primary: allowPrimary });
         res.results.forEach((r) => all.push({ ...r, index: r.index + offset }));
         offset += res.results.length;
         setResults([...all]);

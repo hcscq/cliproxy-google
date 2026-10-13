@@ -224,7 +224,24 @@ func (r *Runtime) seedEgressPool(ctx context.Context, specs []EgressSpec) error 
 			return err
 		}
 	}
+	// Drop stale egress-scope rows (e.g. squid-era "egress-<node>") no longer in specs.
+	if del, ok := repo.(egressPoolDeleter); ok && len(specs) > 0 {
+		want := map[string]bool{}
+		for _, s := range specs {
+			want[s.Name] = true
+		}
+		for name, it := range byName {
+			if !want[name] {
+				_ = del.DeleteEgressPool(ctx, it.ID)
+			}
+		}
+	}
 	return nil
+}
+
+// egressPoolDeleter is optionally implemented by the egress repo.
+type egressPoolDeleter interface {
+	DeleteEgressPool(ctx context.Context, id string) error
 }
 
 // checkEgress opens a CONNECT tunnel through the egress to a Google endpoint.
@@ -286,11 +303,11 @@ func (r *Runtime) repointEgress(ctx context.Context, id, from string, spec Egres
 }
 
 // pickEgress returns the least-loaded healthy egress (ties by name).
-func pickEgress(specs []EgressSpec, status map[string]*EgressStatus, counts map[string]int) (EgressSpec, bool) {
+func pickEgress(specs []EgressSpec, status map[string]*EgressStatus, counts map[string]int, allowPrimary bool) (EgressSpec, bool) {
 	var best EgressSpec
 	found := false
 	for _, s := range specs {
-		if s.Removed {
+		if s.Removed || (s.Primary && !allowPrimary) {
 			continue
 		}
 		if st := status[s.ProxyURL]; st != nil && !st.Healthy {
@@ -404,6 +421,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 	}
 	auths := r.coreManager.List()
 	sort.Slice(auths, func(i, j int) bool { return auths[i].ID < auths[j].ID })
+	allowPrimary := r.EgressSettings(ctx).AllowPrimary
 	r.egress.mu.Lock()
 	refresh := now.Sub(r.egress.pinsAt) >= egressPinRefresh
 	if refresh {
@@ -431,7 +449,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 			continue
 		}
 		if pin.proxy == "" {
-			spec, ok := pickEgress(specs, status, counts)
+			spec, ok := pickEgress(specs, status, counts, allowPrimary)
 			if !ok {
 				continue // no healthy egress: leave unassigned, try next round
 			}
@@ -586,7 +604,7 @@ func (r *Runtime) EgressStatuses(ctx context.Context) ([]EgressStatus, error) {
 
 // PickEgressForImport returns the least-loaded healthy egress for a credential that is
 // being created (RT import), so its enrichment calls already use that egress.
-func (r *Runtime) PickEgressForImport(ctx context.Context) (EgressSpec, bool) {
+func (r *Runtime) PickEgressForImport(ctx context.Context, allowPrimary *bool) (EgressSpec, bool) {
 	specs := r.knownEgressSpecs(ctx)
 	if len(specs) == 0 {
 		return EgressSpec{}, false
@@ -605,7 +623,7 @@ func (r *Runtime) PickEgressForImport(ctx context.Context) (EgressSpec, bool) {
 			}
 		}
 	}
-	return pickEgress(specs, status, counts)
+	return pickEgress(specs, status, counts, r.allowPrimary(ctx, allowPrimary))
 }
 
 // --- per-credential HTTP clients (fail closed) ---
@@ -653,10 +671,16 @@ const EgressAuto = "auto"
 // ResolveEgress maps a panel/API choice to an egress: "" or "auto" picks the
 // least-loaded healthy one (ok=false when none is healthy); otherwise the egress
 // with that name (an unknown name is an error).
-func (r *Runtime) ResolveEgress(ctx context.Context, choice string) (EgressSpec, bool, error) {
+//
+// allowPrimary (nil = global default) lets auto use node primary IPs; when it is off
+// and no healthy secondary exists, auto fails instead of silently using a primary.
+func (r *Runtime) ResolveEgress(ctx context.Context, choice string, allowPrimary *bool) (EgressSpec, bool, error) {
 	choice = strings.TrimSpace(choice)
 	if choice == "" || strings.EqualFold(choice, EgressAuto) {
-		spec, ok := r.PickEgressForImport(ctx)
+		spec, ok := r.PickEgressForImport(ctx, allowPrimary)
+		if !ok && len(r.knownEgressSpecs(ctx)) > 0 {
+			return EgressSpec{}, false, NoEgressError(r.allowPrimary(ctx, allowPrimary))
+		}
 		return spec, ok, nil
 	}
 	for _, s := range r.knownEgressSpecs(ctx) {
@@ -706,4 +730,62 @@ func (r *Runtime) knownEgressSpecs(ctx context.Context) []EgressSpec {
 		return out
 	}
 	return ParseEgressSpecs(os.Getenv(egressEnv))
+}
+
+// NoEgressError explains why auto-balance found nothing.
+func NoEgressError(allowPrimary bool) error {
+	if allowPrimary {
+		return errors.New("没有可用的健康出口 (no healthy egress)")
+	}
+	return errors.New("没有可用的健康副 IP 出口；如需使用主 IP 请开启「允许分配到主 IP」(no healthy secondary egress; enable allow_primary to use node primary IPs)")
+}
+
+// EgressSettingsValue is the global egress policy (Settings page).
+type EgressSettingsValue struct {
+	// AllowPrimary lets automatic assignment use node primary IPs (default off).
+	AllowPrimary bool `json:"allow_primary"`
+}
+
+const egressSettingsKV = "egress-settings"
+
+var egressSettingsCache struct {
+	sync.Mutex
+	at  time.Time
+	val EgressSettingsValue
+}
+
+// EgressSettings returns the global egress policy (cached 10s; default secondaries only).
+func (r *Runtime) EgressSettings(ctx context.Context) EgressSettingsValue {
+	egressSettingsCache.Lock()
+	defer egressSettingsCache.Unlock()
+	if time.Since(egressSettingsCache.at) < 10*time.Second {
+		return egressSettingsCache.val
+	}
+	var v EgressSettingsValue
+	if raw, ok, err := r.KVGet(ctx, egressSettingsKV); err == nil && ok {
+		_ = json.Unmarshal(raw, &v)
+	} else if err != nil && !egressSettingsCache.at.IsZero() {
+		return egressSettingsCache.val
+	}
+	egressSettingsCache.at, egressSettingsCache.val = time.Now(), v
+	return v
+}
+
+// SetEgressSettings stores the global egress policy.
+func (r *Runtime) SetEgressSettings(ctx context.Context, v EgressSettingsValue) error {
+	raw, _ := json.Marshal(v)
+	if _, err := r.KVSet(ctx, egressSettingsKV, raw, egressRegistryTTL, ""); err != nil {
+		return err
+	}
+	egressSettingsCache.Lock()
+	egressSettingsCache.at, egressSettingsCache.val = time.Now(), v
+	egressSettingsCache.Unlock()
+	return nil
+}
+
+func (r *Runtime) allowPrimary(ctx context.Context, override *bool) bool {
+	if override != nil {
+		return *override
+	}
+	return r.EgressSettings(ctx).AllowPrimary
 }

@@ -24,11 +24,12 @@ type EgressMove struct {
 // planEgressRebalance evens credential counts over healthy egresses with the fewest
 // moves. Heavier egresses keep the extra slots; within an egress the most recently
 // created credentials move first (older ones keep their long-standing IP).
-func planEgressRebalance(items []home.EgressStatus, auths []*coreauth.Auth) []EgressMove {
+// Without allowPrimary, node primary IPs are neither targets nor sources.
+func planEgressRebalance(items []home.EgressStatus, auths []*coreauth.Auth, allowPrimary bool) []EgressMove {
 	var healthy []home.EgressStatus
 	byURL := map[string]home.EgressStatus{}
 	for _, it := range items {
-		if it.Healthy && !it.Removed {
+		if it.Healthy && !it.Removed && (allowPrimary || !it.Primary) {
 			healthy = append(healthy, it)
 			byURL[it.ProxyURL] = it
 		}
@@ -88,7 +89,8 @@ func planEgressRebalance(items []home.EgressStatus, auths []*coreauth.Auth) []Eg
 // rebalance onto new/less-loaded egresses (never automatic: IP stability first).
 func (h *Handler) RebalanceEgress(c *gin.Context) {
 	var body struct {
-		DryRun *bool `json:"dry_run"`
+		DryRun       *bool `json:"dry_run"`
+		AllowPrimary *bool `json:"allow_primary"`
 	}
 	_ = c.ShouldBindJSON(&body)
 	dry := body.DryRun == nil || *body.DryRun
@@ -108,7 +110,11 @@ func (h *Handler) RebalanceEgress(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "auth_load_failed", err)
 		return
 	}
-	moves := planEgressRebalance(items, auths)
+	allow := h.runtime.EgressSettings(ctx).AllowPrimary
+	if body.AllowPrimary != nil {
+		allow = *body.AllowPrimary
+	}
+	moves := planEgressRebalance(items, auths, allow)
 	if dry || len(moves) == 0 {
 		c.JSON(http.StatusOK, gin.H{"dry_run": dry, "moves": nonNilMoves(moves)})
 		return
@@ -180,4 +186,83 @@ func (h *Handler) egressRegistryAction(c *gin.Context, fn func(*gin.Context, str
 		return
 	}
 	respondOK(c)
+}
+
+// AssignEgress: POST /proxy/egress/assign {ids, egress_id, allow_primary} — bulk 设置出口.
+// "auto" balances the batch over eligible egresses (secondaries only unless allowed).
+func (h *Handler) AssignEgress(c *gin.Context) {
+	var body struct {
+		IDs          []string `json:"ids"`
+		EgressID     string   `json:"egress_id"`
+		AllowPrimary *bool    `json:"allow_primary"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 || h.runtime == nil {
+		respondError(c, http.StatusBadRequest, "invalid body", err)
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	picker, err := h.newEgressPicker(ctx, body.EgressID, body.AllowPrimary)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "egress_invalid", err)
+		return
+	}
+	type failure struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+	failed := []failure{}
+	applied := 0
+	for _, id := range body.IDs {
+		a, _, errGet := h.repo.GetAuth(ctx, id)
+		if errGet != nil || a == nil {
+			failed = append(failed, failure{id, "not found"})
+			continue
+		}
+		spec, ok := picker.pick()
+		if !ok && picker.explicit == nil {
+			if len(picker.items) == 0 {
+				spec = home.EgressSpec{} // unmanaged: unpin
+			} else {
+				failed = append(failed, failure{id, home.NoEgressError(picker.allowPrimary).Error()})
+				continue
+			}
+		}
+		home.ApplyEgressMetadata(a, spec)
+		a.UpdatedAt = time.Now().UTC()
+		if _, errUp := h.repo.UpsertAuth(ctx, a, "upsert"); errUp != nil {
+			failed = append(failed, failure{id, errUp.Error()})
+			continue
+		}
+		applied++
+	}
+	if applied > 0 {
+		if errRefresh := h.refreshAuths(ctx); errRefresh != nil {
+			respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"applied": applied, "failed": failed})
+}
+
+// GetEgressSettings / PutEgressSettings: GET|PUT /proxy/egress/settings {allow_primary}.
+func (h *Handler) GetEgressSettings(c *gin.Context) {
+	if h.runtime == nil {
+		c.JSON(http.StatusOK, home.EgressSettingsValue{})
+		return
+	}
+	c.JSON(http.StatusOK, h.runtime.EgressSettings(c.Request.Context()))
+}
+
+func (h *Handler) PutEgressSettings(c *gin.Context) {
+	var body home.EgressSettingsValue
+	if err := c.ShouldBindJSON(&body); err != nil || h.runtime == nil {
+		respondError(c, http.StatusBadRequest, "invalid body", err)
+		return
+	}
+	if err := h.runtime.SetEgressSettings(c.Request.Context(), body); err != nil {
+		respondError(c, http.StatusInternalServerError, "save_failed", err)
+		return
+	}
+	c.JSON(http.StatusOK, body)
 }

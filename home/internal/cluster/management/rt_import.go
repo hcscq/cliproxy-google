@@ -353,6 +353,8 @@ type rtImportOptions struct {
 	// Egress is "" / "auto" (least-loaded healthy, balanced within the batch) or an
 	// egress name/IP; an explicit choice also re-pins matched existing credentials.
 	Egress string
+	// AllowPrimary lets auto-balance use node primary IPs (nil = global default).
+	AllowPrimary *bool
 }
 
 // credentialIndex finds existing antigravity credentials by email / refresh token.
@@ -426,7 +428,7 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 	var writeMu sync.Mutex // serializes dedupe decisions + writes so duplicates in one batch merge
 	touched := map[string]struct{}{}
 	enricher := h.antigravityEnricher()
-	picker, errPicker := h.newEgressPicker(ctx, opts.Egress)
+	picker, errPicker := h.newEgressPicker(ctx, opts.Egress, opts.AllowPrimary)
 	if errPicker != nil {
 		return nil, RTImportSummary{}, errPicker
 	}
@@ -457,7 +459,12 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 				e := entries[j.i]
 				res := &results[j.i]
 				itemCtx, cancel := context.WithTimeout(ctx, rtImportItemTimeout)
-				egress, explicitEgress := h.importEgress(idx, &writeMu, e, picker)
+				egress, explicitEgress, errEgress := h.importEgress(idx, &writeMu, e, picker)
+				if errEgress != nil {
+					cancel()
+					res.Status, res.Code, res.Reason = "failed", "no_egress", errEgress.Error()
+					continue
+				}
 				if egress.ProxyURL != "" {
 					itemCtx = withEgressProxy(itemCtx, egress.ProxyURL)
 				}
@@ -674,11 +681,12 @@ func antigravityArrayPayload(raw []byte) ([]rtImportEntry, bool) {
 // At most rtImportMaxItemsPerRequest entries per call; the panel sends chunks.
 func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 	var body struct {
-		Text        string `json:"text"`
-		Items       []any  `json:"items"`
-		DryRun      bool   `json:"dry_run"`
-		Concurrency int    `json:"concurrency"`
-		EgressID    string `json:"egress_id"`
+		Text         string `json:"text"`
+		Items        []any  `json:"items"`
+		DryRun       bool   `json:"dry_run"`
+		Concurrency  int    `json:"concurrency"`
+		EgressID     string `json:"egress_id"`
+		AllowPrimary *bool  `json:"allow_primary"`
 	}
 	if errBind := json.NewDecoder(io.LimitReader(c.Request.Body, 8<<20)).Decode(&body); errBind != nil {
 		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("body must be JSON: {text, items, dry_run}"))
@@ -698,7 +706,7 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
 	defer cancel()
-	results, summary, errImport := h.importAntigravityEntries(ctx, entries, rtImportOptions{DryRun: body.DryRun, Concurrency: body.Concurrency, Egress: body.EgressID})
+	results, summary, errImport := h.importAntigravityEntries(ctx, entries, rtImportOptions{DryRun: body.DryRun, Concurrency: body.Concurrency, Egress: body.EgressID, AllowPrimary: body.AllowPrimary})
 	if errImport != nil {
 		respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 		return
@@ -739,15 +747,22 @@ type egressPicker struct {
 	mu       sync.Mutex
 	explicit *home.EgressSpec
 	items    []home.EgressStatus
+	// allowPrimary lets auto use node primary IPs.
+	allowPrimary bool
 }
 
-func (h *Handler) newEgressPicker(ctx context.Context, choice string) (*egressPicker, error) {
+func (h *Handler) newEgressPicker(ctx context.Context, choice string, allowPrimary *bool) (*egressPicker, error) {
 	p := &egressPicker{}
 	if h.runtime == nil {
 		return p, nil
 	}
+	if allowPrimary != nil {
+		p.allowPrimary = *allowPrimary
+	} else {
+		p.allowPrimary = h.runtime.EgressSettings(ctx).AllowPrimary
+	}
 	if c := strings.TrimSpace(choice); c != "" && !strings.EqualFold(c, home.EgressAuto) {
-		spec, _, err := h.runtime.ResolveEgress(ctx, c)
+		spec, _, err := h.runtime.ResolveEgress(ctx, c, allowPrimary)
 		if err != nil {
 			return nil, err
 		}
@@ -770,7 +785,7 @@ func (p *egressPicker) pick() (home.EgressSpec, bool) {
 	best := -1
 	for i := range p.items {
 		it := &p.items[i]
-		if !it.Healthy {
+		if !it.Healthy || it.Removed || (it.Primary && !p.allowPrimary) {
 			continue
 		}
 		if best < 0 || it.Credentials < p.items[best].Credentials || (it.Credentials == p.items[best].Credentials && it.Name < p.items[best].Name) {
@@ -781,23 +796,37 @@ func (p *egressPicker) pick() (home.EgressSpec, bool) {
 		return home.EgressSpec{}, false
 	}
 	p.items[best].Credentials++
-	return p.items[best].EgressSpec, false
+	return p.items[best].EgressSpec, true
 }
 
 // importEgress picks the egress for an imported token. An explicit choice wins;
 // otherwise a matched credential keeps its own proxy, else the batch picker decides.
-func (h *Handler) importEgress(idx *credentialIndex, mu *sync.Mutex, e rtImportEntry, picker *egressPicker) (home.EgressSpec, bool) {
+// With managed egresses and none eligible, it fails (never proceeds without an egress).
+func (h *Handler) importEgress(idx *credentialIndex, mu *sync.Mutex, e rtImportEntry, picker *egressPicker) (home.EgressSpec, bool, error) {
 	if picker != nil && picker.explicit != nil {
-		return *picker.explicit, true
+		return *picker.explicit, true, nil
 	}
 	mu.Lock()
 	existing, _ := idx.match(e.Email, e.RefreshToken)
 	mu.Unlock()
 	if existing != nil {
 		if p := strings.TrimSpace(existing.ProxyURL); p != "" {
-			return home.EgressSpec{ProxyURL: p}, false
+			return home.EgressSpec{ProxyURL: p}, false, nil
 		}
 	}
-	spec, _ := picker.pick()
-	return spec, false
+	spec, ok := picker.pick()
+	if !ok && picker != nil && len(picker.items) > 0 {
+		return home.EgressSpec{}, false, home.NoEgressError(picker.allowPrimary)
+	}
+	return spec, false, nil
+}
+
+// parseAllowPrimary reads an optional allow_primary query value (nil = global default).
+func parseAllowPrimary(v string) *bool {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return nil
+	}
+	b := v == "1" || v == "true" || v == "yes" || v == "on"
+	return &b
 }

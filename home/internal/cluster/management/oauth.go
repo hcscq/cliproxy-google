@@ -163,7 +163,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 			results = append(results, res)
 		}
 		if len(agEntries) > 0 {
-			agResults, _, errImport := h.importAntigravityEntries(ctx, agEntries, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id")})
+			agResults, _, errImport := h.importAntigravityEntries(ctx, agEntries, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id"), AllowPrimary: parseAllowPrimary(c.Query("allow_primary"))})
 			if errImport != nil {
 				respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 				return
@@ -210,7 +210,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		}
 		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
 		defer cancel()
-		results, summary, errImport := h.importAntigravityEntries(ctx, many, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id")})
+		results, summary, errImport := h.importAntigravityEntries(ctx, many, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id"), AllowPrimary: parseAllowPrimary(c.Query("allow_primary"))})
 		if errImport != nil {
 			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 			return
@@ -221,7 +221,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 	if entry, ok := antigravityPayloadNeedsImport(bytes.TrimSpace(body)); ok {
 		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 2*time.Minute)
 		defer cancel()
-		results, _, errImport := h.importAntigravityEntries(ctx, []rtImportEntry{entry}, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id")})
+		results, _, errImport := h.importAntigravityEntries(ctx, []rtImportEntry{entry}, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id"), AllowPrimary: parseAllowPrimary(c.Query("allow_primary"))})
 		if errImport != nil {
 			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 			return
@@ -1482,19 +1482,29 @@ func (h *Handler) applyEgressPatch(ctx context.Context, auth *coreauth.Auth, bod
 		return false, nil
 	}
 	delete(body, "egress_id")
+	var allowPrimary *bool
+	if rawAP, okAP := body["allow_primary"]; okAP {
+		delete(body, "allow_primary")
+		var b bool
+		if err := json.Unmarshal(rawAP, &b); err != nil {
+			return false, fmt.Errorf("allow_primary must be a boolean")
+		}
+		allowPrimary = &b
+	}
 	var choice string
 	if err := json.Unmarshal(raw, &choice); err != nil {
 		return false, fmt.Errorf("egress_id must be a string")
 	}
 	choice = strings.TrimSpace(choice)
-	if choice == "" || strings.EqualFold(choice, home.EgressAuto) {
-		home.ApplyEgressMetadata(auth, home.EgressSpec{})
-		return true, nil
-	}
 	if h.runtime == nil {
+		if choice == "" || strings.EqualFold(choice, home.EgressAuto) {
+			home.ApplyEgressMetadata(auth, home.EgressSpec{})
+			return true, nil
+		}
 		return false, fmt.Errorf("egress management unavailable")
 	}
-	spec, _, err := h.runtime.ResolveEgress(ctx, choice)
+	// auto resolves now, so the secondary-only policy is applied (and enforced) immediately.
+	spec, _, err := h.runtime.ResolveEgress(ctx, choice, allowPrimary)
 	if err != nil {
 		return false, err
 	}

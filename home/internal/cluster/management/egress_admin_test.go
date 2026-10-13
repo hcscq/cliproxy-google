@@ -20,7 +20,7 @@ func TestPlanEgressRebalance(t *testing.T) {
 		auths = append(auths, &coreauth.Auth{ID: fmt.Sprintf("x%d", i), Provider: "antigravity", ProxyURL: "http://a", CreatedAt: t0.Add(time.Duration(i) * time.Minute)})
 	}
 	auths = append(auths, &coreauth.Auth{ID: "d1", Provider: "antigravity", ProxyURL: "http://dead"})
-	moves := planEgressRebalance(items, auths)
+	moves := planEgressRebalance(items, auths, true)
 	if len(moves) != 4 {
 		t.Fatalf("moves = %+v", moves)
 	}
@@ -29,7 +29,25 @@ func TestPlanEgressRebalance(t *testing.T) {
 			t.Fatalf("bad move %+v (oldest must stay, dead egress never a target)", m)
 		}
 	}
-	if again := planEgressRebalance(items, []*coreauth.Auth{auths[0]}); len(again) != 0 {
+	if again := planEgressRebalance(items, []*coreauth.Auth{auths[0]}, true); len(again) != 0 {
 		t.Fatal("balanced set should need no moves")
+	}
+}
+
+func TestEgressPickerSecondaryOnly(t *testing.T) {
+	items := []home.EgressStatus{
+		{EgressSpec: home.EgressSpec{Name: "a/1", ProxyURL: "u1", Primary: true}, Healthy: true},
+		{EgressSpec: home.EgressSpec{Name: "a/2", ProxyURL: "u2"}, Healthy: false},
+	}
+	p := &egressPicker{items: items}
+	if _, ok := p.pick(); ok {
+		t.Fatal("picked primary without allow_primary")
+	}
+	p.allowPrimary = true
+	if s, ok := p.pick(); !ok || s.Name != "a/1" {
+		t.Fatalf("got %v %v", s, ok)
+	}
+	if mv := planEgressRebalance(items, nil, false); len(mv) != 0 {
+		t.Fatal("unexpected moves")
 	}
 }

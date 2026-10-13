@@ -16,8 +16,42 @@ export function egressState(e: EgressStatus, tr: (zh: string, en: string) => str
   return tr('正常', 'up');
 }
 
+/** 主 = node primary IP (default route source), 副 = secondary. */
+export const egressRole = (e: Pick<EgressStatus, 'primary'>) => (e.primary ? '主' : '副');
+
 export function egressLabel(e: EgressStatus, tr: (zh: string, en: string) => string) {
-  return `${egressIP(e)} · ${egressNode(e)} · ${egressState(e, tr)} · ${e.credentials}`;
+  return `${egressIP(e)} ${egressRole(e)} · ${egressNode(e)} · ${egressState(e, tr)} · ${e.credentials}`;
+}
+
+/** Global default for "允许分配到主 IP" (Settings). */
+export function useEgressSettings() {
+  const api = useApi();
+  return useAsync(() => api.egressSettings(), [], 0);
+}
+
+/** "允许分配到主 IP" checkbox; shown for auto-balance only. Default follows the global setting. */
+export function AllowPrimaryToggle({
+  value,
+  onChange,
+  testId = 'allow-primary',
+}: {
+  value: boolean | undefined;
+  onChange: (v: boolean) => void;
+  testId?: string;
+}) {
+  const { tr } = useI18n();
+  const settings = useEgressSettings();
+  const checked = value ?? settings.data?.allow_primary ?? false;
+  return (
+    <label
+      className="small"
+      style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginTop: 6 }}
+      title={tr('关闭时只分配到副 IP；没有健康的副 IP 时直接失败，不会改用主 IP', 'Off: secondaries only; fails if none is healthy instead of using a primary IP')}
+    >
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
+      {tr('允许分配到主 IP', 'Allow primary IP')}
+    </label>
+  );
 }
 
 export function useEgressList() {

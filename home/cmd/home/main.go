@@ -1163,6 +1163,10 @@ func (a egressRepoAdapter) UpdateEgressPool(ctx context.Context, item home.Egres
 	return err
 }
 
+func (a egressRepoAdapter) DeleteEgressPool(ctx context.Context, id string) error {
+	return a.repo.DeleteProxyPoolItem(ctx, id)
+}
+
 func (a egressRepoAdapter) MarkEgressResult(ctx context.Context, id string, healthy bool, at time.Time) error {
 	result := cluster.ProxyPoolTestResultFailed
 	if healthy {

@@ -76,8 +76,9 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 	redirectURI := fmt.Sprintf("http://localhost:%d/oauth-callback", antigravityCallbackPort)
 	authURL := buildAntigravityAuthURL(state, redirectURI)
 	if errRegister := h.registerOAuthSession(c, "antigravity", state, map[string]any{
-		"redirect_uri": redirectURI,
-		"egress_id":    strings.TrimSpace(c.Query("egress_id")),
+		"redirect_uri":  redirectURI,
+		"egress_id":     strings.TrimSpace(c.Query("egress_id")),
+		"allow_primary": strings.TrimSpace(c.Query("allow_primary")),
 	}); errRegister != nil {
 		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
 		return
@@ -342,7 +343,7 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 	explicitEgress := false
 	if h.runtime != nil {
 		choice := stringFromAny(data["egress_id"])
-		spec, ok, errEgress := h.runtime.ResolveEgress(ctx, choice)
+		spec, ok, errEgress := h.runtime.ResolveEgress(ctx, choice, parseAllowPrimary(stringFromAny(data["allow_primary"])))
 		if errEgress != nil {
 			return errEgress
 		}

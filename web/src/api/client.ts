@@ -160,16 +160,16 @@ export class ApiClient {
   credentialModels(name: string) {
     return this.get<{ models: ModelInfo[] }>('/credentials/models', { name });
   }
-  uploadCredentialFiles(files: File[], egressId?: string) {
+  uploadCredentialFiles(files: File[], egressId?: string, allowPrimary?: boolean) {
     const form = new FormData();
     files.forEach((f, i) => form.append(`file${i}`, f, f.name));
-    return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form, query: { egress_id: egressId } });
+    return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
   }
-  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string }) {
+  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string; allow_primary?: boolean }) {
     return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[] }>('/credentials/import/refresh-tokens', body);
   }
-  uploadCredentialJSON(json: string, egressId?: string) {
-    return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId } });
+  uploadCredentialJSON(json: string, egressId?: string, allowPrimary?: boolean) {
+    return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
   }
   setCredentialDisabled(name: string, disabled: boolean) {
     return this.patch<{ status: string; disabled: boolean }>('/credentials/status', { name, disabled });
@@ -198,8 +198,17 @@ export class ApiClient {
   egressStatus() {
     return this.get<{ items: EgressStatus[] }>('/proxy/egress');
   }
-  egressRebalance(dryRun: boolean) {
-    return this.post<{ dry_run: boolean; moves: EgressMove[]; applied?: number }>('/proxy/egress/rebalance', { dry_run: dryRun });
+  egressRebalance(dryRun: boolean, allowPrimary?: boolean) {
+    return this.post<{ dry_run: boolean; moves: EgressMove[]; applied?: number }>('/proxy/egress/rebalance', { dry_run: dryRun, allow_primary: allowPrimary });
+  }
+  egressAssign(ids: string[], egressId: string, allowPrimary?: boolean) {
+    return this.post<{ applied: number; failed: { id: string; error: string }[] }>('/proxy/egress/assign', { ids, egress_id: egressId, allow_primary: allowPrimary });
+  }
+  egressSettings() {
+    return this.get<{ allow_primary: boolean }>('/proxy/egress/settings');
+  }
+  saveEgressSettings(v: { allow_primary: boolean }) {
+    return this.request<{ allow_primary: boolean }>('PUT', '/proxy/egress/settings', { body: v });
   }
   egressAck(id: string) {
     return this.post<{ status: string }>('/proxy/egress/ack', { id });
@@ -238,8 +247,8 @@ export class ApiClient {
   }
 
   // ---- OAuth -----------------------------------------------------------------
-  oauthStart(provider: string, egressId?: string) {
-    return this.get<{ status: string; url: string; state: string; user_code?: string }>('/oauth/auth-url', { provider, egress_id: egressId });
+  oauthStart(provider: string, egressId?: string, allowPrimary?: boolean) {
+    return this.get<{ status: string; url: string; state: string; user_code?: string }>('/oauth/auth-url', { provider, egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) });
   }
   oauthStatus(state: string) {
     return this.get<OAuthResult & { status: 'ok' | 'wait' | 'error'; error?: string }>('/oauth/status', { state });
