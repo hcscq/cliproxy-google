@@ -65,7 +65,7 @@ spec:
           configMap: {name: cliproxy-egress-exclude}
       containers:
         - name: agent
-          image: ghcr.io/hcscq/cliproxy-google-home:sha-PLACEHOLDER
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-fddbf9184d585841e3d62272d847edf57e604e3f
           command: ["/app/egress-agent"]
           env:
             - name: HOST_IP
