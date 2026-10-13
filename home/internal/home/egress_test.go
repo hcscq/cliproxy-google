@@ -122,3 +122,18 @@ func TestPickEgressSecondaryOnly(t *testing.T) {
 		t.Fatal("must not fall back to primary")
 	}
 }
+
+func TestPickEgressRespectsMaxPerEgress(t *testing.T) {
+	specs := []EgressSpec{{Name: "a", ProxyURL: "http://a"}, {Name: "b", ProxyURL: "http://b"}}
+	counts := map[string]int{"http://a": 2, "http://b": 3}
+	if s, ok := pickEgress(specs, nil, counts, false, 3); !ok || s.Name != "a" {
+		t.Fatalf("want a, got %v %v", s.Name, ok)
+	}
+	counts["http://a"] = 3
+	if _, ok := pickEgress(specs, nil, counts, false, 3); ok {
+		t.Fatal("all full: want no egress")
+	}
+	if _, ok := pickEgress(specs, nil, counts, false, 0); !ok {
+		t.Fatal("0 = unlimited")
+	}
+}

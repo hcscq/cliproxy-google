@@ -1,6 +1,8 @@
 // Typed client for the Home Management API (v8). Every request carries the
 // management key; the key never leaves the browser except as a request header.
 
+export const BULK_CHUNK = 500;
+
 export const MANAGEMENT_BASE = '/v8/management';
 
 export class ApiError extends Error {
@@ -201,14 +203,21 @@ export class ApiClient {
   egressRebalance(dryRun: boolean, allowPrimary?: boolean) {
     return this.post<{ dry_run: boolean; moves: EgressMove[]; applied?: number }>('/proxy/egress/rebalance', { dry_run: dryRun, allow_primary: allowPrimary });
   }
-  egressAssign(ids: string[], egressId: string, allowPrimary?: boolean) {
-    return this.post<{ applied: number; failed: { id: string; error: string }[] }>('/proxy/egress/assign', { ids, egress_id: egressId, allow_primary: allowPrimary });
+  async egressAssign(ids: string[], egressId: string, allowPrimary?: boolean, onProgress?: (done: number, total: number) => void) {
+    const out = { applied: 0, failed: [] as { id: string; error: string }[] };
+    for (let i = 0; i < ids.length; i += BULK_CHUNK) {
+      const r = await this.post<{ applied: number; failed: { id: string; error: string }[] }>('/proxy/egress/assign', { ids: ids.slice(i, i + BULK_CHUNK), egress_id: egressId, allow_primary: allowPrimary });
+      out.applied += r.applied ?? 0;
+      out.failed.push(...(r.failed ?? []));
+      onProgress?.(Math.min(i + BULK_CHUNK, ids.length), ids.length);
+    }
+    return out;
   }
   egressSettings() {
-    return this.get<{ allow_primary: boolean }>('/proxy/egress/settings');
+    return this.get<{ allow_primary: boolean; max_per_egress?: number }>('/proxy/egress/settings');
   }
-  saveEgressSettings(v: { allow_primary: boolean }) {
-    return this.request<{ allow_primary: boolean }>('PUT', '/proxy/egress/settings', { body: v });
+  saveEgressSettings(v: { allow_primary: boolean; max_per_egress?: number }) {
+    return this.request<{ allow_primary: boolean; max_per_egress?: number }>('PUT', '/proxy/egress/settings', { body: v });
   }
   egressAck(id: string) {
     return this.post<{ status: string }>('/proxy/egress/ack', { id });
@@ -329,8 +338,28 @@ export class ApiClient {
   credentialIds(q: CredentialQuery) {
     return this.get<{ ids: string[]; total: number }>('/credentials/search', { ...(q as Query), ids_only: '1' });
   }
-  bulkCredentials(body: { ids: string[]; action: BulkCredentialAction; tags?: string[]; group_id?: number }) {
-    return this.post<{ status: string; updated?: number; unchanged?: number; failed?: string[]; result?: BulkResult }>('/credentials/bulk', body);
+  // Large selections are sent in chunks (BULK_CHUNK ids per request) so
+  // thousands of credentials neither hit request limits nor block Home for long.
+  async bulkCredentials(body: { ids: string[]; action: BulkCredentialAction; tags?: string[]; group_id?: number }, onProgress?: (done: number, total: number) => void) {
+    type R = { status: string; updated?: number; unchanged?: number; failed?: string[]; result?: BulkResult };
+    const out: R = { status: 'ok' };
+    for (let i = 0; i < body.ids.length || i === 0; i += BULK_CHUNK) {
+      const r = await this.post<R>('/credentials/bulk', { ...body, ids: body.ids.slice(i, i + BULK_CHUNK) });
+      out.status = r.status;
+      if (r.updated !== undefined) out.updated = (out.updated ?? 0) + r.updated;
+      if (r.unchanged !== undefined) out.unchanged = (out.unchanged ?? 0) + r.unchanged;
+      if (r.failed?.length) out.failed = [...(out.failed ?? []), ...r.failed];
+      if (r.result) {
+        const prev = out.result as Record<string, number> | undefined;
+        const cur = r.result as unknown as Record<string, number>;
+        const merged: Record<string, number> = { ...(prev ?? {}) };
+        for (const k of Object.keys(cur)) merged[k] = typeof cur[k] === 'number' ? (merged[k] ?? 0) + cur[k] : cur[k];
+        out.result = merged as unknown as BulkResult;
+      }
+      onProgress?.(Math.min(i + BULK_CHUNK, body.ids.length), body.ids.length);
+      if (body.ids.length === 0) break;
+    }
+    return out;
   }
   groupsSummary() {
     return this.get<GroupsSummary>('/groups/summary');

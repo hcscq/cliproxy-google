@@ -15,6 +15,7 @@ import {
   type ModelCooldown,
   type ModelInfo,
   type QuotaItem,
+  BULK_CHUNK,
 } from "../api/client";
 import {
   CredentialFilterBar,
@@ -45,7 +46,7 @@ import {
   IconTrash,
 } from "../components/icons";
 import { AddCredentialModal } from "./AddCredential";
-import { AllowPrimaryToggle, EgressSelect, egressIP, egressNode, egressRole, egressState, useEgressList } from "../components/EgressSelect";
+import { AllowPrimaryToggle, EgressSelect, useEgressSettings, egressIP, egressNode, egressRole, egressState, useEgressList } from "../components/EgressSelect";
 import { GroupChecklist, useGroupLookup } from "./Groups";
 
 export function credentialStatus(
@@ -371,7 +372,8 @@ export function CredentialsPage() {
     });
   const bulkToggle = (action: "enable" | "disable") =>
     run(`bulk-${action}`, async () => {
-      const r = await api.bulkCredentials({ ids: sel.list(), action });
+      const ids = sel.list();
+      const r = await api.bulkCredentials({ ids, action }, ids.length > BULK_CHUNK ? (d, t) => toast(tr(`处理中 ${d}/${t}`, `Working ${d}/${t}`)) : undefined);
       toast(
         tr(
           `已${action === "enable" ? "启用" : "禁用"} ${r.updated ?? 0} 个${r.unchanged ? `（${r.unchanged} 个无需变更）` : ""}`,
@@ -1663,7 +1665,10 @@ function EgressStrip({
       toastError(e);
     }
   };
+  const egSettings = useEgressSettings();
+  const cap = egSettings.data?.max_per_egress ?? 0;
   const live = items.filter((e) => !e.removed);
+  const full = cap > 0 ? live.filter((e) => e.healthy && e.credentials >= cap).length : 0;
   const primaries = live.filter((e) => e.primary).length;
   const loads = live.map((e) => e.credentials);
   const lo = loads.length ? Math.min(...loads) : 0;
@@ -1690,8 +1695,9 @@ function EgressStrip({
         </button>
         <span data-testid="egress-summary">
           {tr("出口", "Egress")} {live.length}
-          <span className="faint"> · {tr("主", "P")} {primaries} / {tr("副", "S")} {live.length - primaries} · {tr("负载", "load")} {lo === hi ? lo : `${lo}–${hi}`}</span>
+          <span className="faint"> · {tr("主", "P")} {primaries} / {tr("副", "S")} {live.length - primaries} · {tr("负载", "load")} {lo === hi ? lo : `${lo}–${hi}`}{cap > 0 ? ` / ${tr("上限", "cap")} ${cap}` : ""}</span>
         </span>
+        {full > 0 && <Badge kind="warn" dot>{tr(`已满 ${full}`, `${full} full`)}</Badge>}
         {down > 0 && <Badge kind="err" dot>{tr(`不可用 ${down}`, `${down} down`)}</Badge>}
         {removed > 0 && <Badge kind="err" dot>{tr(`IP 已移除 ${removed}`, `${removed} removed`)}</Badge>}
         {changed > 0 && <Badge kind="warn" dot>{tr(`⚠ IP 变更 ${changed}`, `⚠ ${changed} changed`)}</Badge>}

@@ -299,7 +299,7 @@ function EgressPolicy() {
           onChange={async (e) => {
             setSaving(true);
             try {
-              await api.saveEgressSettings({ allow_primary: e.target.checked });
+              await api.saveEgressSettings({ allow_primary: e.target.checked, max_per_egress: st.data?.max_per_egress ?? 0 });
               toast(tr('已保存', 'Saved'));
               await st.reload();
             } catch (err) {
@@ -310,6 +310,34 @@ function EgressPolicy() {
           }}
         />
         {tr('默认允许分配到主 IP', 'Allow primary IP by default')}
+      </label>
+      <label
+        style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginLeft: 24 }}
+        title={tr('新分配（导入/添加/自动均衡）时每个出口 IP 最多绑定的凭据数；满了导入会被拒绝。0 = 不限。已有凭据不会被移动。', 'Max credentials per egress IP for new assignments; imports are refused when all are full. 0 = unlimited. Existing pins are not moved.')}
+      >
+        {tr('每出口上限', 'Max per egress')}
+        <input
+          type="number"
+          min={0}
+          style={{ width: 80 }}
+          defaultValue={st.data.max_per_egress ?? 0}
+          disabled={saving}
+          data-testid="settings-max-per-egress"
+          onBlur={async (e) => {
+            const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
+            if (v === (st.data?.max_per_egress ?? 0)) return;
+            setSaving(true);
+            try {
+              await api.saveEgressSettings({ allow_primary: st.data!.allow_primary, max_per_egress: v });
+              toast(tr('已保存', 'Saved'));
+              await st.reload();
+            } catch (err) {
+              toastError(err);
+            } finally {
+              setSaving(false);
+            }
+          }}
+        />
       </label>
     </Card>
   );

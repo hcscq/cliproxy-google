@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useApi, useAsync } from '../app-context';
-import { isSupportedProvider, normalizeTopology, type Credential, type QuotaItem, credentialUsable, coolingModels } from '../api/client';
+import { isSupportedProvider, normalizeTopology, type Credential, type QuotaItem, coolingModels } from '../api/client';
 import { fmtCompact, fmtMs, fmtPct, fmtRelative, fmtTime } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Card, Empty, ErrorBox, Loading, Stat } from '../components/ui';
@@ -22,16 +22,21 @@ export function DashboardPage() {
   const api = useApi();
   const { t, tr, lang } = useI18n();
   const topo = useAsync(() => api.topology(), [], 15000);
-  const creds = useAsync(() => api.credentials(), [], 30000);
-  const quota = useAsync(() => api.quotaCredentialsAll(), [], 60000);
+  // Server-side: only the top N credentials + facet counts are fetched, so the
+  // dashboard stays cheap at thousands of credentials.
+  const creds = useAsync(() => api.searchCredentials({ sort: 'last_used', order: 'desc', page: 1, page_size: DASHBOARD_TOP_N }), [], 30000);
+  const topIds = (creds.data?.items ?? []).map((c) => c.id).join(',');
+  const quota = useAsync(() => (topIds ? api.quotaCredentials({ ids: topIds, limit: 200 }) : Promise.resolve({ items: [] as QuotaItem[] } as unknown as Awaited<ReturnType<typeof api.quotaCredentials>>)), [topIds], 60000);
   const usage = useAsync(() => api.usageOverview({ interval: 'hour' }), [], 60000);
   const failures = useAsync(() => api.requestEvents({ status: 'failed', limit: 5 }), [], 60000);
 
   const reloadAll = () => Promise.all([topo.reload(), creds.reload(), quota.reload(), usage.reload(), failures.reload()]);
 
   const { homes, staleHomes, proxies, leader } = normalizeTopology(topo.data);
-  const files: Credential[] = (creds.data?.files ?? []).filter((c) => isSupportedProvider(c.provider));
-  const activeCreds = files.filter(credentialUsable).length;
+  const files: Credential[] = (creds.data?.items ?? []).filter((c) => isSupportedProvider(c.provider));
+  const statusFacet = creds.data?.facets?.status ?? {};
+  const totalCreds = creds.data?.all ?? 0;
+  const activeCreds = (statusFacet.ok ?? 0) + (statusFacet.cooling ?? 0);
   const quotaById = new Map<string, QuotaItem>((quota.data?.items ?? []).map((q) => [q.credential_id, q]));
   const totals = usage.data?.totals;
   // Credentials ordered by 24h request count (unused ones last, by name).
@@ -69,7 +74,7 @@ export function DashboardPage() {
         />
         <Stat
           label={t('credentials')}
-          value={creds.data ? `${activeCreds} / ${files.length}` : '…'}
+          value={creds.data ? `${activeCreds} / ${totalCreds}` : '…'}
           sub={tr('可用 / 总数', 'usable / total')}
         />
         <Stat
@@ -106,7 +111,7 @@ export function DashboardPage() {
             <ErrorBox error={creds.error} onRetry={creds.reload} />
           ) : !creds.data ? (
             <Loading />
-          ) : files.length === 0 ? (
+          ) : totalCreds === 0 ? (
             <Empty>
               {tr('还没有凭据。', 'No credentials yet. ')}
               <Link to="/credentials">{t('addCredential')}</Link>
@@ -132,11 +137,11 @@ export function DashboardPage() {
                   <QuotaWindows item={quotaById.get(c.id)} />
                 </div>
               ))}
-              {rankedFiles.length > DASHBOARD_TOP_N && (
+              {totalCreds > rankedFiles.length && (
                 <Link to="/credentials" className="list-row muted small" data-testid="creds-other">
-                  <span>{tr(`其他 (${rankedFiles.length - DASHBOARD_TOP_N})`, `Other (${rankedFiles.length - DASHBOARD_TOP_N})`)}</span>
+                  <span>{tr(`其他 (${totalCreds - rankedFiles.length})`, `Other (${totalCreds - rankedFiles.length})`)}</span>
                   <span>
-                    {tr('请求', 'requests')} {fmtCompact(rankedFiles.slice(DASHBOARD_TOP_N).reduce((a, c) => a + usageOf(c), 0))} →
+                    {tr('请求', 'requests')} {fmtCompact(Math.max(0, (totals?.request_count ?? 0) - rankedFiles.reduce((a, c) => a + usageOf(c), 0)))} →
                   </span>
                 </Link>
               )}

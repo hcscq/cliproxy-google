@@ -318,14 +318,21 @@ func (r *Runtime) repointEgress(ctx context.Context, id, from string, spec Egres
 }
 
 // pickEgress returns the least-loaded healthy egress (ties by name).
-func pickEgress(specs []EgressSpec, status map[string]*EgressStatus, counts map[string]int, allowPrimary bool) (EgressSpec, bool) {
+func pickEgress(specs []EgressSpec, status map[string]*EgressStatus, counts map[string]int, allowPrimary bool, maxPer ...int) (EgressSpec, bool) {
 	var best EgressSpec
 	found := false
+	limit := 0
+	if len(maxPer) > 0 {
+		limit = maxPer[0]
+	}
 	for _, s := range specs {
 		if s.Removed || (s.Primary && !allowPrimary) {
 			continue
 		}
 		if st := status[s.ProxyURL]; st != nil && !st.Healthy {
+			continue
+		}
+		if limit > 0 && counts[s.ProxyURL] >= limit {
 			continue
 		}
 		if !found || counts[s.ProxyURL] < counts[best.ProxyURL] || (counts[s.ProxyURL] == counts[best.ProxyURL] && s.Name < best.Name) {
@@ -436,7 +443,8 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 	}
 	auths := r.coreManager.ListLight(isAntigravity)
 	sort.Slice(auths, func(i, j int) bool { return auths[i].ID < auths[j].ID })
-	allowPrimary := r.EgressSettings(ctx).AllowPrimary
+	settings := r.EgressSettings(ctx)
+	allowPrimary, maxPer := settings.AllowPrimary, settings.MaxPerEgress
 	r.egress.mu.Lock()
 	refresh := now.Sub(r.egress.pinsAt) >= egressPinRefresh
 	if refresh {
@@ -464,7 +472,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 			continue
 		}
 		if pin.proxy == "" {
-			spec, ok := pickEgress(specs, status, counts, allowPrimary)
+			spec, ok := pickEgress(specs, status, counts, allowPrimary, maxPer)
 			if !ok {
 				continue // no healthy egress: leave unassigned, try next round
 			}
@@ -620,9 +628,28 @@ func (r *Runtime) EgressStatuses(ctx context.Context) ([]EgressStatus, error) {
 // PickEgressForImport returns the least-loaded healthy egress for a credential that is
 // being created (RT import), so its enrichment calls already use that egress.
 func (r *Runtime) PickEgressForImport(ctx context.Context, allowPrimary *bool) (EgressSpec, bool) {
+	spec, ok, _ := r.pickEgressForImport(ctx, allowPrimary)
+	return spec, ok
+}
+
+// egressCounts counts antigravity credentials pinned to each egress URL.
+func (r *Runtime) egressCounts() map[string]int {
+	counts := map[string]int{}
+	if r.coreManager != nil {
+		for _, a := range r.coreManager.ListLight(isAntigravity) {
+			if a.ProxyURL != "" {
+				counts[a.ProxyURL]++
+			}
+		}
+	}
+	return counts
+}
+
+// pickEgressForImport also reports whether the only obstacle was MaxPerEgress.
+func (r *Runtime) pickEgressForImport(ctx context.Context, allowPrimary *bool) (EgressSpec, bool, bool) {
 	specs := r.knownEgressSpecs(ctx)
 	if len(specs) == 0 {
-		return EgressSpec{}, false
+		return EgressSpec{}, false, false
 	}
 	status := map[string]*EgressStatus{}
 	if list, err := r.EgressStatuses(ctx); err == nil {
@@ -630,15 +657,14 @@ func (r *Runtime) PickEgressForImport(ctx context.Context, allowPrimary *bool) (
 			status[list[i].ProxyURL] = &list[i]
 		}
 	}
-	counts := map[string]int{}
-	if r.coreManager != nil {
-		for _, a := range r.coreManager.ListLight(isAntigravity) {
-			if isAntigravity(a) && a.ProxyURL != "" {
-				counts[a.ProxyURL]++
-			}
-		}
+	counts := r.egressCounts()
+	allow := r.allowPrimary(ctx, allowPrimary)
+	maxPer := r.EgressSettings(ctx).MaxPerEgress
+	if spec, ok := pickEgress(specs, status, counts, allow, maxPer); ok {
+		return spec, true, false
 	}
-	return pickEgress(specs, status, counts, r.allowPrimary(ctx, allowPrimary))
+	_, uncapped := pickEgress(specs, status, counts, allow)
+	return EgressSpec{}, false, uncapped && maxPer > 0
 }
 
 // --- per-credential HTTP clients (fail closed) ---
@@ -692,7 +718,10 @@ const EgressAuto = "auto"
 func (r *Runtime) ResolveEgress(ctx context.Context, choice string, allowPrimary *bool) (EgressSpec, bool, error) {
 	choice = strings.TrimSpace(choice)
 	if choice == "" || strings.EqualFold(choice, EgressAuto) {
-		spec, ok := r.PickEgressForImport(ctx, allowPrimary)
+		spec, ok, full := r.pickEgressForImport(ctx, allowPrimary)
+		if !ok && full {
+			return EgressSpec{}, false, ErrEgressFull(r.EgressSettings(ctx).MaxPerEgress)
+		}
 		if !ok && len(r.knownEgressSpecs(ctx)) > 0 {
 			return EgressSpec{}, false, NoEgressError(r.allowPrimary(ctx, allowPrimary))
 		}
@@ -702,6 +731,9 @@ func (r *Runtime) ResolveEgress(ctx context.Context, choice string, allowPrimary
 		if s.Name == choice || s.IP == choice || (s.PublicIP != "" && s.PublicIP == choice) {
 			if s.Removed {
 				return EgressSpec{}, false, fmt.Errorf("egress %q: IP removed", choice)
+			}
+			if max := r.EgressSettings(ctx).MaxPerEgress; max > 0 && r.egressCounts()[s.ProxyURL] >= max {
+				return EgressSpec{}, false, fmt.Errorf("出口 %s 已达到 %d 个凭据上限 (egress %q is full: max %d)", s.Name, max, s.Name, max)
 			}
 			return s, true, nil
 		}
@@ -759,6 +791,14 @@ func NoEgressError(allowPrimary bool) error {
 type EgressSettingsValue struct {
 	// AllowPrimary lets automatic assignment use node primary IPs (default off).
 	AllowPrimary bool `json:"allow_primary"`
+	// MaxPerEgress caps credentials per egress IP for new assignments
+	// (auto and explicit). 0 = unlimited. Existing pins are never moved.
+	MaxPerEgress int `json:"max_per_egress"`
+}
+
+// ErrEgressFull is returned when every eligible egress reached MaxPerEgress.
+func ErrEgressFull(max int) error {
+	return fmt.Errorf("所有可用出口均已达到每出口 %d 个凭据上限，请增加出口 IP 或调高上限 (all eligible egresses are full: max %d credentials per egress)", max, max)
 }
 
 const egressSettingsKV = "egress-settings"

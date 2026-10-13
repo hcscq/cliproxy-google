@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -116,7 +117,7 @@ func ensureCredentialCallStatTables(ctx context.Context, db *gorm.DB) error {
 				return err
 			}
 		}
-		return nil
+		return partitionCallStatTables(ctx, db)
 	}
 	return tx.AutoMigrate(&CredentialCallStatRecord{}, &CredentialModelStatRecord{}, &CredentialCallStatState{})
 }
@@ -249,6 +250,9 @@ func (r *Repository) PruneCredentialCallStats(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if handled, err := maintainCallStatPartitions(ctx, db); err != nil || handled {
+		return err
+	}
 	cut := time.Now().UTC().Add(-callStatRetention)
 	if err := db.WithContext(ctx).Where("bucket < ?", cut).Delete(&CredentialCallStatRecord{}).Error; err != nil {
 		return err
@@ -276,7 +280,54 @@ func (s *CredentialCallStats) add(class string, n int64) {
 }
 
 // LoadCredentialCallStats sums buckets since the given time for all credentials.
+// callStatsCache memoizes window sums for callStatsCacheTTL: the panel list and
+// search poll this, and at thousands of credentials the GROUP BY scans
+// credentials x buckets rows. Rollups only advance every 30s anyway.
+var callStatsCache struct {
+	sync.Mutex
+	entries map[callStatsCacheKey]callStatsCacheEntry
+}
+
+type callStatsCacheKey struct {
+	repo  *Repository
+	since int64
+}
+
+type callStatsCacheEntry struct {
+	at  time.Time
+	val map[string]*CredentialCallStats
+}
+
+const callStatsCacheTTL = 30 * time.Second
+
 func (r *Repository) LoadCredentialCallStats(ctx context.Context, since time.Time) (map[string]*CredentialCallStats, error) {
+	key := callStatsCacheKey{r, since.UTC().Truncate(CallStatBucket).Unix()}
+	callStatsCache.Lock()
+	if e, ok := callStatsCache.entries[key]; ok && time.Since(e.at) < callStatsCacheTTL {
+		callStatsCache.Unlock()
+		return e.val, nil
+	}
+	callStatsCache.Unlock()
+	out, err := r.loadCredentialCallStats(ctx, since)
+	if err != nil {
+		return nil, err
+	}
+	callStatsCache.Lock()
+	if callStatsCache.entries == nil {
+		callStatsCache.entries = map[callStatsCacheKey]callStatsCacheEntry{}
+	}
+	now := time.Now()
+	for k, e := range callStatsCache.entries { // bounded: drop expired windows
+		if now.Sub(e.at) >= callStatsCacheTTL {
+			delete(callStatsCache.entries, k)
+		}
+	}
+	callStatsCache.entries[key] = callStatsCacheEntry{at: now, val: out}
+	callStatsCache.Unlock()
+	return out, nil
+}
+
+func (r *Repository) loadCredentialCallStats(ctx context.Context, since time.Time) (map[string]*CredentialCallStats, error) {
 	db, err := r.database()
 	if err != nil {
 		return nil, err
