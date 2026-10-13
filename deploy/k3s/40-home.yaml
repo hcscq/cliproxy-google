@@ -57,7 +57,9 @@ spec:
       initContainers:
         # Home reads ./cluster.yaml from its working directory; copy it from the Secret.
         - name: copy-cluster-yaml
-          image: busybox:1.36
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-38cd5dfc84b9bb857be3f98b2473e66558779211  # has sh; matches live
+          env:
+            - {name: HOME_REDIS_ENABLED, value: "true"}
           command: ["sh", "-c", "cp /tmpl/cluster.yaml.tmpl /work/cluster.yaml && chmod 600 /work/cluster.yaml"]
           securityContext:
             readOnlyRootFilesystem: true
