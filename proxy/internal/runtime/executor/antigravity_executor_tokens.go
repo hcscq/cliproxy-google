@@ -77,6 +77,7 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 	payload = helps.DeleteJSONField(payload, "request.toolConfig")
 	payload = helps.DeleteJSONField(payload, "request.labels")
 	payload = helps.DeleteJSONField(payload, "request.sessionId")
+	payload = foldAntigravityCountTokensPayload(payload)
 
 	base := resolveAntigravityRequestBaseURL(auth)
 	httpClient := newAntigravityHTTPClient(ctx, e.cfg, auth, 0)
