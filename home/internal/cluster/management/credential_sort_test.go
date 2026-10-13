@@ -44,7 +44,7 @@ func TestSortCredentials(t *testing.T) {
 		{sortEgress, false, "cab"},
 	}
 	for _, tc := range cases {
-		sortCredentials(list, tc.key, tc.desc, nil, stats, nil)
+		sortCredentials(list, tc.key, tc.desc, nil, stats, nil, nil)
 		if got := ids(list); got != tc.want {
 			t.Errorf("%s desc=%v = %s, want %s", tc.key, tc.desc, got, tc.want)
 		}
@@ -54,8 +54,25 @@ func TestSortCredentials(t *testing.T) {
 func TestSortCredentialsBySuccess(t *testing.T) {
 	list := []*coreauth.Auth{{ID: "a"}, {ID: "b"}, {ID: "c"}}
 	calls := map[string]*cluster.CredentialCallStats{"a": {Calls: 10, OK: 9}, "b": {Calls: 10, OK: 5}}
-	sortCredentials(list, sortSuccess, false, nil, cluster.CredentialSortStats{}, calls)
+	sortCredentials(list, sortSuccess, false, nil, cluster.CredentialSortStats{}, calls, nil)
 	if list[0].ID != "b" || list[1].ID != "a" || list[2].ID != "c" {
 		t.Fatalf("got %s %s %s", list[0].ID, list[1].ID, list[2].ID)
+	}
+}
+
+func TestSortCredentialsBySeqAndParse(t *testing.T) {
+	list := []*coreauth.Auth{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	sortCredentials(list, sortSeq, false, nil, cluster.CredentialSortStats{}, nil, map[string]int64{"a": 3, "b": 1, "c": 2})
+	if list[0].ID != "b" || list[1].ID != "c" || list[2].ID != "a" {
+		t.Fatalf("got %s %s %s", list[0].ID, list[1].ID, list[2].ID)
+	}
+	if n, only := parseSeqQuery("#12"); n != 12 || !only {
+		t.Fatal("#12")
+	}
+	if n, only := parseSeqQuery("12"); n != 12 || only {
+		t.Fatal("12")
+	}
+	if n, _ := parseSeqQuery("abc"); n != 0 {
+		t.Fatal("abc")
 	}
 }

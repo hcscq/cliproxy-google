@@ -211,7 +211,7 @@ export function probeLine(m: ModelCooldown, tr: ReturnType<typeof useI18n>["tr"]
 // checkbox, ID, account, groups, provider, status, quota, priority, created, last used, enabled
 const CRED_COLUMNS: FlexCol[] = [
   { min: 36 },
-  { min: 92, max: 104, weight: 0.2 },
+  { min: 60, max: 72 },
   { min: 140, max: 280, weight: 2 },
   { min: 80, max: 140, weight: 0.6 },
   { min: 112, max: 130, weight: 0.3 },
@@ -226,11 +226,11 @@ const CRED_COLUMNS: FlexCol[] = [
 
 type CredSort = { sort: CredentialSortKey; order: "asc" | "desc" };
 const CRED_SORT_KEY = "cred-sort";
-const SORT_KEYS: CredentialSortKey[] = ["created", "name", "status", "quota", "last_used", "egress", "success"];
+const SORT_KEYS: CredentialSortKey[] = ["seq", "created", "name", "status", "quota", "last_used", "egress", "success"];
 const STATS_WINDOW_KEY = "cred-stats-window";
 /** Default direction per key: newest / most recent first, otherwise ascending. */
 export const defaultOrder = (k: CredentialSortKey): "asc" | "desc" =>
-  k === "created" || k === "last_used" ? "desc" : "asc";
+  k === "created" || k === "last_used" || k === "seq" ? "desc" : "asc";
 
 /** URL (?sort=&order=) wins, then localStorage, then created/desc. */
 export function loadCredSort(search: string, stored: string | null): CredSort {
@@ -603,7 +603,9 @@ export function CredentialsPage() {
               <thead>
                 <tr>
                   <th style={{ width: 28 }} />
-                  <th>ID</th>
+                  <th>
+                    <SortTh k="seq" cur={sort} onSort={onSort}>ID</SortTh>
+                  </th>
                   <th>
                     <SortTh k="name" cur={sort} onSort={onSort}>{tr("账号", "Account")}</SortTh>
                   </th>
@@ -647,8 +649,8 @@ export function CredentialsPage() {
                       />
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
-                      <CopyText value={c.id} done={tr("已复制 ID", "ID copied")} className="mono">
-                        {c.id.slice(0, 8)}
+                      <CopyText value={c.id} title={c.id} done={tr("已复制 ID", "ID copied")} className="mono">
+                        {c.seq ? `#${c.seq}` : c.id.slice(0, 8)}
                       </CopyText>
                     </td>
                     <td>
@@ -1125,7 +1127,7 @@ function CredentialDrawer({
 
         <dl className="kv small">
           <dt>ID</dt>
-          <dd className="mono">{cred.id}</dd>
+          <dd className="mono">{cred.seq ? `#${cred.seq} · ` : ""}{cred.id}</dd>
           <dt>{tr("文件名", "File")}</dt>
           <dd className="mono">{cred.name}</dd>
           <dt>{tr("来源", "Source")}</dt>

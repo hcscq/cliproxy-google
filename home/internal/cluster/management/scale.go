@@ -185,6 +185,8 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 	var matched []*coreauth.Auth
 	statusOf := map[string]string{}
 	all := h.liveAuths(ctx)
+	seqs, _ := h.repo.AuthSeqs(ctx)
+	seqQ, seqOnly := parseSeqQuery(f.q)
 	for _, a := range all {
 		st := credentialStatus(a, now)
 		statusOf[a.ID] = st
@@ -196,7 +198,13 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		for _, t := range cluster.CredentialTags(a) {
 			facets["tag"][t]++
 		}
-		if f.match(a, st, groupsOf[a.ID], excluded) {
+		fa := f
+		if seqQ > 0 && seqs[a.ID] == seqQ {
+			fa.q = "" // "#N" / "N" hits the sequence number exactly
+		} else if seqOnly {
+			continue
+		}
+		if fa.match(a, st, groupsOf[a.ID], excluded) {
 			matched = append(matched, a)
 		}
 	}
@@ -212,7 +220,7 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 	stats := h.credentialSortStats(ctx, all)
 	window, windowDur := callStatWindow(c.Query("stats_window"))
 	calls := h.credentialCallStats(ctx, window, windowDur)
-	sortCredentials(matched, sortKey, desc, statusOf, stats, calls)
+	sortCredentials(matched, sortKey, desc, statusOf, stats, calls, seqs)
 	page, size := pageParams(c, 50, 500)
 	start := (page - 1) * size
 	items := make([]gin.H, 0, size)
@@ -228,6 +236,9 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		e["tags"] = cluster.CredentialTags(a)
 		e["group_ids"] = nonNilUints(groupsOf[a.ID])
 		e["state"] = statusOf[a.ID]
+		if n := seqs[a.ID]; n > 0 {
+			e["seq"] = n
+		}
 		items = append(items, e)
 	}
 	h.annotateQuotaProbes(c.Request.Context(), items)
@@ -889,4 +900,15 @@ func coolingModelCount(a *coreauth.Auth, now time.Time) int {
 		}
 	}
 	return n
+}
+
+// parseSeqQuery recognizes "#N" (sequence only) and bare "N" (sequence or text).
+func parseSeqQuery(q string) (int64, bool) {
+	q = strings.TrimSpace(q)
+	only := strings.HasPrefix(q, "#")
+	n, err := strconv.ParseInt(strings.TrimPrefix(q, "#"), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, only
 }

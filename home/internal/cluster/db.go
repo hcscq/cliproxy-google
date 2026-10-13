@@ -1161,6 +1161,9 @@ func ensureExtraTables(ctx context.Context, db *gorm.DB) error {
 }
 
 func ensureExtraTablesUnlocked(ctx context.Context, db *gorm.DB) error {
+	if err := ensureAuthSeq(ctx, db); err != nil {
+		return err
+	}
 	if err := ensureModelHealthTable(ctx, db); err != nil {
 		return err
 	}

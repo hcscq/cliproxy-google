@@ -1035,7 +1035,7 @@ export interface CredentialQuery {
   /** call-stats window (default 24h) */
   stats_window?: StatsWindow;
 }
-export type CredentialSortKey = 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress' | 'success';
+export type CredentialSortKey = 'seq' | 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress' | 'success';
 export type CredentialState = 'ok' | 'cooling' | 'error' | 'disabled';
 export type StatsWindow = '1h' | '24h' | '7d';
 export interface CallStats {
@@ -1044,7 +1044,7 @@ export interface CallStats {
   /** error class -> count: 429 | 503 | 403 | 404 | 400 | 5xx | net | cancel | other */
   by_class?: Record<string, number>;
 }
-export type CredentialSearchItem = Credential & { tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
+export type CredentialSearchItem = Credential & { seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
 export interface CredentialSearch {
   items: CredentialSearchItem[];
   total: number;
