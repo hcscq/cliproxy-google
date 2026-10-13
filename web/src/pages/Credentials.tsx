@@ -234,6 +234,39 @@ export function loadCredSort(search: string, stored: string | null): CredSort {
   return { sort: "created", order: "desc" };
 }
 
+/** Click-to-copy text (same affordance as the ID cell); never opens the row drawer. */
+export function CopyText({
+  value,
+  done,
+  title,
+  className,
+  testId,
+  children,
+}: {
+  value: string;
+  done: string;
+  title?: string;
+  className?: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  const { tr } = useI18n();
+  const { toast } = useUi();
+  return (
+    <span
+      className={`id-cell ${className ?? ""}`}
+      title={`${title ?? value}\n${tr("点击复制", "Click to copy")}`}
+      data-testid={testId}
+      onClick={(e) => {
+        e.stopPropagation();
+        void navigator.clipboard?.writeText(value).then(() => toast(done));
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 function SortTh({
   k,
   cur,
@@ -590,17 +623,9 @@ export function CredentialsPage() {
                       />
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
-                      <span
-                        className="mono id-cell"
-                        title={`${c.id}\n${tr("点击复制", "Click to copy")}`}
-                        onClick={() =>
-                          void navigator.clipboard
-                            ?.writeText(c.id)
-                            .then(() => toast(tr("已复制 ID", "ID copied")))
-                        }
-                      >
+                      <CopyText value={c.id} done={tr("已复制 ID", "ID copied")} className="mono">
                         {c.id.slice(0, 8)}
-                      </span>
+                      </CopyText>
                     </td>
                     <td>
                       <div
@@ -612,7 +637,14 @@ export function CredentialsPage() {
                           .filter(Boolean)
                           .join("\n")}
                       >
-                        {c.label || c.email || c.name}
+                        <CopyText
+                          value={c.email || c.label || c.name}
+                          done={tr("已复制账号", "Account copied")}
+                          title={[c.email || c.label || c.name, c.note && `${tr("备注", "Note")}: ${c.note}`].filter(Boolean).join("\n")}
+                          testId="copy-account"
+                        >
+                          {c.label || c.email || c.name}
+                        </CopyText>
                         {c.note && <span className="faint small"> · 📝</span>}
                       </div>
                     </td>
