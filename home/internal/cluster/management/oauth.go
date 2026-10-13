@@ -738,6 +738,9 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 		"proxy_url":      proxyURLFromAuth(auth),
 		"websockets":     websocketsFromAuth(auth),
 	}
+	if health := coreauth.ClusterHealth().Status(auth.ID); len(health) > 0 {
+		entry["health"] = health
+	}
 	if email := stringFromAny(auth.Metadata["email"]); email != "" {
 		entry["email"] = email
 	}

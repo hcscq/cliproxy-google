@@ -284,12 +284,12 @@ func (t *antigravityAttemptTimer) penalty(parent context.Context, auth *cliproxy
 	now := time.Now()
 	key := antigravityHealthKey(auth.ID, model)
 	if t.timedOut.Load() {
-		cd := antigravityHealth.slow(key, now, s)
+		cd := antigravityLocalSlow(key, now, s)
 		log.Warnf("antigravity executor: no response within %s (auth=%s model=%s), switching credential; quarantine=%s", t.limit, auth.ID, model, cd)
 		return antigravityTTFBTimeoutErr(model, t.limit, cd)
 	}
 	if parent.Err() != nil && s.slow > 0 && now.Sub(t.started) >= s.slow {
-		if cd := antigravityHealth.slow(key, now, s); cd > 0 {
+		if cd := antigravityLocalSlow(key, now, s); cd > 0 {
 			_ = markAntigravityShortCooldownRequired(context.Background(), auth, model, now, cd)
 		}
 	}
@@ -304,4 +304,14 @@ func antigravityCapacityErr(auth *cliproxyauth.Auth, model string, s antigravity
 		err.retryAfter = &cd
 	}
 	return err
+}
+
+// antigravityLocalSlow records a slow event in the pod-local tracker. In Home
+// mode, Home tracks slow events cluster-wide and decides the quarantine, so the
+// pod-local tracker stays out (returns 0).
+func antigravityLocalSlow(key string, now time.Time, s antigravityHealthSettings) time.Duration {
+	if _, homeMode, _ := currentAntigravityKVClient(); homeMode {
+		return 0
+	}
+	return antigravityHealth.slow(key, now, s)
 }

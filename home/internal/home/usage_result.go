@@ -42,5 +42,9 @@ func (r *Runtime) RecordUsagePayload(ctx context.Context, payload string) {
 
 	result := coreauth.NewUsageResult(authIndex, provider, model, statusCode, body)
 	result.AccessTokenSHA256 = strings.TrimSpace(gjson.Get(payload, "access_token_sha256").String())
+	if strings.EqualFold(provider, "antigravity") {
+		applyClusterHealth(ctx, r.coreManager.HealthAuthID(result), model, statusCode, body,
+			gjson.Get(payload, "ttft_ms").Int(), gjson.Get(payload, "latency_ms").Int(), &result)
+	}
 	r.coreManager.MarkResult(ctx, result)
 }

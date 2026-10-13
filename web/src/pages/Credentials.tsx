@@ -49,6 +49,23 @@ import { AddCredentialModal } from "./AddCredential";
 import { AllowPrimaryToggle, EgressSelect, useEgressSettings, egressIP, egressNode, egressRole, egressState, useEgressList } from "../components/EgressSelect";
 import { GroupChecklist, useGroupLookup } from "./Groups";
 
+export function healthBadges(c: Credential) {
+  if (!c.health || c.health.length === 0) return null;
+  return (
+    <>
+      {c.health.map((h) => (
+        <span
+          key={h.family}
+          style={{ marginLeft: 4 }}
+          title={`${h.family} · TTFB ${(h.ttfb_ms / 1000).toFixed(1)}s · fail ${(h.fail_ratio * 100).toFixed(0)}% · weight ${(h.weight * 100).toFixed(0)}%`}
+        >
+          <Badge kind={h.state === "降级" ? "err" : "warn"}>{`${h.label} ${h.state}`}</Badge>
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function credentialStatus(
   c: Credential,
   t: ReturnType<typeof useI18n>["t"],
@@ -702,7 +719,7 @@ export function CredentialsPage() {
                         className="cell-status"
                         title={statusTooltip(c, tr)}
                       >
-                        {credentialStatus(c, t, tr)}
+                        {credentialStatus(c, t, tr)}{healthBadges(c)}
                       </span>
                       {c.egress_ip && (() => {
                         const eg = egress.data?.items?.find((e) => e.name === c.egress_id);
@@ -1098,7 +1115,7 @@ function CredentialDrawer({
       <div className="stack">
         <div className="row">
           <Badge kind="primary">{cred.provider}</Badge>
-          {credentialStatus(cred, t, tr)}
+          {credentialStatus(cred, t, tr)}{healthBadges(cred)}
           <QuotaStatusBadge item={quota} />
         </div>
         {cred.credential_scope_error && cred.status_message && (

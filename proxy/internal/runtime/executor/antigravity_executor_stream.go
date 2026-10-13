@@ -168,12 +168,12 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	slowFailure := func(cause error) error {
 		now := time.Now()
 		if ttfbTimedOut.Load() {
-			cd := antigravityHealth.slow(healthKey, now, health)
+			cd := antigravityLocalSlow(healthKey, now, health)
 			log.Warnf("antigravity executor: no first byte within %s (auth=%s model=%s), switching credential; quarantine=%s", ttfbLimit, auth.ID, baseModel, cd)
 			return antigravityTTFBTimeoutErr(baseModel, ttfbLimit, cd)
 		}
 		if ctx.Err() != nil && health.slow > 0 && now.Sub(attemptStarted) >= health.slow {
-			if cd := antigravityHealth.slow(healthKey, now, health); cd > 0 {
+			if cd := antigravityLocalSlow(healthKey, now, health); cd > 0 {
 				log.Warnf("antigravity executor: client left after %s without first byte (auth=%s model=%s); quarantine=%s", now.Sub(attemptStarted).Round(time.Second), auth.ID, baseModel, cd)
 				_ = markAntigravityShortCooldownRequired(context.Background(), auth, baseModel, now, cd)
 			}

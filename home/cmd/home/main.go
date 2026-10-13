@@ -447,6 +447,7 @@ func run() int {
 			defer redisClient.Close()
 		}
 	}
+	go coreauth.ClusterHealth().Run(runCtx)
 	if errStart := rt.Start(runCtx, configPath); errStart != nil {
 		log.Errorf("failed to start runtime: %v", errStart)
 		return 1

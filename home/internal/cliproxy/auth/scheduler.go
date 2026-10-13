@@ -1125,11 +1125,28 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	if preferWebsocket && bucket.ws.pickFirst(predicate) != nil {
 		view = &bucket.ws
 	}
-	var picked *scheduledAuth
-	if strategy == schedulerStrategyFillFirst {
-		picked = view.pickFirst(predicate)
-	} else {
-		picked = view.pickRoundRobin(predicate)
+	pick := func(pred func(*scheduledAuth) bool) *scheduledAuth {
+		if strategy == schedulerStrategyFillFirst {
+			return view.pickFirst(pred)
+		}
+		return view.pickRoundRobin(pred)
+	}
+	// Soft health weighting: degraded (credential, model-family) pairs are
+	// admitted with probability = weight (>= probe floor); when every
+	// candidate is declined, fall back to the plain predicate.
+	health := ClusterHealth()
+	modelKey := m.modelKey
+	picked := pick(func(entry *scheduledAuth) bool {
+		if predicate != nil && !predicate(entry) {
+			return false
+		}
+		if entry.auth == nil {
+			return true
+		}
+		return health.Admit(entry.auth.ID, modelKey)
+	})
+	if picked == nil {
+		picked = pick(predicate)
 	}
 	if picked == nil || picked.auth == nil {
 		return nil

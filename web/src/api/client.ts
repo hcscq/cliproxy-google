@@ -641,8 +641,19 @@ export function coolingModels(c: Credential): ModelCooldown[] {
   return (c.model_cooldowns ?? []).filter((m) => m.cooling);
 }
 
+export interface CredentialHealth {
+  family: string;
+  label: string;
+  state: string;
+  weight: number;
+  ttfb_ms: number;
+  fail_ratio: number;
+}
+
 export interface Credential {
   id: string;
+  /** Degraded (credential, model-family) pairs, cluster-wide. */
+  health?: CredentialHealth[];
   auth_index: string;
   name: string;
   file_name?: string;

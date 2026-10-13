@@ -1167,3 +1167,6 @@ func isCapacityResultError(err *Error) bool {
 	msg := strings.ToLower(err.Message)
 	return strings.Contains(msg, "model_capacity_exhausted") || strings.Contains(msg, "no capacity available")
 }
+
+// HealthAuthID resolves the credential ID of a usage result.
+func (m *Manager) HealthAuthID(result Result) string { return m.resultAuthID(result) }
