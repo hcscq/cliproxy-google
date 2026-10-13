@@ -1335,6 +1335,7 @@ export interface EgressStatus {
 }
 export interface EgressMove {
   credential_id: string;
+  seq?: number;
   label: string;
   from: string;
   from_ip: string;

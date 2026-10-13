@@ -1830,7 +1830,7 @@ function EgressStrip({
               <tbody>
                 {plan.map((m) => (
                   <tr key={m.credential_id}>
-                    <td>{m.label || m.credential_id.slice(0, 8)}</td>
+                    <td>{m.seq ? <span className="mono faint">#{m.seq} </span> : null}{m.label || m.credential_id.slice(0, 8)}</td>
                     <td className="mono small">{m.from_ip}</td>
                     <td className="mono small">{m.to_ip}</td>
                   </tr>

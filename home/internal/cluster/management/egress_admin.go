@@ -14,6 +14,7 @@ import (
 // EgressMove is one planned credential move.
 type EgressMove struct {
 	CredentialID string `json:"credential_id"`
+	Seq          int64  `json:"seq,omitempty"`
 	Label        string `json:"label"`
 	From         string `json:"from"`
 	FromIP       string `json:"from_ip"`
@@ -115,6 +116,11 @@ func (h *Handler) RebalanceEgress(c *gin.Context) {
 		allow = *body.AllowPrimary
 	}
 	moves := planEgressRebalance(items, auths, allow)
+	if seqs, err := h.repo.AuthSeqs(ctx); err == nil {
+		for i := range moves {
+			moves[i].Seq = seqs[moves[i].CredentialID]
+		}
+	}
 	if dry || len(moves) == 0 {
 		c.JSON(http.StatusOK, gin.H{"dry_run": dry, "moves": nonNilMoves(moves)})
 		return
