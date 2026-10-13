@@ -530,6 +530,14 @@ func equalStringSlices(left []string, right []string) bool {
 	return true
 }
 
+var redundantUsageIndexes = []string{
+	"idx_usage_cpa_node_id", "idx_usage_event_type", "idx_usage_event_time",
+	"idx_usage_auth_index", "idx_usage_failed", "idx_usage_home_ip",
+	"idx_usage_source", "idx_usage_endpoint", "idx_usage_provider_model",
+	"idx_usage_cpa_ip", "idx_usage_cpa_label", "idx_usage_token_accounting_version",
+	"idx_usage_upstream_request_id", "idx_usage_upstream_status_code",
+}
+
 func migrateUsageObservabilityIndexes(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
@@ -541,6 +549,12 @@ func migrateUsageObservabilityIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_cpa_node_time ON "usage" ("cpa_node_id", "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_home_port_time ON "usage" ("home_ip", "home_port", "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_quota_activity ON "usage" ("quota_credential_id", "quota_identity_version", "quota_identity_key", "created_at" DESC) WHERE "quota_credential_id" <> '' AND "quota_identity_version" > 0 AND "quota_identity_key" <> ''`,
+	}
+	// Redundant (duplicate or leftmost prefix of a composite index) or
+	// never-queried usage indexes. Each costs a write per row on the hottest
+	// table; dropping on the partitioned parent drops every partition's copy.
+	for _, name := range redundantUsageIndexes {
+		statements = append(statements, `DROP INDEX IF EXISTS `+name)
 	}
 	for _, statement := range statements {
 		if errExec := db.Exec(statement).Error; errExec != nil {

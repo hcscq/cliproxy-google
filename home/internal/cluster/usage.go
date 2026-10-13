@@ -28,8 +28,8 @@ type UsageRecord struct {
 	Timestamp time.Time `gorm:"column:timestamp;not null;index:idx_usage_timestamp;index:idx_usage_time_order,priority:1,sort:desc;index:idx_usage_source_time,priority:2,sort:desc;index:idx_usage_auth_time,priority:2,sort:desc;index:idx_usage_failed_time,priority:2,sort:desc;index:idx_usage_failed_status_time,priority:3,sort:desc;index:idx_usage_provider_model_time,priority:3,sort:desc;index:idx_usage_provider_time,priority:2,sort:desc;index:idx_usage_endpoint_time,priority:2,sort:desc;index:idx_usage_home_time,priority:2,sort:desc;index:idx_usage_auth_type_time,priority:2,sort:desc;index:idx_usage_session_time,priority:2,sort:desc;index:idx_usage_parent_session_time,priority:2,sort:desc;index:idx_usage_root_session_time,priority:2,sort:desc"`
 	LatencyMS int64     `gorm:"column:latency_ms;not null;default:0"`
 	TTFTMS    int64     `gorm:"column:ttft_ms;not null;default:0"`
-	Source    string    `gorm:"column:source;index:idx_usage_source;index:idx_usage_source_time,priority:1"`
-	AuthIndex string    `gorm:"column:auth_index;index:idx_usage_auth_index;index:idx_usage_auth_time,priority:1"`
+	Source    string    `gorm:"column:source;index:idx_usage_source_time,priority:1"`
+	AuthIndex string    `gorm:"column:auth_index;index:idx_usage_auth_time,priority:1"`
 	// Quota identity fields fence activity from concurrent credential replacement;
 	// the key also protects rolling upgrades where an older Home cannot advance the generation.
 	QuotaCredentialID    string `gorm:"column:quota_credential_id;not null;default:''"`
@@ -45,7 +45,7 @@ type UsageRecord struct {
 	CacheReadTokensPresent     bool   `gorm:"column:cache_read_tokens_present;not null;default:false"`
 	CacheCreationTokens        int64  `gorm:"column:cache_creation_tokens;not null;default:0"`
 	TotalTokens                int64  `gorm:"column:total_tokens;not null;default:0"`
-	TokenAccountingVersion     int    `gorm:"column:token_accounting_version;not null;default:0;index:idx_usage_token_accounting_version"`
+	TokenAccountingVersion     int    `gorm:"column:token_accounting_version;not null;default:0"`
 	TokenAccountingQuality     string `gorm:"column:token_accounting_quality;not null;default:'unclassified'"`
 	AccountingTotalTokens      int64  `gorm:"column:accounting_total_tokens;not null;default:0"`
 	AccountingInputTokens      int64  `gorm:"column:accounting_input_tokens;not null;default:0"`
@@ -56,14 +56,14 @@ type UsageRecord struct {
 	NonReasoningOutputTokens   int64  `gorm:"column:non_reasoning_output_tokens;not null;default:0"`
 	AccountingReasoningTokens  int64  `gorm:"column:accounting_reasoning_tokens;not null;default:0"`
 	UnclassifiedTokens         int64  `gorm:"column:unclassified_tokens;not null;default:0"`
-	Failed                     bool   `gorm:"column:failed;not null;default:false;index:idx_usage_failed;index:idx_usage_failed_time,priority:1;index:idx_usage_failed_status_time,priority:1"`
+	Failed                     bool   `gorm:"column:failed;not null;default:false;index:idx_usage_failed_time,priority:1;index:idx_usage_failed_status_time,priority:1"`
 	FailStatusCode             int    `gorm:"column:fail_status_code;not null;default:0;index:idx_usage_failed_status_time,priority:2"`
 	FailBody                   string `gorm:"column:fail_body;type:text"`
 	FailBodyTruncated          bool   `gorm:"column:fail_body_truncated;not null;default:false"`
 	FailBodySize               int    `gorm:"column:fail_body_size;not null;default:0"`
-	Provider                   string `gorm:"column:provider;index:idx_usage_provider_model,priority:1;index:idx_usage_provider_model_time,priority:1;index:idx_usage_provider_time,priority:1"`
+	Provider                   string `gorm:"column:provider;index:idx_usage_provider_model_time,priority:1;index:idx_usage_provider_time,priority:1"`
 	ExecutorType               string `gorm:"column:executor_type"`
-	Model                      string `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
+	Model                      string `gorm:"column:model;index:idx_usage_provider_model_time,priority:2"`
 	Alias                      string `gorm:"column:alias"`
 	Effort                     string `gorm:"column:effort"`
 	ThinkingParams             string `gorm:"column:thinking_params"`
@@ -73,22 +73,22 @@ type UsageRecord struct {
 	StreamID            string    `gorm:"column:stream_id"`
 	ServiceTier         string    `gorm:"column:service_tier"`
 	ResponseServiceTier string    `gorm:"column:response_service_tier"`
-	Endpoint            string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
+	Endpoint            string    `gorm:"column:endpoint;index:idx_usage_endpoint_time,priority:1"`
 	AuthType            string    `gorm:"column:auth_type;index:idx_usage_auth_type_time,priority:1"`
 	APIKey              string    `gorm:"column:api_key;index:idx_usage_api_key"`
 	RequestID           string    `gorm:"column:request_id;index:idx_usage_request_id"`
 	SessionID           string    `gorm:"column:session_id;index:idx_usage_session_time,priority:1"`
 	ParentSessionID     string    `gorm:"column:parent_session_id;index:idx_usage_parent_session_time,priority:1"`
 	RootSessionID       string    `gorm:"column:root_session_id;index:idx_usage_root_session_time,priority:1"`
-	UpstreamRequestID   string    `gorm:"column:upstream_request_id;index:idx_usage_upstream_request_id"`
-	EventType           string    `gorm:"column:event_type;index:idx_usage_event_type;index:idx_usage_event_time,priority:1"`
-	UpstreamStatusCode  int       `gorm:"column:upstream_status_code;not null;default:0;index:idx_usage_upstream_status_code"`
-	HomeIP              string    `gorm:"column:home_ip;index:idx_usage_home_ip;index:idx_usage_home_time,priority:1;index:idx_usage_home_port_time,priority:1"`
+	UpstreamRequestID   string    `gorm:"column:upstream_request_id"`
+	EventType           string    `gorm:"column:event_type"`
+	UpstreamStatusCode  int       `gorm:"column:upstream_status_code;not null;default:0"`
+	HomeIP              string    `gorm:"column:home_ip;index:idx_usage_home_time,priority:1;index:idx_usage_home_port_time,priority:1"`
 	HomePort            int       `gorm:"column:home_port;not null;default:0;index:idx_usage_home_port_time,priority:2"`
-	CPANodeID           string    `gorm:"column:cpa_node_id;index:idx_usage_cpa_node_id;index:idx_usage_cpa_node_time,priority:1"`
-	CPAIP               string    `gorm:"column:cpa_ip;index:idx_usage_cpa_ip"`
+	CPANodeID           string    `gorm:"column:cpa_node_id;index:idx_usage_cpa_node_time,priority:1"`
+	CPAIP               string    `gorm:"column:cpa_ip"`
 	CPAPort             int       `gorm:"column:cpa_port;not null;default:0"`
-	CPALabel            string    `gorm:"column:cpa_label;index:idx_usage_cpa_label"`
+	CPALabel            string    `gorm:"column:cpa_label"`
 	TokensJSON          JSONB     `gorm:"column:tokens"`
 	FailJSON            JSONB     `gorm:"column:fail"`
 	PayloadJSON         JSONB     `gorm:"column:payload;not null"`
