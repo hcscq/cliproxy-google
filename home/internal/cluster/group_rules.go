@@ -234,7 +234,14 @@ func ensureChannelGroupRuleTable(ctx context.Context, db *gorm.DB) error {
 	if tx.Migrator().HasTable(&ChannelGroupRuleRecord{}) {
 		return nil
 	}
-	return tx.Migrator().CreateTable(&ChannelGroupRuleRecord{})
+	if err := tx.Migrator().CreateTable(&ChannelGroupRuleRecord{}); err != nil {
+		// Concurrent Home starters can race HasTable/CreateTable on a fresh DB.
+		if tx.Migrator().HasTable(&ChannelGroupRuleRecord{}) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // ParsedRule decodes the stored rule.

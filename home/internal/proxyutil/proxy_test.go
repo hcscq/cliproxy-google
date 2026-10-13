@@ -35,6 +35,11 @@ func TestSOCKSTransportDialContextHonorsCancellation(t *testing.T) {
 	defer cancelDeadline()
 	startedAt := time.Now()
 	_, errDial := transport.DialContext(deadlineCtx, "tcp", "example.com:443")
+	// The conn deadline can fire a hair before the context timer; allow it to land.
+	select {
+	case <-deadlineCtx.Done():
+	case <-time.After(200 * time.Millisecond):
+	}
 	if errDial == nil || !errors.Is(deadlineCtx.Err(), context.DeadlineExceeded) {
 		t.Fatalf("DialContext() error/context = %v/%v, want cancellation at deadline", errDial, deadlineCtx.Err())
 	}

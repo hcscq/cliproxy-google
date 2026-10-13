@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -19,14 +20,41 @@ func (r *Repository) LoadCredentialSortStats(ctx context.Context, ids []string, 
 	if err != nil {
 		return out, err
 	}
-	for _, id := range ids {
-		var row struct{ Last *string }
-		if err := db.WithContext(ctx).Raw(`SELECT CAST(MAX(timestamp) AS TEXT) AS last FROM usage WHERE auth_index = ? AND timestamp > ?`, id, since).Scan(&row).Error; err != nil {
-			return out, err
+	if db.Dialector.Name() == "postgres" {
+		// One round trip: a per-id index probe (auth_index, timestamp DESC)
+		// instead of N queries (10k credentials = 10k round trips).
+		for start := 0; start < len(ids); start += 5000 {
+			end := start + 5000
+			if end > len(ids) {
+				end = len(ids)
+			}
+			var rows []struct {
+				ID   string
+				Last *string
+			}
+			if err := db.WithContext(ctx).Raw(`SELECT x.id, CAST(l.last AS TEXT) AS last FROM unnest(CAST(? AS text[])) AS x(id)
+				CROSS JOIN LATERAL (SELECT MAX(u.timestamp) AS last FROM usage u WHERE u.auth_index = x.id AND u.timestamp > ?) l`,
+				pgTextArray(ids[start:end]), since).Scan(&rows).Error; err != nil {
+				return out, err
+			}
+			for _, row := range rows {
+				if row.Last != nil {
+					if t, ok := parseDBTime(*row.Last); ok {
+						out.LastUsed[row.ID] = t
+					}
+				}
+			}
 		}
-		if row.Last != nil {
-			if t, ok := parseDBTime(*row.Last); ok {
-				out.LastUsed[id] = t
+	} else {
+		for _, id := range ids {
+			var row struct{ Last *string }
+			if err := db.WithContext(ctx).Raw(`SELECT CAST(MAX(timestamp) AS TEXT) AS last FROM usage WHERE auth_index = ? AND timestamp > ?`, id, since).Scan(&row).Error; err != nil {
+				return out, err
+			}
+			if row.Last != nil {
+				if t, ok := parseDBTime(*row.Last); ok {
+					out.LastUsed[id] = t
+				}
 			}
 		}
 	}
@@ -52,4 +80,20 @@ func parseDBTime(s string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// pgTextArray renders a Postgres text[] literal.
+func pgTextArray(v []string) string {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, s := range v {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('"')
+		b.WriteString(strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s))
+		b.WriteByte('"')
+	}
+	b.WriteByte('}')
+	return b.String()
 }
