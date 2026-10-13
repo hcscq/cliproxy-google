@@ -198,6 +198,15 @@ export class ApiClient {
   egressStatus() {
     return this.get<{ items: EgressStatus[] }>('/proxy/egress');
   }
+  egressRebalance(dryRun: boolean) {
+    return this.post<{ dry_run: boolean; moves: EgressMove[]; applied?: number }>('/proxy/egress/rebalance', { dry_run: dryRun });
+  }
+  egressAck(id: string) {
+    return this.post<{ status: string }>('/proxy/egress/ack', { id });
+  }
+  egressForget(id: string) {
+    return this.post<{ status: string }>('/proxy/egress/forget', { id });
+  }
   quotaCredentials(query?: Query) {
     return this.get<QuotaList>('/quota/credentials', query);
   }
@@ -1254,4 +1263,18 @@ export interface EgressStatus {
   last_error?: string;
   credentials: number;
   paused: number;
+  node?: string;
+  primary?: boolean;
+  public_ip?: string;
+  removed?: boolean;
+  public_changed?: boolean;
+  expected_public_ip?: string;
+}
+export interface EgressMove {
+  credential_id: string;
+  label: string;
+  from: string;
+  from_ip: string;
+  to: string;
+  to_ip: string;
 }

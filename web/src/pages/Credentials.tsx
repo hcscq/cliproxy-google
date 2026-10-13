@@ -8,6 +8,8 @@ import {
   type CredentialGroupSummary,
   type CredentialQuery,
   type CredentialSortKey,
+  type EgressMove,
+  type EgressStatus,
   type CredentialSearchItem,
   type ModelCooldown,
   type ModelInfo,
@@ -41,7 +43,7 @@ import {
   IconTrash,
 } from "../components/icons";
 import { AddCredentialModal } from "./AddCredential";
-import { EgressSelect, useEgressList } from "../components/EgressSelect";
+import { EgressSelect, egressIP, egressNode, egressState, useEgressList } from "../components/EgressSelect";
 import { GroupChecklist, useGroupLookup } from "./Groups";
 
 export function credentialStatus(
@@ -63,7 +65,9 @@ export function credentialStatus(
     return (
       <span title={c.status_message}>
         <Badge kind="err" dot>
-          {tr("已暂停 · 出口离线", "Paused · egress down")}
+          {c.auto_paused_reason === "egress_removed"
+            ? tr("已暂停 · IP 已移除", "Paused · IP removed")
+            : tr("已暂停 · 出口离线", "Paused · egress down")}
         </Badge>
       </span>
     );
@@ -424,17 +428,7 @@ export function CredentialsPage() {
         }
       >
         {(egress.data?.items?.length ?? 0) > 0 && (
-          <div className="card-body small" data-testid="egress-list" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            <span className="faint">{tr("出口", "Egress")}</span>
-            {egress.data!.items.map((e) => (
-              <span key={e.name} title={e.last_error || e.name}>
-                <Badge kind={e.healthy ? "ok" : "err"} dot>
-                  {e.ip} · {e.credentials}
-                  {e.paused > 0 ? tr(` · 暂停${e.paused}`, ` · ${e.paused} paused`) : ""}
-                </Badge>
-              </span>
-            ))}
-          </div>
+          <EgressStrip items={egress.data!.items} onChanged={async () => { await egress.reload(); await reloadAll(); }} />
         )}
         <SelectionBar
           selected={sel.size}
@@ -655,14 +649,22 @@ export function CredentialsPage() {
                       >
                         {credentialStatus(c, t, tr)}
                       </span>
-                      {c.egress_ip && (
-                        <div
-                          className="faint small mono nowrap"
-                          title={tr(`固定出口 ${c.egress_id ?? ""}`, `Pinned egress ${c.egress_id ?? ""}`)}
-                        >
-                          {c.egress_ip}
-                        </div>
-                      )}
+                      {c.egress_ip && (() => {
+                        const eg = egress.data?.items?.find((e) => e.name === c.egress_id);
+                        const shown = eg ? egressIP(eg) : c.egress_ip;
+                        return (
+                          <div
+                            className="faint small mono nowrap"
+                            title={
+                              tr(`固定出口 ${c.egress_id ?? ""}`, `Pinned egress ${c.egress_id ?? ""}`) +
+                              (eg?.public_changed ? tr(` · 公网 IP 由 ${eg.expected_public_ip} 变为 ${eg.public_ip}`, ` · public IP ${eg.expected_public_ip} → ${eg.public_ip}`) : "")
+                            }
+                          >
+                            {shown}
+                            {eg?.public_changed && <span style={{ color: "var(--warn, #b7791f)" }}> ⚠</span>}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="hide-sm wrap-ok">
                       <QuotaWindows
@@ -1537,5 +1539,128 @@ function BulkEgressModal({
         </span>
       </div>
     </Modal>
+  );
+}
+
+function EgressStrip({ items, onChanged }: { items: EgressStatus[]; onChanged: () => Promise<void> }) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast, toastError, confirm } = useUi();
+  const [plan, setPlan] = useState<EgressMove[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const act = async (fn: () => Promise<unknown>, done: string) => {
+    try {
+      await fn();
+      toast(done);
+      await onChanged();
+    } catch (e) {
+      toastError(e);
+    }
+  };
+  return (
+    <div className="card-body small" data-testid="egress-list" style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      <span className="faint">{tr("出口", "Egress")} {items.filter((e) => !e.removed).length}</span>
+      {items.map((e) => (
+        <span
+          key={e.name}
+          title={[
+            e.name,
+            e.ip !== egressIP(e) ? tr(`本地 ${e.ip}`, `local ${e.ip}`) : "",
+            e.primary ? tr("节点主 IP", "node primary IP") : "",
+            e.public_changed ? tr(`公网 IP ${e.expected_public_ip} → ${e.public_ip}（凭据继续运行）`, `public IP ${e.expected_public_ip} → ${e.public_ip} (credentials keep running)`) : "",
+            e.last_error ?? "",
+          ].filter(Boolean).join(" · ")}
+          style={{ display: "inline-flex", gap: 4, alignItems: "center" }}
+        >
+          <Badge kind={e.removed || !e.healthy ? "err" : e.public_changed ? "warn" : "ok"} dot>
+            {egressIP(e)} · {egressNode(e)} · {e.credentials}
+            {e.paused > 0 ? tr(` · 暂停${e.paused}`, ` · ${e.paused} paused`) : ""}
+            {e.removed || !e.healthy || e.public_changed ? ` · ${egressState(e, tr)}` : ""}
+          </Badge>
+          {e.public_changed && (
+            <button className="btn btn-xs" onClick={() => void act(() => api.egressAck(e.name), tr("已确认新 IP", "Acknowledged"))}>
+              {tr("确认", "Ack")}
+            </button>
+          )}
+          {e.removed && e.credentials === 0 && (
+            <button className="btn btn-xs" onClick={() => void act(() => api.egressForget(e.name), tr("已移除", "Removed"))}>
+              {tr("移除", "Forget")}
+            </button>
+          )}
+        </span>
+      ))}
+      <button
+        className="btn btn-sm"
+        data-testid="egress-rebalance"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            setPlan((await api.egressRebalance(true)).moves);
+          } catch (e) {
+            toastError(e);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {tr("均衡到新出口", "Rebalance")}
+      </button>
+      {plan && (
+        <Modal
+          title={tr(`均衡预览（${plan.length} 个凭据换 IP）`, `Rebalance preview (${plan.length} moves)`)}
+          onClose={() => setPlan(null)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setPlan(null)}>{tr("取消", "Cancel")}</button>
+              <button
+                className="btn btn-primary"
+                disabled={busy || plan.length === 0}
+                data-testid="egress-rebalance-apply"
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: tr("确认均衡", "Apply rebalance"),
+                    body: tr(`${plan.length} 个凭据的出口 IP 将改变。`, `${plan.length} credentials will change exit IP.`),
+                  });
+                  if (!ok) return;
+                  setBusy(true);
+                  await act(async () => {
+                    const r = await api.egressRebalance(false);
+                    setPlan(null);
+                    return r;
+                  }, tr("已均衡", "Rebalanced"));
+                  setBusy(false);
+                }}
+              >
+                {tr("执行", "Apply")}
+              </button>
+            </>
+          }
+        >
+          {plan.length === 0 ? (
+            <Empty>{tr("已均衡，无需移动", "Already balanced")}</Empty>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{tr("凭据", "Credential")}</th>
+                  <th>{tr("原出口", "From")}</th>
+                  <th>{tr("新出口", "To")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.map((m) => (
+                  <tr key={m.credential_id}>
+                    <td>{m.label || m.credential_id.slice(0, 8)}</td>
+                    <td className="mono small">{m.from_ip}</td>
+                    <td className="mono small">{m.to_ip}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Modal>
+      )}
+    </div>
   );
 }

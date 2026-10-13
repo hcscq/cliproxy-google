@@ -24,12 +24,14 @@ COPY --from=panel /web/dist/ ./home/internal/managementasset/static/
 RUN test -s home/internal/managementasset/static/management.html
 RUN cd home && CGO_ENABLED=1 GOOS=linux go build -buildvcs=false \
     -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" \
-    -o /out/CLIProxyAPIHome ./cmd/home/
+    -o /out/CLIProxyAPIHome ./cmd/home/ \
+    && CGO_ENABLED=0 go build -buildvcs=false -ldflags="-s -w" -o /out/egress-agent ./cmd/egress-agent/
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 cliproxy && useradd -u 10001 -g 10001 -d /home/cliproxy -m cliproxy
 COPY --from=builder /out/CLIProxyAPIHome /app/CLIProxyAPIHome
+COPY --from=builder /out/egress-agent /app/egress-agent
 COPY home/config.example.yaml /app/config.example.yaml
 COPY home/LICENSE NOTICE /app/
 WORKDIR /app

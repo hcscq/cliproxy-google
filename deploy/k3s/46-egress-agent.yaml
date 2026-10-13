@@ -1,0 +1,80 @@
+# Per-node egress agent (replaces the squid egress in 45-egress.yaml).
+# One CONNECT proxy per node on <node InternalIP>:3141 that binds each tunnel to the
+# public IPv4 named by the proxy username (http://<ip>@<node>:3141), so every public IP
+# on the node (primary + secondaries, added/removed via the cloud console) is an egress
+# without new ports or firewall rules. IPs are re-discovered every 30s; each one's real
+# public exit IP is probed every 5 min. Home reads GET /inventory via the headless
+# Service below (HOME_EGRESS_AGENTS) and registers egresses "<node>/<ip>".
+# - Runs on nodes labelled cliproxy.io/egress=true. kiro-rs (3128/3129) is untouched.
+# - EGRESS_EXCLUDE_IPS: local IPs never offered (master primary = control plane / panel IP).
+# - Master host firewall (/usr/local/sbin/hostfw-restore.sh) allows tcp 3140,3141 from
+#   172.16.0.0/16 on ens19 (added 2026-10-12/13).
+apiVersion: v1
+kind: Service
+metadata:
+  name: cliproxy-egress-agent
+  namespace: cliproxy
+spec:
+  clusterIP: None
+  selector:
+    app: cliproxy-egress-agent
+  ports:
+    - name: proxy
+      port: 3141
+      targetPort: 3141
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cliproxy-egress-agent
+  namespace: cliproxy
+spec:
+  selector:
+    matchLabels:
+      app: cliproxy-egress-agent
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: cliproxy-egress-agent
+    spec:
+      nodeSelector:
+        cliproxy.io/egress: "true"
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: agent
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-PLACEHOLDER
+          command: ["/app/egress-agent"]
+          env:
+            - name: HOST_IP
+              valueFrom: {fieldRef: {fieldPath: status.hostIP}}
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - {name: EGRESS_EXCLUDE_IPS, value: "154.44.10.170"}
+            - {name: EGRESS_ALLOW_CIDRS, value: "10.42.0.0/16,172.16.0.0/16,127.0.0.0/8"}
+          ports:
+            - {name: proxy, containerPort: 3141, hostPort: 3141}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 3141}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 3141}
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}

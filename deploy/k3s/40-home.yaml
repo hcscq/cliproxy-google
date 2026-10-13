@@ -86,6 +86,8 @@ spec:
             - {name: HOME_EPHEMERAL_NODE_TTL, value: "10m"}
             # Sticky per-credential egress (deploy/k3s/45-egress.yaml): name=proxy=exit-ip
             - {name: HOME_EGRESS_PROXIES, value: "egress-kbmxbmzt=http://172.16.35.202:3140=154.9.227.230,egress-u04gzhfs=http://172.16.180.196:3140=154.40.47.186,egress-hgurzfiw=http://172.16.136.99:3140=64.83.1.110,egress-9s5xkiog=http://172.16.177.176:3140=154.40.47.179,egress-7fm6r3az=http://172.16.97.23:3140=154.44.10.227"}
+            # Per-node egress agents (46-egress-agent.yaml): every public IP on every egress node.
+            - {name: HOME_EGRESS_AGENTS, value: "dns:cliproxy-egress-agent.cliproxy-google.svc.cluster.local:3141"}
             # Shared Redis layer (15-redis.yaml). "false" = PostgreSQL/in-memory only (deployed: true since phase 2).
             - {name: HOME_REDIS_ENABLED, value: "true"}
             # Request logs through a Redis stream (batch flush to PG; falls back to the
