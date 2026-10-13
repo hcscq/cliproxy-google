@@ -97,6 +97,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	}
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
+	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
 	translated = e.obfuscateSensitiveWords(translated)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	reporter.SetModelThinking(modelInfo)
@@ -155,6 +156,10 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
 
+	if httpResp.StatusCode == http.StatusTooManyRequests && len(promptHits) > 0 && isAntigravityBare429(bodyBytes) {
+		err = antigravityPromptBlockErr(promptHits)
+		return resp, err
+	}
 	if httpResp.StatusCode == http.StatusTooManyRequests {
 		decision := decideAntigravity429(bodyBytes)
 		switch decision.kind {
@@ -316,6 +321,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	}
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
+	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
 	translated = e.obfuscateSensitiveWords(translated)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	reporter.SetModelThinking(modelInfo)
@@ -381,6 +387,10 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			return resp, err
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+		if httpResp.StatusCode == http.StatusTooManyRequests && len(promptHits) > 0 && isAntigravityBare429(bodyBytes) {
+			err = antigravityPromptBlockErr(promptHits)
+			return resp, err
+		}
 		if httpResp.StatusCode == http.StatusTooManyRequests {
 			decision := decideAntigravity429(bodyBytes)
 

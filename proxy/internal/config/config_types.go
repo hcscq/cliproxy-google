@@ -159,8 +159,40 @@ type AntigravityConfig struct {
 	// SensitiveWords is a list of words to obfuscate with zero-width characters in system instructions.
 	SensitiveWords []string `yaml:"sensitive-words,omitempty" json:"sensitive-words,omitempty"`
 
+	// PromptRewrites lists literal system-prompt rewrites applied before the
+	// request is sent upstream (system instruction only). nil = built-in
+	// defaults (see DefaultAntigravityPromptRewrites); an explicit empty list
+	// disables rewriting. A rule with an empty Replace is detect-only: the text
+	// is kept, but a bare upstream 429 on such a request is treated as a
+	// prompt block (no credential cooldown, no rotation).
+	PromptRewrites *[]PromptRewriteRule `yaml:"prompt-rewrites,omitempty" json:"prompt-rewrites,omitempty"`
+
 	// ConnectionPool configures upstream HTTP connection pooling behavior for Antigravity.
 	ConnectionPool AntigravityConnectionPoolConfig `yaml:"connection-pool,omitempty" json:"connection-pool,omitempty"`
+}
+
+// PromptRewriteRule is one literal prompt rewrite (see AntigravityConfig.PromptRewrites).
+type PromptRewriteRule struct {
+	// Name labels the rule in logs and the request log note.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	// Match is the literal (case-sensitive) text to find.
+	Match string `yaml:"match" json:"match"`
+	// Replace is the substitute text; empty means detect-only.
+	Replace string `yaml:"replace,omitempty" json:"replace,omitempty"`
+	// Disabled turns the rule off without removing it.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+}
+
+// DefaultAntigravityPromptRewrites returns the built-in rules used when
+// AntigravityConfig.PromptRewrites is nil.
+func DefaultAntigravityPromptRewrites() []PromptRewriteRule {
+	return []PromptRewriteRule{{
+		// Antigravity answers a bare 429 to any system prompt containing this
+		// exact Claude Agent SDK identity line (claude -p / Agent SDK default).
+		Name:    "claude-agent-sdk-identity",
+		Match:   "You are a Claude agent, built on Anthropic's Claude Agent SDK",
+		Replace: "You are an AI coding agent operating inside a CLI agent harness",
+	}}
 }
 
 // AntigravityConnectionPoolConfig controls upstream HTTP/1.1 connection pooling behavior for Antigravity.

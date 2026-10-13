@@ -343,3 +343,17 @@ func keyForPath(key reflect.Value) string {
 	}
 	return key.Type().String()
 }
+
+func TestParseConfigBytes_AntigravityPromptRewrites(t *testing.T) {
+	cfg, err := ParseConfigBytes([]byte("antigravity:\n  prompt-rewrites:\n    - name: a\n      match: X\n      replace: Y\n    - match: Z\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Antigravity.PromptRewrites == nil || len(*cfg.Antigravity.PromptRewrites) != 2 || (*cfg.Antigravity.PromptRewrites)[0].Replace != "Y" {
+		t.Fatalf("PromptRewrites = %#v", cfg.Antigravity.PromptRewrites)
+	}
+	none, _ := ParseConfigBytes([]byte("antigravity: {}\n"))
+	if none.Antigravity.PromptRewrites != nil {
+		t.Fatal("unset prompt-rewrites must stay nil (defaults)")
+	}
+}

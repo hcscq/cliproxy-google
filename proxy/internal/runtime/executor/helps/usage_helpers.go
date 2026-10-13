@@ -33,6 +33,7 @@ type UsageReporter struct {
 	requested           string
 	thinkingParams      string
 	thinkingNote        string
+	promptNote          string
 	thinkingSupport     *registry.ThinkingSupport
 	baseURL             string
 	executorType        string
@@ -363,6 +364,15 @@ func (r *UsageReporter) SetModelThinking(info *registry.ModelInfo) {
 	r.thinkingSupport = info.Thinking
 }
 
+// SetPromptNote records that a prompt rewrite/detect rule matched; it is
+// appended to the request log note.
+func (r *UsageReporter) SetPromptNote(note string) {
+	if r == nil {
+		return
+	}
+	r.promptNote = strings.TrimSpace(note)
+}
+
 // ThinkingNote returns why a "thinking off" request was adjusted ("" if it was not).
 // Executors surface it to clients as the X-Thinking-Adjusted response header.
 func (r *UsageReporter) ThinkingNote() string {
@@ -660,7 +670,7 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		AuthType:            r.authType,
 		ReasoningEffort:     r.reasoning,
 		ThinkingParams:      r.thinkingParams,
-		ThinkingNote:        r.thinkingNote,
+		ThinkingNote:        joinUsageNotes(r.thinkingNote, r.promptNote),
 		ServiceTier:         r.serviceTier,
 		ResponseServiceTier: strings.TrimSpace(detail.ResponseServiceTier),
 		ResponseModel:       responseModel,
@@ -1599,4 +1609,14 @@ func jsonPayload(line []byte) []byte {
 		return nil
 	}
 	return trimmed
+}
+
+func joinUsageNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "; " + b
 }
