@@ -57,7 +57,7 @@ spec:
       initContainers:
         # Home reads ./cluster.yaml from its working directory; copy it from the Secret.
         - name: copy-cluster-yaml
-          image: ghcr.io/hcscq/cliproxy-google-home:sha-0d777f571ce27492724542913986b361e58cee23  # has sh; matches live
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-e66cc599ec1050201ba6d097fe1b7c0ea5223753  # has sh; matches live
           env:
             - {name: HOME_REDIS_ENABLED, value: "true"}
           command: ["sh", "-c", "cp /tmpl/cluster.yaml.tmpl /work/cluster.yaml && chmod 600 /work/cluster.yaml"]
@@ -69,7 +69,7 @@ spec:
             - {name: work, mountPath: /work}
       containers:
         - name: home
-          image: ghcr.io/hcscq/cliproxy-google-home:sha-0d777f571ce27492724542913986b361e58cee23
+          image: ghcr.io/hcscq/cliproxy-google-home:sha-e66cc599ec1050201ba6d097fe1b7c0ea5223753
           imagePullPolicy: IfNotPresent
           workingDir: /work
           env:
