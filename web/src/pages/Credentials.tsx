@@ -234,7 +234,7 @@ function tierBadge(c: Credential, tr: (zh: string, en: string) => string) {
   const kind: "warn" | "ok" | undefined = id.includes("ultra") ? "warn" : id.includes("pro") ? "ok" : undefined;
   const title = [c.subscription_tier_name || "", c.subscription_tier, c.subscription_checked_at && `${tr("检测于", "checked")} ${new Date(c.subscription_checked_at).toLocaleString()}`].filter(Boolean).join("\n");
   return (
-    <span title={title} style={{ marginLeft: 4 }}>
+    <span title={title} style={{ flexShrink: 0 }}>
       <Badge kind={kind}>{label}</Badge>
     </span>
   );
@@ -731,9 +731,11 @@ export function CredentialsPage() {
                         );
                       })()}
                     </td>
-                    <td title={c.provider} className="nowrap">
-                      <Badge kind="primary">{c.provider}</Badge>
-                      {tierBadge(c, tr)}
+                    <td title={c.provider}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                        <Badge kind="primary">{c.provider}</Badge>
+                        {tierBadge(c, tr)}
+                      </div>
                     </td>
                     <td>
                       <span
