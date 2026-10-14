@@ -22,6 +22,7 @@ const (
 	sortEgress   = "egress"
 	sortSuccess  = "success"
 	sortSeq      = "seq"
+	sortTier     = "tier"
 )
 
 const (
@@ -32,7 +33,7 @@ const (
 func credentialSortParams(c *gin.Context) (string, bool) {
 	key := strings.ToLower(strings.TrimSpace(c.Query("sort")))
 	switch key {
-	case sortSeq, sortName, sortStatus, sortQuota, sortLastUsed, sortEgress, sortCreated, sortSuccess:
+	case sortSeq, sortTier, sortName, sortStatus, sortQuota, sortLastUsed, sortEgress, sortCreated, sortSuccess:
 	default:
 		key = sortCreated
 	}
@@ -117,6 +118,9 @@ func sortCredentials(list []*coreauth.Auth, key string, desc bool, statusOf map[
 		case sortSeq:
 			sa, sb := seqs[a.ID], seqs[b.ID]
 			return cmpFloat(float64(sa), float64(sb)), sa == 0, sb == 0
+		case sortTier:
+			ta, tb := credentialTierRank(a), credentialTierRank(b)
+			return ta - tb, ta == 0, tb == 0
 		case sortEgress:
 			ea, eb := credentialEgress(a), credentialEgress(b)
 			return strings.Compare(ea, eb), ea == "", eb == ""
@@ -147,4 +151,25 @@ func cmpFloat(a, b float64) int {
 		return 1
 	}
 	return 0
+}
+
+// credentialTierRank orders subscription tiers (0 = unknown, sorts last).
+func credentialTierRank(a *coreauth.Auth) int {
+	if a.Metadata == nil {
+		return 0
+	}
+	t, _ := a.Metadata["subscription_tier"].(string)
+	t = strings.ToLower(t)
+	switch {
+	case t == "":
+		return 0
+	case strings.Contains(t, "ultra"):
+		return 4
+	case strings.Contains(t, "pro"):
+		return 3
+	case t == "free-tier":
+		return 1
+	default:
+		return 2
+	}
 }

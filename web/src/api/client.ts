@@ -671,6 +671,10 @@ export interface Credential {
   /** Sticky egress exit IP / name. */
   egress_ip?: string;
   egress_id?: string;
+  /** loadCodeAssist paidTier id / name, e.g. g1-pro-tier / Google AI Pro. */
+  subscription_tier?: string;
+  subscription_tier_name?: string;
+  subscription_checked_at?: string;
   unavailable?: boolean;
   runtime_only?: boolean;
   source?: string;
@@ -1035,7 +1039,7 @@ export interface CredentialQuery {
   /** call-stats window (default 24h) */
   stats_window?: StatsWindow;
 }
-export type CredentialSortKey = 'seq' | 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress' | 'success';
+export type CredentialSortKey = 'seq' | 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress' | 'success' | 'tier';
 export type CredentialState = 'ok' | 'cooling' | 'error' | 'disabled';
 export type StatsWindow = '1h' | '24h' | '7d';
 export interface CallStats {

@@ -226,7 +226,21 @@ const CRED_COLUMNS: FlexCol[] = [
 
 type CredSort = { sort: CredentialSortKey; order: "asc" | "desc" };
 const CRED_SORT_KEY = "cred-sort";
-const SORT_KEYS: CredentialSortKey[] = ["seq", "created", "name", "status", "quota", "last_used", "egress", "success"];
+// Short subscription badge from loadCodeAssist paidTier (refreshed daily by Home).
+function tierBadge(c: Credential, tr: (zh: string, en: string) => string) {
+  const id = (c.subscription_tier || "").toLowerCase();
+  if (!id) return null;
+  const label = id.includes("ultra") ? "Ultra" : id.includes("pro") ? "Pro" : id === "free-tier" ? "Free" : id.replace(/-tier$/, "");
+  const kind: "warn" | "ok" | undefined = id.includes("ultra") ? "warn" : id.includes("pro") ? "ok" : undefined;
+  const title = [c.subscription_tier_name || "", c.subscription_tier, c.subscription_checked_at && `${tr("检测于", "checked")} ${new Date(c.subscription_checked_at).toLocaleString()}`].filter(Boolean).join("\n");
+  return (
+    <span title={title} style={{ marginLeft: 4 }}>
+      <Badge kind={kind}>{label}</Badge>
+    </span>
+  );
+}
+
+const SORT_KEYS: CredentialSortKey[] = ["seq", "created", "name", "status", "quota", "last_used", "egress", "success", "tier"];
 const STATS_WINDOW_KEY = "cred-stats-window";
 /** Default direction per key: newest / most recent first, otherwise ascending. */
 export const defaultOrder = (k: CredentialSortKey): "asc" | "desc" =>
@@ -610,7 +624,11 @@ export function CredentialsPage() {
                     <SortTh k="name" cur={sort} onSort={onSort}>{tr("账号", "Account")}</SortTh>
                   </th>
                   <th>{tr("分组", "Groups")}</th>
-                  <th>{t("provider")}</th>
+                  <th className="nowrap">
+                    {t("provider")}
+                    <span className="faint"> / </span>
+                    <SortTh k="tier" cur={sort} onSort={onSort}>{tr("订阅", "Tier")}</SortTh>
+                  </th>
                   <th>
                     <SortTh k="status" cur={sort} onSort={onSort}>{t("status")}</SortTh>
                     <span className="faint"> / </span>
@@ -713,8 +731,9 @@ export function CredentialsPage() {
                         );
                       })()}
                     </td>
-                    <td title={c.provider}>
+                    <td title={c.provider} className="nowrap">
                       <Badge kind="primary">{c.provider}</Badge>
+                      {tierBadge(c, tr)}
                     </td>
                     <td>
                       <span

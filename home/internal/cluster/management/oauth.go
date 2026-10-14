@@ -750,6 +750,11 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	if reason := stringFromAny(auth.Metadata["auto_paused_reason"]); reason != "" && auth.Disabled {
 		entry["auto_paused_reason"] = reason
 	}
+	if tier := stringFromAny(auth.Metadata["subscription_tier"]); tier != "" {
+		entry["subscription_tier"] = tier
+		entry["subscription_tier_name"] = stringFromAny(auth.Metadata["subscription_tier_name"])
+		entry["subscription_checked_at"] = stringFromAny(auth.Metadata["subscription_checked_at"])
+	}
 	if ip := stringFromAny(auth.Metadata["egress_ip"]); ip != "" && strings.TrimSpace(auth.ProxyURL) != "" {
 		entry["egress_ip"] = ip
 		entry["egress_id"] = stringFromAny(auth.Metadata["egress_id"])

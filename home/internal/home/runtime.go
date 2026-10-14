@@ -348,6 +348,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	r.startAntigravityCatalogLoop(runCtx)
 	r.startQuotaProber(runCtx)
 	r.startAccountBlockGuard(runCtx)
+	r.startSubscriptionTierRefresher(runCtx)
 	r.startEgressManager(runCtx)
 
 	if !r.clusterAutoRefreshGated() && strings.TrimSpace(r.authDir) != "" {
