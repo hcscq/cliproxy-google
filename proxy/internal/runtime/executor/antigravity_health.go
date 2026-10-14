@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"regexp"
+	"strconv"
 	"sync/atomic"
 
 	"fmt"
@@ -33,9 +34,57 @@ const (
 
 type antigravityHealthSettings struct {
 	ttfb, nonStream, slow time.Duration
+	byFamily              map[string]time.Duration // streaming TTFB per health bucket
 	quarantine, maxQ      time.Duration
 	slowEvents            int
 	capacitySteps         []time.Duration
+}
+
+// antigravityHealthLive is the latest hot-reloaded health config; it wins
+// over the executor's construction-time config so panel edits apply live.
+var antigravityHealthLive atomic.Pointer[config.AntigravityHealthConfig]
+
+// SetAntigravityHealthConfig installs the live health config (on load/reload).
+func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
+	antigravityHealthLive.Store(&h)
+}
+
+const defaultAntigravityTTFBByFamily = "3.8=28"
+
+type familyTTFBCache struct {
+	raw string
+	m   map[string]time.Duration
+}
+
+var antigravityFamilyTTFB atomic.Pointer[familyTTFBCache]
+
+// parseAntigravityTTFBByFamily parses "3.8=28,2.5=60" (cached by raw string).
+func parseAntigravityTTFBByFamily(raw string) map[string]time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = defaultAntigravityTTFBByFamily
+	}
+	if c := antigravityFamilyTTFB.Load(); c != nil && c.raw == raw {
+		return c.m
+	}
+	m := map[string]time.Duration{}
+	if l := strings.ToLower(raw); l != "off" && l != "none" && l != "0" {
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+			k, v, ok := strings.Cut(part, "=")
+			if !ok {
+				continue
+			}
+			k = strings.ToLower(strings.TrimSpace(k))
+			if k != "" && k[0] >= '0' && k[0] <= '9' {
+				k = "gemini-" + k
+			}
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 && k != "" {
+				m[antigravityHealthBucket(k)] = time.Duration(n) * time.Second
+			}
+		}
+	}
+	antigravityFamilyTTFB.Store(&familyTTFBCache{raw: raw, m: m})
+	return m
 }
 
 func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings {
@@ -44,10 +93,14 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 		quarantine: 5 * time.Minute, maxQ: 15 * time.Minute, slowEvents: 2,
 		capacitySteps: []time.Duration{time.Second, 10 * time.Second, time.Minute},
 	}
-	if cfg == nil {
-		return s
+	var h config.AntigravityHealthConfig
+	switch live := antigravityHealthLive.Load(); {
+	case live != nil:
+		h = *live
+	case cfg != nil:
+		h = cfg.Antigravity.Health
 	}
-	h := cfg.Antigravity.Health
+	s.byFamily = parseAntigravityTTFBByFamily(h.TTFBTimeoutByFamily)
 	sec := func(v int, d *time.Duration, unit time.Duration) {
 		switch {
 		case v < 0:
@@ -76,6 +129,21 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 		s.maxQ = s.quarantine
 	}
 	return s
+}
+
+// streamTTFB is the first-byte limit for a streaming attempt of model: the
+// per-family limit when shorter than the base, except for the last attempt
+// the request budget allows (cutting it short would only turn a slow answer
+// into an error), which keeps the base limit.
+func (s antigravityHealthSettings) streamTTFB(ctx context.Context, model string) time.Duration {
+	fam, ok := s.byFamily[antigravityHealthBucket(model)]
+	if !ok || fam <= 0 || (s.ttfb > 0 && fam >= s.ttfb) {
+		return s.ttfb
+	}
+	if cliproxyauth.RetryBudgetFinalAttempt(ctx, fam) {
+		return s.ttfb
+	}
+	return fam
 }
 
 type antigravityHealthEntry struct {

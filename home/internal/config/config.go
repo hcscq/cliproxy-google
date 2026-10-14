@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	cpaconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"os"
 	"sort"
 	"strconv"
@@ -301,6 +302,9 @@ type AntigravityConfig struct {
 
 	// Settings shared with CPA V8.
 	ConnectionPool AntigravityConnectionPoolConfig `yaml:"connection-pool,omitempty" json:"connection-pool,omitempty"`
+
+	// Health tunes TTFB timeouts (proxies) and cluster health weighting (Home).
+	Health cpaconfig.AntigravityHealthConfig `yaml:"health,omitempty" json:"health,omitempty"`
 }
 
 // TLSConfig holds HTTPS server settings.

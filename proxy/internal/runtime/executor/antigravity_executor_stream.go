@@ -137,7 +137,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	}
 	health := antigravityHealthSettingsFrom(e.cfg)
 	healthKey := antigravityHealthKey(auth.ID, baseModel)
-	ttfbLimit := health.ttfb
+	ttfbLimit := health.streamTTFB(ctx, baseModel)
 	if emulateStream {
 		ttfbLimit = health.nonStream
 	}

@@ -195,6 +195,44 @@ type AntigravityHealthConfig struct {
 	// CapacityCooldownSeconds is the escalation ladder for repeated 503 "No
 	// capacity" on the same credential+model, reset on success. Default [1,10,60].
 	CapacityCooldownSeconds []int `yaml:"capacity-cooldown-seconds,omitempty" json:"capacity-cooldown-seconds,omitempty"`
+	// TTFBTimeoutByFamily overrides TTFBTimeoutSeconds per model family for
+	// streaming attempts, e.g. "3.8=28,2.5=60" (family = "gemini-3.8" or "3.8").
+	// Empty = built-in default "3.8=28"; "off" = no per-family override. The
+	// last attempt allowed by the request budget uses the longer base timeout.
+	TTFBTimeoutByFamily string `yaml:"ttfb-timeout-by-family,omitempty" json:"ttfb-timeout-by-family,omitempty"`
+	// Cluster tunes Home's cluster-wide (credential, model-family) health
+	// weighting. Zero = CPA_HEALTH_* env, then built-in default.
+	Cluster AntigravityClusterHealthConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`
+}
+
+// AntigravityClusterHealthConfig is read by Home only (proxies ignore it).
+// Zero values fall back to CPA_HEALTH_* env vars, then built-in defaults;
+// negative disables where noted.
+type AntigravityClusterHealthConfig struct {
+	// DemoteTTFBP95Seconds demotes a pair whose recent TTFB p95 exceeds this (default 30, <0 off).
+	DemoteTTFBP95Seconds int `yaml:"demote-ttfb-p95-seconds,omitempty" json:"demote-ttfb-p95-seconds,omitempty"`
+	// DemoteFailPercent demotes a pair whose recent failure rate exceeds this (default 40, <0 off).
+	DemoteFailPercent int `yaml:"demote-fail-percent,omitempty" json:"demote-fail-percent,omitempty"`
+	// MaxDemotedPercent caps the share of a family's pairs that may be demoted (default 30).
+	MaxDemotedPercent int `yaml:"max-demoted-percent,omitempty" json:"max-demoted-percent,omitempty"`
+	// ProbeFloorPercent is the minimum pick weight of a demoted pair (default 15).
+	ProbeFloorPercent int `yaml:"probe-floor-percent,omitempty" json:"probe-floor-percent,omitempty"`
+	// UpstreamFailPercent / UpstreamTTFBSeconds: family median at or above → upstream-wide, no demotion (50 / 45).
+	UpstreamFailPercent int `yaml:"upstream-fail-percent,omitempty" json:"upstream-fail-percent,omitempty"`
+	UpstreamTTFBSeconds int `yaml:"upstream-ttfb-seconds,omitempty" json:"upstream-ttfb-seconds,omitempty"`
+	// MinPeers: fewer sampled pairs → no relative judgement (4).
+	MinPeers int `yaml:"min-peers,omitempty" json:"min-peers,omitempty"`
+	// SlowEvents within WindowSeconds quarantine a pair (3 / 600) for
+	// QuarantineSeconds, doubling up to QuarantineMaxSeconds (300 / 900).
+	SlowEvents           int `yaml:"slow-events,omitempty" json:"slow-events,omitempty"`
+	WindowSeconds        int `yaml:"window-seconds,omitempty" json:"window-seconds,omitempty"`
+	QuarantineSeconds    int `yaml:"quarantine-seconds,omitempty" json:"quarantine-seconds,omitempty"`
+	QuarantineMaxSeconds int `yaml:"quarantine-max-seconds,omitempty" json:"quarantine-max-seconds,omitempty"`
+	// SlowFactor / SlowMinExtraSeconds / FailMarginPercent: peer-relative
+	// slow and failing thresholds (2 / 5 / 25).
+	SlowFactor          float64 `yaml:"slow-factor,omitempty" json:"slow-factor,omitempty"`
+	SlowMinExtraSeconds int     `yaml:"slow-min-extra-seconds,omitempty" json:"slow-min-extra-seconds,omitempty"`
+	FailMarginPercent   int     `yaml:"fail-margin-percent,omitempty" json:"fail-margin-percent,omitempty"`
 }
 
 // PromptRewriteRule is one literal prompt rewrite (see AntigravityConfig.PromptRewrites).

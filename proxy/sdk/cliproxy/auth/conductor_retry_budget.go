@@ -192,3 +192,27 @@ func retryBudgetStop(ctx context.Context, lastErr, upstreamErr error) (error, bo
 	log.WithContext(ctx).Infof("credential switching stopped after %d attempt(s): %s", b.attempts, cause)
 	return wrapRequestStopError(preferredExecutionAttemptError(lastErr, upstreamErr)), true
 }
+
+// minUsefulRetry is the least time worth starting another credential with.
+const minUsefulRetry = 10 * time.Second
+
+// RetryBudgetFinalAttempt reports whether the attempt now running is the last
+// one the request budget allows if it were cut after limit: no credential
+// switch left, or too little time after limit for another useful attempt.
+// Executors use it to avoid cutting the last attempt short. False when no
+// budget is installed.
+func RetryBudgetFinalAttempt(ctx context.Context, limit time.Duration) bool {
+	b := retryBudgetFrom(ctx)
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	distinct := len(b.distinct)
+	stopped := b.stopCause != ""
+	b.mu.Unlock()
+	if stopped || (b.maxCreds > 0 && distinct >= b.maxCreds) {
+		return true
+	}
+	rem, bounded := b.remaining()
+	return bounded && rem-limit < minUsefulRetry
+}

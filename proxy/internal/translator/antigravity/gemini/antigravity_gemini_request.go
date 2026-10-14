@@ -36,6 +36,7 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Gemini API format
 func ConvertGeminiRequestToAntigravity(modelName string, inputRawJSON []byte, _ bool) ([]byte, error) {
+	inputRawJSON = unwrapGeminiBatchBody(inputRawJSON)
 	rawJSON := inputRawJSON
 	functionNameMap := util.SanitizedFunctionNameMap(inputRawJSON)
 	// Keep the envelope in []byte form. Round-tripping through string copies the
@@ -923,4 +924,34 @@ func fixCLIToolResponse(input []byte) ([]byte, error) {
 	result, _ := sjson.SetRawBytes(input, "request.contents", translatorcommon.JoinRawArray(contentItems))
 
 	return result, nil
+}
+
+// unwrapGeminiBatchBody accepts a batch-shaped body sent to generateContent
+// ({"requests":[{"model":..,"contents":..}]} or [{"request":{..}}]): a single
+// request is unwrapped (it used to fail upstream with 400 Unknown name
+// "requests"); several stay as they are (a genuine client error).
+func unwrapGeminiBatchBody(raw []byte) []byte {
+	if util.GetGJSONBytesNoCopy(raw, "contents").Exists() {
+		return raw
+	}
+	reqs := util.GetGJSONBytesNoCopy(raw, "requests")
+	if !reqs.IsArray() {
+		return raw
+	}
+	items := reqs.Array()
+	if len(items) != 1 {
+		return raw
+	}
+	one := items[0]
+	if inner := one.Get("request"); inner.IsObject() {
+		one = inner
+	}
+	if !one.IsObject() || !one.Get("contents").Exists() {
+		return raw
+	}
+	out := []byte(one.Raw)
+	if gjson.GetBytes(out, "model").Exists() {
+		out, _ = sjson.DeleteBytes(out, "model")
+	}
+	return out
 }

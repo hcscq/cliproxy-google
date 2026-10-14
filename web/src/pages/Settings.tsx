@@ -17,9 +17,11 @@ interface FieldDef {
   danger?: boolean;
   /** Value shown when the key is absent from the config (server-side default). */
   def?: unknown;
+  /** Compact sections only: shown under a collapsed "Advanced" toggle. */
+  adv?: boolean;
 }
 
-const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
+const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] }[] = [
   {
     zh: '路由',
     en: 'Routing',
@@ -68,6 +70,29 @@ const SECTIONS: { zh: string; en: string; fields: FieldDef[] }[] = [
       { path: 'oauth.providers.antigravity.antigravity-credits', type: 'bool', zh: '使用 Antigravity credits 作为 Claude 兜底', en: 'Use Antigravity credits as Claude fallback' },
       { path: 'oauth.providers.antigravity.signature-cache-enabled', type: 'bool', zh: '思考签名缓存校验', en: 'Thinking signature cache' },
       { path: 'oauth.providers.antigravity.connection-pool.enabled', type: 'bool', zh: '上游连接池', en: 'Upstream connection pool' },
+    ],
+  },
+  {
+    zh: '慢凭据与首字超时',
+    en: 'Slow credentials & TTFB',
+    compact: true,
+    fields: [
+      { path: 'oauth.providers.antigravity.health.ttfb-timeout-seconds', type: 'number', def: 75, zh: '首字超时（秒）', en: 'TTFB timeout (s)', hintZh: '流式尝试无首字节超过此时间即中止并换凭据（客户端尚未收到任何数据）。默认 75。', hintEn: 'Streaming attempt with no first byte after this is aborted and retried on another credential (client has received nothing). Default 75.' },
+      { path: 'oauth.providers.antigravity.health.ttfb-timeout-by-family', type: 'text', def: '3.8=28', zh: '按模型族首字超时', en: 'TTFB by family', hintZh: '如 3.8=28,2.5=60。仅能比上一项更短；请求预算内最后一次尝试仍用上一项的长超时。off = 关闭。', hintEn: 'e.g. 3.8=28,2.5=60. Only shortens the timeout above; the last attempt allowed by the retry budget keeps the long one. off = disabled.' },
+      { path: 'oauth.providers.antigravity.health.cluster.demote-ttfb-p95-seconds', type: 'number', def: 30, zh: '降权：首字 p95 >（秒）', en: 'Demote: TTFB p95 > (s)', hintZh: '(凭据, 模型族) 近期首字 p95 超过即降权到 25% 流量（不低于探测下限）。负数关闭。', hintEn: 'A (credential, family) pair whose recent TTFB p95 exceeds this gets 25% of traffic (>= probe floor). Negative = off.' },
+      { path: 'oauth.providers.antigravity.health.cluster.demote-fail-percent', type: 'number', def: 40, zh: '降权：失败率 >（%）', en: 'Demote: fail rate > (%)', hintZh: '近期失败率（5xx/超时，不含 429）超过即降权。负数关闭。', hintEn: 'Recent failure rate (5xx/timeouts, not 429) above this demotes. Negative = off.' },
+      { path: 'oauth.providers.antigravity.health.cluster.max-demoted-percent', type: 'number', def: 30, zh: '最多降权比例（%）', en: 'Max demoted share (%)', hintZh: '每个模型族最多降权这么多比例的凭据（最差的优先）。', hintEn: 'At most this share of a family\'s credentials is demoted (worst first).' },
+      { path: 'oauth.providers.antigravity.health.cluster.probe-floor-percent', type: 'number', def: 15, zh: '探测下限（%）', en: 'Probe floor (%)', hintZh: '被降权凭据仍保留的最低流量，用于自动恢复。', hintEn: 'Minimum traffic a demoted pair keeps so it can recover.' },
+      { path: 'oauth.providers.antigravity.health.cluster.upstream-fail-percent', type: 'number', adv: true, def: 50, zh: '整体故障判定：失败率 ≥（%）', en: 'Upstream-wide: fail ≥ (%)', hintZh: '模型族中位失败率达到此值视为上游整体问题，不降权任何凭据。', hintEn: 'Family median failure at or above this = upstream-wide; nobody is demoted.' },
+      { path: 'oauth.providers.antigravity.health.cluster.upstream-ttfb-seconds', type: 'number', adv: true, def: 45, zh: '整体故障判定：首字 ≥（秒）', en: 'Upstream-wide: TTFB ≥ (s)', hintZh: '模型族中位首字达到此值视为上游整体变慢，不降权。', hintEn: 'Family median TTFB at or above this = upstream-wide; nobody is demoted.' },
+      { path: 'oauth.providers.antigravity.health.cluster.slow-events', type: 'number', adv: true, def: 3, zh: '隔离：慢事件次数', en: 'Quarantine: slow events', hintZh: '窗口内首字超时/久等后客户端断开达到次数即隔离。', hintEn: 'TTFB timeouts / long-wait disconnects within the window before quarantine.' },
+      { path: 'oauth.providers.antigravity.health.cluster.window-seconds', type: 'number', adv: true, def: 600, zh: '隔离：窗口（秒）', en: 'Quarantine: window (s)' },
+      { path: 'oauth.providers.antigravity.health.cluster.quarantine-seconds', type: 'number', adv: true, def: 300, zh: '隔离：时长（秒）', en: 'Quarantine (s)', hintZh: '重复则翻倍，直到上限。', hintEn: 'Doubles on repeat up to the max.' },
+      { path: 'oauth.providers.antigravity.health.cluster.quarantine-max-seconds', type: 'number', adv: true, def: 900, zh: '隔离：上限（秒）', en: 'Quarantine max (s)' },
+      { path: 'oauth.providers.antigravity.health.cluster.slow-factor', type: 'number', adv: true, def: 2, zh: '相对慢：倍数', en: 'Relative slow: factor', hintZh: '首字超过同族中位数 × 倍数（且多出下项秒数）按比例降权。', hintEn: 'TTFB above family median × factor (and by the extra below) is weighted down proportionally.' },
+      { path: 'oauth.providers.antigravity.health.cluster.slow-min-extra-seconds', type: 'number', adv: true, def: 5, zh: '相对慢：至少多（秒）', en: 'Relative slow: min extra (s)' },
+      { path: 'oauth.providers.antigravity.health.cluster.fail-margin-percent', type: 'number', adv: true, def: 25, zh: '相对失败：高出中位（%）', en: 'Relative fail: margin (%)' },
+      { path: 'oauth.providers.antigravity.health.cluster.min-peers', type: 'number', adv: true, def: 4, zh: '最少同族凭据数', en: 'Min peers', hintZh: '同族有样本的凭据少于此数时不做任何降权。', hintEn: 'Fewer sampled credentials in the family → no demotion at all.' },
     ],
   },
   {
@@ -182,46 +207,72 @@ function SettingsForm() {
 
   return (
     <div className="stack">
-      {SECTIONS.map((s) => (
-        <Card key={s.en} title={tr(s.zh, s.en)}>
-          <div className="form-grid">
-            {s.fields.map((f) => {
-              const v = values[f.path];
-              const label = tr(f.zh, f.en);
-              const hint = f.hintZh ? tr(f.hintZh, f.hintEn ?? '') : undefined;
-              return (
-                <div className="field" key={f.path}>
-                  {f.type === 'bool' ? (
-                    <Switch checked={!!v} onChange={(nv) => setValues({ ...values, [f.path]: nv })} label={<span style={f.danger ? { color: 'var(--err)' } : undefined}>{label}</span>} />
-                  ) : (
-                    <>
-                      <label>{label}</label>
-                      {f.type === 'select' ? (
-                        <select className="select" value={(v as string) ?? f.options![0]} onChange={(e) => setValues({ ...values, [f.path]: e.target.value })}>
-                          {f.options!.map((o) => (
-                            <option key={o}>{o}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          className="input"
-                          type={f.type === 'number' ? 'number' : 'text'}
-                          value={v === undefined || v === null ? '' : String(v)}
-                          onChange={(e) => setValues({ ...values, [f.path]: f.type === 'number' ? (e.target.value === '' ? undefined : Number(e.target.value)) : e.target.value })}
-                        />
-                      )}
-                    </>
-                  )}
-                  {hint && <span className="hint hint-clamp" title={hint} tabIndex={0} onClick={(e) => e.currentTarget.classList.toggle("open")}>{hint}</span>}
-                  <span className="hint mono" style={{ opacity: 0.7 }}>
-                    {f.path}
-                  </span>
+      {SECTIONS.map((s) => {
+        const renderField = (f: FieldDef) => {
+          const v = values[f.path];
+          const label = tr(f.zh, f.en);
+          const hint = f.hintZh ? tr(f.hintZh, f.hintEn ?? '') : undefined;
+          const input =
+            f.type === 'select' ? (
+              <select className="select" value={(v as string) ?? f.options![0]} onChange={(e) => setValues({ ...values, [f.path]: e.target.value })}>
+                {f.options!.map((o) => (
+                  <option key={o}>{o}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="input"
+                type={f.type === 'number' ? 'number' : 'text'}
+                value={v === undefined || v === null ? '' : String(v)}
+                onChange={(e) => setValues({ ...values, [f.path]: f.type === 'number' ? (e.target.value === '' ? undefined : Number(e.target.value)) : e.target.value })}
+              />
+            );
+          if (s.compact) {
+            return (
+              <div className="field" key={f.path}>
+                <label title={[hint, f.path].filter(Boolean).join('\n')}>
+                  {label}
+                  {hint && <span style={{ opacity: 0.5 }}> ⓘ</span>}
+                </label>
+                {input}
+              </div>
+            );
+          }
+          return (
+            <div className="field" key={f.path}>
+              {f.type === 'bool' ? (
+                <Switch checked={!!v} onChange={(nv) => setValues({ ...values, [f.path]: nv })} label={<span style={f.danger ? { color: 'var(--err)' } : undefined}>{label}</span>} />
+              ) : (
+                <>
+                  <label>{label}</label>
+                  {input}
+                </>
+              )}
+              {hint && <span className="hint hint-clamp" title={hint} tabIndex={0} onClick={(e) => e.currentTarget.classList.toggle("open")}>{hint}</span>}
+              <span className="hint mono" style={{ opacity: 0.7 }}>
+                {f.path}
+              </span>
+            </div>
+          );
+        };
+        const main = s.fields.filter((f) => !f.adv);
+        const adv = s.fields.filter((f) => f.adv);
+        return (
+          <Card key={s.en} title={tr(s.zh, s.en)}>
+            <div className={s.compact ? 'form-grid form-grid-compact' : 'form-grid'}>{main.map(renderField)}</div>
+            {adv.length > 0 && (
+              <details style={{ marginTop: 10 }}>
+                <summary className="hint" style={{ cursor: 'pointer' }}>
+                  {tr('高级（隔离 / 相对判定 / 上游整体保护）', 'Advanced (quarantine / relative / upstream-wide guard)')}
+                </summary>
+                <div className="form-grid form-grid-compact" style={{ marginTop: 10 }}>
+                  {adv.map(renderField)}
                 </div>
-              );
-            })}
-          </div>
-        </Card>
-      ))}
+              </details>
+            )}
+          </Card>
+        );
+      })}
       <div className="row" style={{ position: 'sticky', bottom: 0, padding: '12px 0', background: 'var(--bg)' }}>
         <button className="btn btn-primary" disabled={!changed.length || busy === 'save'} onClick={save}>
           {busy === 'save' && <Spinner />}

@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -50,7 +51,13 @@ type HealthSettings struct {
 	UpstreamTTFB    time.Duration // family median TTFB >= this → upstream-wide, no penalties
 	SlowMinExtra    time.Duration // TTFB must also exceed the family median by this much
 	MinPeers        int           // fewer sampled pairs than this → no relative judgement, no penalties
+	// Absolute demotion (still subject to the guards above).
+	DemoteTTFBP95 time.Duration // recent TTFB p95 above this demotes the pair (0 = off)
+	DemoteFail    float64       // recent failure ratio above this demotes the pair (0 = off)
 }
+
+// demotedWeight is the pick weight of an absolutely demoted pair (>= probe floor).
+const demotedWeight = 0.25
 
 // familyStat is the per-family peer view computed on every sync.
 type familyStat struct {
@@ -69,6 +76,7 @@ func DefaultHealthSettings() HealthSettings {
 		SlowClientWait: 45 * time.Second, MinSamples: 5, SlowFactor: 2, ProbeFloor: 0.15,
 		Idle: 30 * time.Minute, MaxEntries: 100000, SyncInterval: 10 * time.Second,
 		FailMargin: 0.25, MaxDegradedFrac: 0.3, UpstreamFail: 0.5, UpstreamTTFB: 45 * time.Second, MinPeers: 4, SlowMinExtra: 5 * time.Second,
+		DemoteTTFBP95: 30 * time.Second, DemoteFail: 0.4,
 	}
 	return applyHealthEnv(s)
 }
@@ -102,6 +110,8 @@ func applyHealthEnv(s HealthSettings) HealthSettings {
 	d("CPA_HEALTH_UPSTREAM_TTFB", &s.UpstreamTTFB)
 	i("CPA_HEALTH_MIN_PEERS", &s.MinPeers)
 	d("CPA_HEALTH_SLOW_MIN_EXTRA", &s.SlowMinExtra)
+	d("CPA_HEALTH_DEMOTE_TTFB_P95", &s.DemoteTTFBP95)
+	f("CPA_HEALTH_DEMOTE_FAIL", &s.DemoteFail)
 	if s.QuarantineMax < s.Quarantine {
 		s.QuarantineMax = s.Quarantine
 	}
@@ -137,12 +147,31 @@ type healthEntry struct {
 	slowCount      int64
 	slowWin        int64
 	qLevel, cLevel int64
+	q95            float64 // streaming TTFB p95 estimate (ms)
 }
 
 func (e healthEntry) encode() string {
 	return strconv.FormatFloat(e.ttfb, 'f', 1, 64) + "," + strconv.FormatFloat(e.fail, 'f', 4, 64) + "," +
 		strconv.FormatInt(e.n, 10) + "," + strconv.FormatInt(e.updated, 10) + "," + strconv.FormatInt(e.slowCount, 10) + "," +
-		strconv.FormatInt(e.slowWin, 10) + "," + strconv.FormatInt(e.qLevel, 10) + "," + strconv.FormatInt(e.cLevel, 10)
+		strconv.FormatInt(e.slowWin, 10) + "," + strconv.FormatInt(e.qLevel, 10) + "," + strconv.FormatInt(e.cLevel, 10) + "," + strconv.FormatFloat(e.q95, 'f', 1, 64)
+}
+
+// healthQ95Step moves a p95 estimate toward x (stochastic quantile tracking:
+// at equilibrium 5% of samples exceed it); the step scales with the mean.
+func healthQ95Step(q, x, mean, alpha float64) float64 {
+	if q <= 0 {
+		return x
+	}
+	step := alpha * math.Max(mean, 1000)
+	if x > q {
+		q += step * 0.95
+	} else {
+		q -= step * 0.05
+	}
+	if q < 0 {
+		q = x
+	}
+	return q
 }
 
 func decodeHealthEntry(s string) (healthEntry, bool) {
@@ -152,7 +181,11 @@ func decodeHealthEntry(s string) (healthEntry, bool) {
 	}
 	f := func(i int) float64 { v, _ := strconv.ParseFloat(p[i], 64); return v }
 	n := func(i int) int64 { v, _ := strconv.ParseFloat(p[i], 64); return int64(v) }
-	return healthEntry{ttfb: f(0), fail: f(1), n: n(2), updated: n(3), slowCount: n(4), slowWin: n(5), qLevel: n(6), cLevel: n(7)}, true
+	e := healthEntry{ttfb: f(0), fail: f(1), n: n(2), updated: n(3), slowCount: n(4), slowWin: n(5), qLevel: n(6), cLevel: n(7)}
+	if len(p) > 8 {
+		e.q95 = f(8)
+	}
+	return e, true
 }
 
 // HealthObservation is one finished upstream attempt.
@@ -172,13 +205,20 @@ local now=tonumber(ARGV[2]); local ttfb=tonumber(ARGV[3]); local failed=tonumber
 local slow=tonumber(ARGV[5]); local cap=tonumber(ARGV[6]); local ok=tonumber(ARGV[7])
 local a=tonumber(ARGV[8]); local se=tonumber(ARGV[9]); local win=tonumber(ARGV[10])
 local q=tonumber(ARGV[11]); local qmax=tonumber(ARGV[12]); local sub=tonumber(ARGV[13])
-local et,ef,n,ts,sc,sw,ql,cl = 0,0,0,0,0,0,0,0
+local et,ef,n,ts,sc,sw,ql,cl,q = 0,0,0,0,0,0,0,0,0
 if v then
   local t={}
   for x in string.gmatch(v,'[^,]+') do t[#t+1]=tonumber(x) end
-  et,ef,n,ts,sc,sw,ql,cl = t[1] or 0,t[2] or 0,t[3] or 0,t[4] or 0,t[5] or 0,t[6] or 0,t[7] or 0,t[8] or 0
+  et,ef,n,ts,sc,sw,ql,cl,q = t[1] or 0,t[2] or 0,t[3] or 0,t[4] or 0,t[5] or 0,t[6] or 0,t[7] or 0,t[8] or 0,t[9] or 0
 end
-if ttfb>0 then if et<=0 then et=ttfb else et=et+a*(ttfb-et) end end
+if ttfb>0 then
+  if et<=0 then et=ttfb else et=et+a*(ttfb-et) end
+  if q<=0 then q=ttfb else
+    local st=a*math.max(et,1000)
+    if ttfb>q then q=q+st*0.95 else q=q-st*0.05 end
+    if q<0 then q=ttfb end
+  end
+end
 if failed==1 or ok==1 then ef=ef+a*(failed-ef); n=n+1 end
 local cd=0
 if slow==1 then
@@ -201,14 +241,14 @@ elseif cap==1 then
 elseif ok==1 then
   ql=0; cl=0; sc=0
 end
-local s=string.format('%.1f,%.4f,%d,%d,%d,%d,%d,%d', et, ef, n, now, sc, sw, ql, cl)
+local s=string.format('%.1f,%.4f,%d,%d,%d,%d,%d,%d,%.1f', et, ef, n, now, sc, sw, ql, cl, q)
 redis.call('HSET', KEYS[1], ARGV[1], s)
 return {s, math.floor(cd)}
 `
 
 // HealthTracker is the cluster-wide tracker; the zero value is unusable, use NewHealthTracker.
 type HealthTracker struct {
-	settings HealthSettings
+	settings atomic.Pointer[HealthSettings]
 	mu       sync.RWMutex
 	entries  map[string]healthEntry // key: authID|family
 	fams     map[string]familyStat  // family → peer view
@@ -221,9 +261,21 @@ type HealthTracker struct {
 
 // NewHealthTracker builds a tracker; rc returns the shared Redis (nil = local only).
 func NewHealthTracker(s HealthSettings, rc func() *redisx.Client) *HealthTracker {
-	t := &HealthTracker{settings: s, entries: map[string]healthEntry{}, fams: map[string]familyStat{}, penal: map[string]float64{}, byAuth: map[string][]string{}, script: redis.NewScript(healthLua), rc: rc}
+	t := &HealthTracker{entries: map[string]healthEntry{}, fams: map[string]familyStat{}, penal: map[string]float64{}, byAuth: map[string][]string{}, script: redis.NewScript(healthLua), rc: rc}
+	t.settings.Store(&s)
 	return t
 }
+
+// SetSettings swaps the settings live (panel edits); the next sync and every
+// later observation use them.
+func (t *HealthTracker) SetSettings(s HealthSettings) {
+	if t == nil {
+		return
+	}
+	t.settings.Store(&s)
+}
+
+func (t *HealthTracker) cfg() HealthSettings { return *t.settings.Load() }
 
 func healthKey(authID, family string) string { return authID + "|" + family }
 
@@ -258,7 +310,7 @@ func (t *HealthTracker) Observe(ctx context.Context, o HealthObservation) time.D
 	}
 	key := healthKey(o.AuthID, fam)
 	now := time.Now().Unix()
-	s := t.settings
+	s := t.cfg()
 	if c := t.redis(); c != nil {
 		args := []any{key, now, o.TTFBMs, b2i(o.Failed), b2i(o.Slow), b2i(o.Capacity), b2i(o.Success), s.Alpha, s.SlowEvents,
 			int64(s.Window / time.Second), s.Quarantine.Milliseconds(), s.QuarantineMax.Milliseconds(), s.SubThresholdCool.Milliseconds()}
@@ -292,7 +344,7 @@ func (t *HealthTracker) guard(fam string, o HealthObservation, cd time.Duration)
 	if cd <= 0 {
 		return cd
 	}
-	s := t.settings
+	s := t.cfg()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	st := t.fams[fam]
@@ -310,7 +362,7 @@ func (t *HealthTracker) guard(fam string, o HealthObservation, cd time.Duration)
 }
 
 func (t *HealthTracker) observeLocal(key string, now int64, o HealthObservation) time.Duration {
-	s := t.settings
+	s := t.cfg()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.indexLocked(key)
@@ -321,6 +373,7 @@ func (t *HealthTracker) observeLocal(key string, now int64, o HealthObservation)
 		} else {
 			e.ttfb += s.Alpha * (float64(o.TTFBMs) - e.ttfb)
 		}
+		e.q95 = healthQ95Step(e.q95, float64(o.TTFBMs), e.ttfb, s.Alpha)
 	}
 	if o.Failed || o.Success {
 		e.fail += s.Alpha * (float64(b2i(o.Failed)) - e.fail)
@@ -391,7 +444,7 @@ func (t *HealthTracker) rebuildIndexLocked() {
 
 // boundLocked evicts the stalest entries above MaxEntries.
 func (t *HealthTracker) boundLocked() {
-	over := len(t.entries) - t.settings.MaxEntries
+	over := len(t.entries) - t.cfg().MaxEntries
 	if over <= 0 {
 		return
 	}
@@ -405,7 +458,7 @@ func (t *HealthTracker) boundLocked() {
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].u < all[j].u })
 	// evict 10% extra so this does not run on every insert
-	over += t.settings.MaxEntries / 10
+	over += t.cfg().MaxEntries / 10
 	for i := 0; i < over && i < len(all); i++ {
 		delete(t.entries, all[i].k)
 	}
@@ -429,7 +482,7 @@ func (t *HealthTracker) Weight(authID, model string) float64 {
 
 // rawWeight is the peer-relative weight of a pair, before the family cap.
 func (t *HealthTracker) rawWeight(e healthEntry, st familyStat, now int64) float64 {
-	s := t.settings
+	s := t.cfg()
 	if e.n < int64(s.MinSamples) || now-e.updated > int64(s.Idle/time.Second) || st.upstream || st.peers < s.MinPeers {
 		return 1
 	}
@@ -439,6 +492,9 @@ func (t *HealthTracker) rawWeight(e healthEntry, st familyStat, now int64) float
 	}
 	if st.ttfb > 0 && e.ttfb > st.ttfb*s.SlowFactor && e.ttfb-st.ttfb > float64(s.SlowMinExtra.Milliseconds()) {
 		w *= st.ttfb * s.SlowFactor / e.ttfb
+	}
+	if (s.DemoteTTFBP95 > 0 && e.q95 > float64(s.DemoteTTFBP95.Milliseconds())) || (s.DemoteFail > 0 && e.fail > s.DemoteFail) {
+		w = math.Min(w, math.Max(demotedWeight, s.ProbeFloor))
 	}
 	if w < s.ProbeFloor {
 		w = s.ProbeFloor
@@ -498,7 +554,7 @@ func (t *HealthTracker) Status(authID string) []HealthStatus {
 
 // Run refreshes the local mirror from Redis and prunes idle pairs until ctx ends.
 func (t *HealthTracker) Run(ctx context.Context) {
-	tick := time.NewTicker(t.settings.SyncInterval)
+	tick := time.NewTicker(t.cfg().SyncInterval)
 	defer tick.Stop()
 	for {
 		t.sync(ctx)
@@ -512,7 +568,7 @@ func (t *HealthTracker) Run(ctx context.Context) {
 
 func (t *HealthTracker) sync(ctx context.Context) {
 	now := time.Now().Unix()
-	idle := int64(t.settings.Idle / time.Second)
+	idle := int64(t.cfg().Idle / time.Second)
 	next := map[string]healthEntry{}
 	if c := t.redis(); c != nil {
 		key := c.Key("health", "pairs")
@@ -535,7 +591,7 @@ func (t *HealthTracker) sync(ctx context.Context) {
 				next[kvs[i]] = e
 			}
 			cursor = nc
-			if cursor == 0 || len(next) > t.settings.MaxEntries {
+			if cursor == 0 || len(next) > t.cfg().MaxEntries {
 				break
 			}
 		}
@@ -566,7 +622,7 @@ func (t *HealthTracker) sync(ctx context.Context) {
 // only the worst MaxDegradedFrac of a family's sampled pairs may be
 // down-weighted, and none when the family is slow/failing as a whole.
 func (t *HealthTracker) peerView(entries map[string]healthEntry, now int64) (map[string]familyStat, map[string]float64) {
-	s := t.settings
+	s := t.cfg()
 	type pk struct {
 		key string
 		e   healthEntry
@@ -640,4 +696,4 @@ func ClusterHealth() *HealthTracker {
 }
 
 // Settings returns the tracker settings.
-func (t *HealthTracker) Settings() HealthSettings { return t.settings }
+func (t *HealthTracker) Settings() HealthSettings { return t.cfg() }

@@ -101,6 +101,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}
 
+	applyClusterHealthSettings(cfg)
 	if r.coreManager != nil {
 		r.coreManager.SetConfig(cfg)
 		r.coreManager.SetOAuthModelAlias(cfg.OAuthModelAlias)

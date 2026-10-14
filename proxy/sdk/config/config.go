@@ -17,6 +17,12 @@ type CodexClientConfig = internalconfig.CodexClientConfig
 type StreamingConfig = internalconfig.StreamingConfig
 type ClaudeCodeConfig = internalconfig.ClaudeCodeConfig
 type TLSConfig = internalconfig.TLSConfig
+
+// AntigravityHealthConfig tunes credential health handling (shared with Home).
+type AntigravityHealthConfig = internalconfig.AntigravityHealthConfig
+
+// AntigravityClusterHealthConfig is Home's cluster health weighting config.
+type AntigravityClusterHealthConfig = internalconfig.AntigravityClusterHealthConfig
 type DiscoveryConfig = internalconfig.DiscoveryConfig
 type DiscoveryInterfacesConfig = internalconfig.DiscoveryInterfacesConfig
 type RemoteManagement = internalconfig.RemoteManagement
