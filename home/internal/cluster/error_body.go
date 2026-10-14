@@ -36,7 +36,7 @@ func ensureUsageFailBodyColumns(ctx context.Context, db *gorm.DB) error {
 	if !m.HasTable(&UsageRecord{}) {
 		return nil
 	}
-	fields := []string{"FailBodyTruncated", "FailBodySize", "ThinkingParams", "ThinkingNote", "StreamID"}
+	fields := []string{"FailBodyTruncated", "FailBodySize", "ThinkingParams", "ThinkingNote", "StreamID", "RetriedOK"}
 	if db.Dialector.Name() == "postgres" {
 		// IF NOT EXISTS: Homes starting together race on these columns; the
 		// loser of a plain ADD would fail its migration and exit.

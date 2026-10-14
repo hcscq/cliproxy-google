@@ -70,7 +70,9 @@ type UsageRecord struct {
 	ThinkingNote               string `gorm:"column:thinking_note"`
 	// StreamID is the Redis stream entry id the row came from ("" when written
 	// directly); used to skip redelivered entries.
-	StreamID            string    `gorm:"column:stream_id"`
+	StreamID string `gorm:"column:stream_id"`
+	// RetriedOK: failed attempt whose request later succeeded (set at ingest).
+	RetriedOK           bool      `gorm:"column:retried_ok;not null;default:false"`
 	ServiceTier         string    `gorm:"column:service_tier"`
 	ResponseServiceTier string    `gorm:"column:response_service_tier"`
 	Endpoint            string    `gorm:"column:endpoint;index:idx_usage_endpoint_time,priority:1"`
@@ -379,6 +381,7 @@ func (r *Repository) AppendUsageWithRuntime(ctx context.Context, payload string,
 		record.QuotaIdentityVersion = quotaCredentialIdentityVersion(resolved)
 		record.QuotaIdentityKey = identityKey
 	}
+	retryCandidates := usageRetryMarkBefore(ctx, []*UsageRecord{record})
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if errCreate := tx.WithContext(ctx).Create(record).Error; errCreate != nil {
 			return errCreate
@@ -391,6 +394,7 @@ func (r *Repository) AppendUsageWithRuntime(ctx context.Context, payload string,
 	if errTransaction != nil {
 		return nil, errTransaction
 	}
+	usageRetryMarkAfter(ctx, db, retryCandidates)
 	if errQuota := upsertQuotaFromUsageRecord(ctx, db, record, metadata); errQuota != nil {
 		log.WithError(errQuota).Warn("usage quota observation ignored")
 	}

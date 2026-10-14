@@ -967,7 +967,7 @@ func usageObservabilityTotalsSQLSelect() string {
 		COUNT(DISTINCT "usage"."id") AS request_count,
 		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
 		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
-		SUM(CASE WHEN "usage"."failed" AND `+usageRetrySucceededExists+` THEN 1 ELSE 0 END) AS retried_ok_count,
+		SUM(CASE WHEN "usage"."failed" AND "usage"."retried_ok" THEN 1 ELSE 0 END) AS retried_ok_count,
 		SUM("usage"."input_tokens") AS input_tokens,
 		SUM("usage"."output_tokens") AS output_tokens,
 		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
@@ -2573,9 +2573,9 @@ func usageObservabilityStatusScope(scope *gorm.DB, status string) *gorm.DB {
 		return scope.Where(`"usage"."failed" = ?`, true)
 	case "final_failed":
 		// Failed attempts whose request never succeeded on a later attempt.
-		return scope.Where(`"usage"."failed" = ? AND NOT (`+usageRetrySucceededExists+`)`, true)
+		return scope.Where(`"usage"."failed" = ? AND "usage"."retried_ok" = ?`, true, false)
 	case "retried_ok":
-		return scope.Where(`"usage"."failed" = ? AND (`+usageRetrySucceededExists+`)`, true)
+		return scope.Where(`"usage"."failed" = ? AND "usage"."retried_ok" = ?`, true, true)
 	default:
 		statusCode, errAtoi := strconv.Atoi(value)
 		if errAtoi == nil {
@@ -4516,9 +4516,6 @@ func (r *Repository) GetSessionTree(ctx context.Context, identifier string) (*Se
 // usageRetryWindow bounds how long after a failed attempt a success of the same request
 // counts as "retried and succeeded" (requests are capped well below this).
 const usageRetryWindow = 15 * time.Minute
-
-// usageRetrySucceededExists is a correlated EXISTS over the request_id index.
-const usageRetrySucceededExists = `"usage"."request_id" <> '' AND EXISTS (SELECT 1 FROM "usage" AS ok WHERE ok."request_id" = "usage"."request_id" AND ok."failed" = false AND ok."timestamp" >= "usage"."timestamp")`
 
 // UsageRetrySuccess is the later successful attempt of a request that had failed attempts.
 type UsageRetrySuccess struct {

@@ -82,11 +82,13 @@ func (r *Repository) AppendUsageBatch(ctx context.Context, items []UsagePayloadI
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	allRecords := make([]*UsageRecord, len(rows))
+	for i := range rows {
+		allRecords[i] = rows[i].record
+	}
+	retryCandidates := usageRetryMarkBefore(ctx, allRecords)
 	errTx := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		records := make([]*UsageRecord, len(rows))
-		for i := range rows {
-			records[i] = rows[i].record
-		}
+		records := allRecords
 		if err := tx.CreateInBatches(records, 200).Error; err != nil {
 			return err
 		}
@@ -121,6 +123,7 @@ func (r *Repository) AppendUsageBatch(ctx context.Context, items []UsagePayloadI
 		}
 		return stored, nil // individual path already did quota upserts
 	}
+	usageRetryMarkAfter(ctx, db, retryCandidates)
 	latest := map[string]built{}
 	order := []string{}
 	for _, b := range rows {
