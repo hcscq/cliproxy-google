@@ -49,22 +49,22 @@ func parseSubscriptionTier(body []byte) (id, name string, ok bool) {
 	return "", "", false
 }
 
-func subscriptionDue(a *coreauth.Auth, now time.Time, attempted map[string]time.Time) bool {
+// subscriptionNeedsCheck reports whether a full (DB) auth needs an upstream refresh.
+func subscriptionNeedsCheck(a *coreauth.Auth, now time.Time) bool {
 	if a == nil || a.Disabled || !strings.EqualFold(a.Provider, "antigravity") || strings.TrimSpace(a.ProxyURL) == "" {
-		return false
-	}
-	if t, ok := attempted[a.ID]; ok && now.Sub(t) < subscriptionRetryAge {
 		return false
 	}
 	checked := metadataTime(a, subscriptionCheckedKey)
 	return checked.IsZero() || now.Sub(checked) >= subscriptionRefreshAge
 }
 
+// The in-memory auths carry neither ProxyURL nor full metadata, so the loop keeps its
+// own next-due map and reads the full auth (DB) only when an entry is due.
 func (r *Runtime) startSubscriptionTierRefresher(ctx context.Context) {
 	go func() {
 		tick := time.NewTicker(subscriptionScanEvery)
 		defer tick.Stop()
-		attempted := map[string]time.Time{}
+		nextDue := map[string]time.Time{}
 		for {
 			select {
 			case <-ctx.Done():
@@ -75,38 +75,62 @@ func (r *Runtime) startSubscriptionTierRefresher(ctx context.Context) {
 				continue
 			}
 			now := time.Now().UTC()
-			due := r.coreManager.ListMatching(func(a *coreauth.Auth) bool { return subscriptionDue(a, now, attempted) })
-			if len(due) > subscriptionPerScan {
-				due = due[:subscriptionPerScan]
+			live := map[string]bool{}
+			calls, reads := 0, 0
+			for _, a := range r.coreManager.ListLight(func(a *coreauth.Auth) bool {
+				return a != nil && !a.Disabled && strings.EqualFold(a.Provider, "antigravity")
+			}) {
+				live[a.ID] = true
+				if t, ok := nextDue[a.ID]; ok && now.Before(t) {
+					continue
+				}
+				if calls >= subscriptionPerScan || reads >= 10*subscriptionPerScan {
+					continue
+				}
+				reads++
+				full := r.fullAuth(ctx, a.ID)
+				if full == nil {
+					continue
+				}
+				if !subscriptionNeedsCheck(full, now) {
+					if checked := metadataTime(full, subscriptionCheckedKey); !checked.IsZero() {
+						nextDue[a.ID] = checked.Add(subscriptionRefreshAge)
+					} else {
+						nextDue[a.ID] = now.Add(subscriptionRetryAge) // no egress / disabled
+					}
+					continue
+				}
+				calls++
+				if r.refreshSubscriptionTier(ctx, a.ID, now) {
+					nextDue[a.ID] = now.Add(subscriptionRefreshAge)
+				} else {
+					nextDue[a.ID] = now.Add(subscriptionRetryAge)
+				}
 			}
-			for _, a := range due {
-				attempted[a.ID] = now
-				r.refreshSubscriptionTier(ctx, a.ID, now)
-			}
-			for id, t := range attempted {
-				if now.Sub(t) > 2*subscriptionRetryAge {
-					delete(attempted, id)
+			for id := range nextDue {
+				if !live[id] {
+					delete(nextDue, id)
 				}
 			}
 		}
 	}()
 }
 
-func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now time.Time) {
+func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now time.Time) bool {
 	cctx, cancel := context.WithTimeout(ctx, subscriptionCallTimeout)
 	defer cancel()
 	full := r.fullAuth(cctx, id)
 	if full == nil || full.Disabled || strings.TrimSpace(full.ProxyURL) == "" {
-		return
+		return false
 	}
 	token := extractAccessToken(full)
 	if token == "" {
-		return
+		return false
 	}
 	reqBody := []byte(`{"metadata":{"ide_type":"ANTIGRAVITY","ide_version":"1.21.9","ide_name":"antigravity"}}`)
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, subscriptionLoadURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return
+		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -114,23 +138,23 @@ func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now ti
 	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
 	resp, err := credentialHTTPClient(full, subscriptionCallTimeout).Do(req)
 	if err != nil {
-		log.Debugf("subscription tier: %s: %v", id, err)
-		return
+		log.Warnf("subscription tier: %s: %v", id, err)
+		return false
 	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Debugf("subscription tier: %s: http %d", id, resp.StatusCode)
-		return
+		log.Warnf("subscription tier: %s: http %d", id, resp.StatusCode)
+		return false
 	}
 	tier, name, ok := parseSubscriptionTier(data)
 	if !ok {
-		return
+		return false
 	}
 	// Re-read right before writing so a concurrent token refresh is not overwritten.
 	full = r.fullAuth(cctx, id)
 	if full == nil {
-		return
+		return false
 	}
 	if full.Metadata == nil {
 		full.Metadata = map[string]any{}
@@ -141,9 +165,10 @@ func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now ti
 	full.Metadata[subscriptionCheckedKey] = now.Format(time.RFC3339)
 	if _, err := r.coreManager.Update(cctx, full); err != nil {
 		log.WithError(err).Warnf("subscription tier: update %s failed", id)
-		return
+		return false
 	}
 	if changed {
 		log.Infof("subscription tier: %s (%s) -> %s (%s)", id, full.Label, tier, name)
 	}
+	return true
 }
