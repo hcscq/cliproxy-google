@@ -50,7 +50,7 @@ export function UsagePage() {
 
       {!!overview.error && <ErrorBox error={overview.error} onRetry={overview.reload} />}
       <div className="grid grid-4">
-        <Stat label={tr('请求数', 'Requests')} value={tot ? fmtCompact(tot.request_count) : '…'} sub={tot ? `${tr('失败', 'failed')} ${fmtNum(tot.failed_count)}` : undefined} />
+        <Stat label={tr('请求数', 'Requests')} value={tot ? fmtCompact(tot.request_count) : '…'} sub={tot ? `${tr('失败', 'failed')} ${fmtNum(tot.failed_count)}${tot.retried_ok_count ? ` · ${tr('重试成功', 'retried OK')} ${fmtNum(tot.retried_ok_count)}` : ''}` : undefined} />
         <Stat label={t('successRate')} value={tot ? fmtPct(tot.request_count ? tot.success_count / tot.request_count : undefined) : '…'} sub={overview.data?.live ? `RPM ${fmtNum(overview.data.live.rpm, 1)} · TPM ${fmtCompact(overview.data.live.tpm)}` : undefined} />
         <Stat label={t('tokens')} value={tot ? fmtCompact(tot.total_tokens) : '…'} sub={tot ? `${tr('输入', 'in')} ${fmtCompact(tot.input_tokens)} · ${tr('输出', 'out')} ${fmtCompact(tot.output_tokens)} · ${tr('思考', 'reasoning')} ${fmtCompact(tot.reasoning_tokens)} · ${tr('缓存命中', 'cached')} ${fmtCompact(tot.cached_tokens)}${tot.input_tokens ? ` (${fmtPct((tot.cached_tokens ?? 0) / tot.input_tokens)})` : ''}` : undefined} />
         <Stat label={t('latency')} value={tot ? fmtMs(tot.avg_latency_ms) : '…'} sub={tot ? `P95 ${fmtMs(tot.p95_latency_ms)}` : undefined} />
@@ -195,7 +195,12 @@ function RequestEvents({ from }: { from: string }) {
                       <div
                         className="faint small"
                         data-testid="row-retried-ok"
-                        title={`${tr('最终', 'final')} ${e.retried_ok.status_code ?? 200} · ${tr('凭据', 'credential')} ${e.retried_ok.auth_index ?? '?'}${e.retried_ok.at ? ` · ${new Date(e.retried_ok.at).toLocaleTimeString()}` : ''}`}
+                        style={{ cursor: e.retried_ok.auth_index ? 'copy' : undefined }}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          if (e.retried_ok?.auth_index) void navigator.clipboard?.writeText(e.retried_ok.auth_index);
+                        }}
+                        title={`${tr('最终', 'final')} ${e.retried_ok.status_code ?? 200} · ${tr('凭据', 'credential')} ${e.retried_ok.seq ? `#${e.retried_ok.seq}` : ''}${e.retried_ok.auth_index ? ` (${e.retried_ok.auth_index}, ${tr('点击复制', 'click to copy')})` : ''}${e.retried_ok.at ? ` · ${new Date(e.retried_ok.at).toLocaleTimeString()}` : ''}`}
                       >
                         {tr('重试后成功', 'retried OK')}
                       </div>

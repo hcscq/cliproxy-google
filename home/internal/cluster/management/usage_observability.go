@@ -1208,6 +1208,7 @@ func usageOverviewTotalsResponse(totals cluster.UsageObservabilityTotals) gin.H 
 		"request_count":              totals.RequestCount,
 		"success_count":              totals.SuccessCount,
 		"failed_count":               totals.FailedCount,
+		"retried_ok_count":           totals.RetriedOKCount,
 		"error_rate":                 totals.ErrorRate,
 		"success_rate":               totals.SuccessRate,
 		"input_tokens":               totals.InputTokens,
@@ -1972,7 +1973,7 @@ func (h *Handler) annotateRetriedOK(ctx context.Context, records []cluster.Usage
 		}
 		item := items[i]
 		if s, found := ok[strings.TrimSpace(records[i].RequestID)]; found {
-			item["retried_ok"] = gin.H{"auth_index": s.AuthIndex, "status_code": s.StatusCode, "at": s.Timestamp}
+			item["retried_ok"] = gin.H{"auth_index": s.AuthIndex, "seq": s.Seq, "status_code": s.StatusCode, "at": s.Timestamp}
 		}
 	}
 }

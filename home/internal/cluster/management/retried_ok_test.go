@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
 
 func TestRequestEventsMarkRetriedOKAndFinalFailedFilter(t *testing.T) {
@@ -15,6 +18,9 @@ func TestRequestEventsMarkRetriedOKAndFinalFailedFilter(t *testing.T) {
 	handler, closeRepo := newUsageObservabilityTestHandler(t)
 	defer closeRepo()
 	ctx := context.Background()
+	if _, err := handler.repo.UpsertAuth(ctx, &coreauth.Auth{ID: "cred-2", Index: "cred-2", Provider: "antigravity", Status: coreauth.StatusActive}, "test"); err != nil {
+		t.Fatal(err)
+	}
 	for _, p := range []string{
 		// request A: 502 on cred-1, then 200 on cred-2
 		`{"timestamp":"2026-06-10T01:00:00Z","provider":"antigravity","model":"m","request_id":"req-A","auth_index":"cred-1","failed":true,"fail":{"status_code":502,"body":"gfe 502"},"latency_ms":45000}`,
@@ -49,7 +55,7 @@ func TestRequestEventsMarkRetriedOKAndFinalFailedFilter(t *testing.T) {
 			continue
 		}
 		marked++
-		if it["request_id"] != "req-A" || ro["auth_index"] != "cred-2" {
+		if it["request_id"] != "req-A" || ro["auth_index"] != "cred-2" || ro["seq"] == float64(0) {
 			t.Fatalf("wrong annotation: %v", it)
 		}
 	}
@@ -61,5 +67,14 @@ func TestRequestEventsMarkRetriedOKAndFinalFailedFilter(t *testing.T) {
 	}
 	if f := get("&status=retried_ok"); len(f) != 1 || f[0]["request_id"] != "req-A" {
 		t.Fatalf("retried_ok = %v", f)
+	}
+	from := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	to := from.Add(2 * time.Hour)
+	ov, err := handler.repo.UsageObservabilityOverview(ctx, cluster.UsageObservabilityOverviewQuery{From: &from, To: &to})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ov.Totals.FailedCount != 1 || ov.Totals.RetriedOKCount != 1 {
+		t.Fatalf("overview failed=%d retried_ok=%d, want 1/1", ov.Totals.FailedCount, ov.Totals.RetriedOKCount)
 	}
 }

@@ -779,7 +779,7 @@ export interface RequestEvent {
   failed?: boolean;
   status_code?: number | null;
   /** Failed attempt whose request later succeeded on another attempt. */
-  retried_ok?: { auth_index?: string; status_code?: number; at?: string } | null;
+  retried_ok?: { auth_index?: string; seq?: number; status_code?: number; at?: string } | null;
   provider?: string;
   model?: string;
   original_model?: string;
@@ -827,6 +827,8 @@ export interface UsageOverview {
     request_count: number;
     success_count: number;
     failed_count: number;
+    /** failed attempts whose request later succeeded (excluded from failed_count) */
+    retried_ok_count?: number;
     error_rate?: number;
     success_rate?: number;
     avg_latency_ms?: number | null;

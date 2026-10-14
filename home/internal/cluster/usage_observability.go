@@ -148,7 +148,8 @@ type UsageObservabilityLiveSummary struct {
 type UsageObservabilityTotals struct {
 	RequestCount          int64
 	SuccessCount          int64
-	FailedCount           int64
+	FailedCount           int64 // final failures only (attempts whose request never succeeded)
+	RetriedOKCount        int64 // failed attempts whose request later succeeded
 	ErrorRate             float64
 	SuccessRate           float64
 	InputTokens           int64
@@ -540,6 +541,7 @@ type usageObservabilityTotalsRow struct {
 	RequestCount               int64           `gorm:"column:request_count"`
 	SuccessCount               sql.NullInt64   `gorm:"column:success_count"`
 	FailedCount                sql.NullInt64   `gorm:"column:failed_count"`
+	RetriedOKCount             sql.NullInt64   `gorm:"column:retried_ok_count"`
 	InputTokens                sql.NullInt64   `gorm:"column:input_tokens"`
 	OutputTokens               sql.NullInt64   `gorm:"column:output_tokens"`
 	ReasoningTokens            sql.NullInt64   `gorm:"column:reasoning_tokens"`
@@ -965,6 +967,7 @@ func usageObservabilityTotalsSQLSelect() string {
 		COUNT(DISTINCT "usage"."id") AS request_count,
 		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
 		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
+		SUM(CASE WHEN "usage"."failed" AND `+usageRetrySucceededExists+` THEN 1 ELSE 0 END) AS retried_ok_count,
 		SUM("usage"."input_tokens") AS input_tokens,
 		SUM("usage"."output_tokens") AS output_tokens,
 		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
@@ -1004,7 +1007,8 @@ func usageObservabilityTotalsFromRow(row *usageObservabilityTotalsRow) UsageObse
 	totals := UsageObservabilityTotals{
 		RequestCount:        row.RequestCount,
 		SuccessCount:        optionalSQLInt64Value(row.SuccessCount),
-		FailedCount:         optionalSQLInt64Value(row.FailedCount),
+		FailedCount:         optionalSQLInt64Value(row.FailedCount) - optionalSQLInt64Value(row.RetriedOKCount),
+		RetriedOKCount:      optionalSQLInt64Value(row.RetriedOKCount),
 		InputTokens:         optionalSQLInt64Value(row.InputTokens),
 		OutputTokens:        optionalSQLInt64Value(row.OutputTokens),
 		ReasoningTokens:     optionalSQLInt64Value(row.ReasoningTokens),
@@ -4522,6 +4526,7 @@ type UsageRetrySuccess struct {
 	AuthIndex  string    `gorm:"column:auth_index"`
 	StatusCode int64     `gorm:"column:status_code"`
 	Timestamp  time.Time `gorm:"column:timestamp"`
+	Seq        int64     `gorm:"column:seq"`
 }
 
 // UsageRetrySuccesses returns, for the given request ids, their successful attempt within
@@ -4537,9 +4542,11 @@ func (r *Repository) UsageRetrySuccesses(ctx context.Context, requestIDs []strin
 	}
 	var rows []UsageRetrySuccess
 	err := db.WithContext(contextOrBackground(ctx)).Table("usage").
-		Select(`request_id, auth_index, 200 AS status_code, "timestamp"`).
-		Where(`request_id IN ? AND failed = ? AND "timestamp" >= ? AND "timestamp" <= ?`, requestIDs, false, from, to.Add(usageRetryWindow)).
-		Order(`"timestamp" ASC`).
+		Select(`"usage"."request_id", "usage"."auth_index", 200 AS status_code, "usage"."timestamp", COALESCE(MAX("auth"."seq"), 0) AS seq`).
+		Joins(`LEFT JOIN "auth" ON "auth"."uuid" = "usage"."auth_index" AND "auth"."deleted_at" IS NULL`).
+		Where(`"usage"."request_id" IN ? AND "usage"."failed" = ? AND "usage"."timestamp" >= ? AND "usage"."timestamp" <= ?`, requestIDs, false, from, to.Add(usageRetryWindow)).
+		Group(`"usage"."request_id", "usage"."auth_index", "usage"."timestamp"`).
+		Order(`"usage"."timestamp" ASC`).
 		Scan(&rows).Error
 	if err != nil {
 		return out, err
