@@ -66,8 +66,8 @@ func TestApplyQuotaBucketWindowsBlocksAndReleasesPerBucket(t *testing.T) {
 		if !isQuotaBucketState(st) || !st.Unavailable || !st.Quota.Exceeded {
 			t.Fatalf("%s state = %+v, want bucket block", m, st)
 		}
-		if d := time.Until(st.NextRetryAfter); d <= 0 || d > 11*time.Minute {
-			t.Fatalf("%s blocked for %v, want short re-probe window (<=2x5m)", m, d)
+		if d := time.Until(st.NextRetryAfter); d < 5*24*time.Hour-time.Minute || d > 5*24*time.Hour {
+			t.Fatalf("%s blocked for %v, want until upstream reset", m, d)
 		}
 		if !strings.Contains(st.StatusMessage, "Gemini 额度耗尽") || !strings.Contains(st.StatusMessage, "重置 ") {
 			t.Fatalf("%s message = %q", m, st.StatusMessage)
@@ -110,5 +110,48 @@ func TestPlanQuotaBucketActionsCapsAtResetAndSkipsRewrite(t *testing.T) {
 	// Disabled: existing bucket blocks are released.
 	if acts := planQuotaBucketActions(auth, models, verdicts, 5*time.Minute, false, now); len(acts) != 1 || acts[0].block {
 		t.Fatalf("disabled actions = %+v, want release", acts)
+	}
+}
+
+func TestPlanQuotaBucketActionsKeepsLongResetAndReleasesOnRecovery(t *testing.T) {
+	now := time.Now().UTC()
+	reset := now.Add(123 * time.Hour)
+	models := map[string][]string{quotaBucketGemini: {"gemini-3.8-flash-tiered"}}
+	// A request-path 429 already cooled the model until the weekly reset.
+	auth := &coreauth.Auth{ID: "a", ModelStates: map[string]*coreauth.ModelState{
+		"gemini-3.8-flash-tiered": {Unavailable: true, NextRetryAfter: reset, Quota: coreauth.QuotaState{Exceeded: true, NextRecoverAt: reset},
+			LastError: &coreauth.Error{Code: "", HTTPStatus: 429}},
+	}}
+	exhausted := map[string]quotaBucketVerdict{quotaBucketGemini: {known: true, exhausted: true, resetAt: reset}}
+	if acts := planQuotaBucketActions(auth, models, exhausted, 5*time.Minute, true, now); len(acts) != 0 {
+		t.Fatalf("long cooldown must not be rewritten/shortened: %+v", acts)
+	}
+	noReset := map[string]quotaBucketVerdict{quotaBucketGemini: {known: true, exhausted: true}}
+	if acts := planQuotaBucketActions(auth, models, noReset, 5*time.Minute, true, now); len(acts) != 0 {
+		t.Fatalf("probe without reset must not shorten a longer cooldown: %+v", acts)
+	}
+	recovered := map[string]quotaBucketVerdict{quotaBucketGemini: {known: true}}
+	acts := planQuotaBucketActions(auth, models, recovered, 5*time.Minute, true, now)
+	if len(acts) != 1 || acts[0].block {
+		t.Fatalf("recovery must release long upstream quota cooldown early: %+v", acts)
+	}
+	// Short (60s) 429 cooldowns are not touched by the guard.
+	auth.ModelStates["gemini-3.8-flash-tiered"].NextRetryAfter = now.Add(60 * time.Second)
+	if acts := planQuotaBucketActions(auth, models, recovered, 5*time.Minute, true, now); len(acts) != 0 {
+		t.Fatalf("short cooldown must be left alone: %+v", acts)
+	}
+}
+
+func TestCoolingQuotaPairsSkipsLongReset(t *testing.T) {
+	now := time.Now()
+	mk := func(d time.Duration) *coreauth.Auth {
+		return &coreauth.Auth{ID: "x", Provider: "antigravity", ModelStates: map[string]*coreauth.ModelState{
+			"m": {Unavailable: true, NextRetryAfter: now.Add(d), LastError: &coreauth.Error{HTTPStatus: 429}}}}
+	}
+	if n := len(coolingQuotaPairs([]*coreauth.Auth{mk(123 * time.Hour)}, now)); n != 0 {
+		t.Fatalf("weekly cooldown probed per model: %d", n)
+	}
+	if n := len(coolingQuotaPairs([]*coreauth.Auth{mk(time.Minute)}, now)); n != 1 {
+		t.Fatalf("short cooldown not probed: %d", n)
 	}
 }

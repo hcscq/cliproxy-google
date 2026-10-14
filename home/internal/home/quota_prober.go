@@ -31,6 +31,8 @@ const (
 	quotaProbeMaxPerSecond = 5
 	quotaProbeConcurrency  = 4
 	quotaProbeTimeout      = 30 * time.Second
+	// quotaProbeLongResetSkip: cooldowns further out than this are left to the bucket re-probe.
+	quotaProbeLongResetSkip = time.Hour
 )
 
 var quotaProbeGeneratePath = "/v1internal:generateContent"
@@ -170,6 +172,12 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 			}
 			if st.Quota.Reason == "credential_quota" || st.LastError.Code == QuotaBucketExhaustedCode {
 				// Bucket blocks are re-checked by the quota collector, not per-model probes.
+				continue
+			}
+			if st.NextRetryAfter.Sub(now) > quotaProbeLongResetSkip {
+				// Long upstream reset (e.g. weekly "Individual quota reached"): the quota
+				// collector's bucket re-probe releases it early; per-model probes would only
+				// burn a 429 every interval.
 				continue
 			}
 			out = append(out, quotaProbeTarget{auth: a, model: model, reset: st.NextRetryAfter})

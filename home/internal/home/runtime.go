@@ -371,6 +371,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	if errLoad := r.loadAuths(runCtx); errLoad != nil {
 		return errLoad
 	}
+	r.WarmAntigravityCatalogs(runCtx)
 
 	clusterMode := r.clusterAutoRefreshGated()
 	if clusterMode {

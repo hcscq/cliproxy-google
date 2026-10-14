@@ -208,3 +208,23 @@ func TestCatalogEventRefreshIsDebounced(t *testing.T) {
 		t.Fatalf("calls=%d", calls.Load())
 	}
 }
+
+// Startup warm-up applies stored catalogs synchronously (no upstream fetch), so a
+// freshly started Home sees every credential's dynamic models before serving.
+func TestWarmAntigravityCatalogsAppliesStoredRowsSynchronously(t *testing.T) {
+	var models atomic.Value
+	models.Store([]string{"x"})
+	var calls atomic.Int32
+	catalogServer(t, &models, &calls)
+	now := time.Now().UTC()
+	store := &fakeCatalogAdapter{rows: map[string]AntigravityCatalogRow{"cat-w": {AuthID: "cat-w", Raw: []byte(`{"models":{"gemini-warm-model":{}}}`), FetchedAt: now, AttemptedAt: now, Status: "ok", ModelCount: 1}}}
+	rt := newCatalogTestRuntime(t, "cat-w", store)
+	rt.SetLeaderFunc(func() bool { return true })
+	rt.WarmAntigravityCatalogs(context.Background())
+	if calls.Load() != 0 {
+		t.Fatal("warm-up must not call upstream")
+	}
+	if !registry.GetGlobalRegistry().ClientSupportsModel("cat-w", "gemini-warm-model") {
+		t.Fatal("warm-up must apply the stored catalog")
+	}
+}

@@ -18,14 +18,17 @@ import (
 // guard a bucket at 0% kept receiving traffic, and every request paid one upstream 429 before
 // the per-model short cooldown kicked in (and again after each 60s window). When a probe shows
 // a bucket at 0%, every model of that bucket on that credential is put into a model-scoped
-// quota cooldown (other buckets and credentials are untouched). The cooldown lasts two
-// re-probe intervals (or until the upstream reset, if sooner) and is refreshed by each new
+// quota cooldown (other buckets and credentials are untouched). The cooldown lasts until the
+// upstream reset (or two re-probe intervals when no reset is reported) and is refreshed by each new
 // probe that still shows 0%; a probe that shows remaining quota releases it at once.
 // State goes through the normal auth manager path, so proxies see it from their in-memory
 // auth state (no per-request lookups).
 
 // QuotaBucketExhaustedCode marks model cooldowns set from an exhausted quota-probe bucket.
 const QuotaBucketExhaustedCode = "quota_bucket_exhausted"
+
+// quotaBucketMaxHorizon bounds how far a probe-reported reset may push a cooldown.
+const quotaBucketMaxHorizon = 30 * 24 * time.Hour
 
 const (
 	quotaBucketGemini     = "gemini"
@@ -149,22 +152,31 @@ func planQuotaBucketActions(auth *coreauth.Auth, models map[string][]string, ver
 	for bucket, list := range models {
 		v := verdicts[bucket]
 		block := enabled && v.known && v.exhausted
+		// Block until the upstream reset when the probe reports one (re-probes release
+		// early if quota comes back); without a reset fall back to two re-probe intervals.
 		until := now.Add(2 * reprobe)
-		if !v.resetAt.IsZero() && v.resetAt.Before(until) {
+		if !v.resetAt.IsZero() && v.resetAt.After(now) && v.resetAt.Sub(now) <= quotaBucketMaxHorizon {
 			until = v.resetAt
 		}
 		for _, model := range list {
 			st := auth.ModelStates[model]
 			if block {
-				// Skip rewriting an identical block (keeps cluster writes low).
-				if isQuotaBucketState(st) && st.Unavailable && !st.NextRetryAfter.Before(until.Add(-reprobe/2)) {
+				// Never shorten an existing quota cooldown (e.g. a request-path 429 that
+				// already carries the weekly reset), and skip rewriting an identical block.
+				if st != nil && st.Unavailable && (st.Quota.Exceeded || isQuotaBucketState(st)) && !st.NextRetryAfter.Before(until.Add(-reprobe/2)) {
 					continue
 				}
 				out = append(out, quotaBucketAction{model: model, bucket: bucket, block: true, until: until, resetAt: v.resetAt})
 				continue
 			}
-			// Release only cooldowns this guard set; regular 429 cooldowns keep their own path.
-			if (v.known || !enabled) && isQuotaBucketState(st) && st.Unavailable && st.NextRetryAfter.After(now) {
+			if st == nil || !st.Unavailable || !st.NextRetryAfter.After(now) {
+				continue
+			}
+			// Release cooldowns this guard set, and (when the probe shows quota back) long
+			// quota cooldowns from upstream reset hints. Short 429 cooldowns keep their own path.
+			guardState := isQuotaBucketState(st)
+			longQuota := enabled && v.known && st.Quota.Exceeded && st.NextRetryAfter.Sub(now) > 2*reprobe
+			if (guardState && (v.known || !enabled)) || longQuota {
 				out = append(out, quotaBucketAction{model: model, bucket: bucket})
 			}
 		}

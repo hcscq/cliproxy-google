@@ -213,41 +213,7 @@ func (r *Runtime) antigravityCatalogTick(ctx context.Context, trigger string) {
 	if len(auths) == 0 {
 		return
 	}
-	if store := r.catalogStore(); store != nil {
-		loadCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		start := time.Now()
-		r.agCatalog.mu.Lock()
-		since, fullAt := r.agCatalog.loadedAt, r.agCatalog.fullLoadAt
-		r.agCatalog.mu.Unlock()
-		var rows map[string]AntigravityCatalogRow
-		var err error
-		inc, incremental := store.(AntigravityCatalogIncrementalStore)
-		if incremental && !since.IsZero() && start.Sub(fullAt) < catalogFullReloadEvery {
-			// small overlap guards against clock skew between Homes
-			rows, err = inc.LoadAntigravityCatalogsSince(loadCtx, since.Add(-time.Minute))
-		} else {
-			rows, err = store.LoadAntigravityCatalogs(loadCtx)
-			if err == nil {
-				r.agCatalog.mu.Lock()
-				r.agCatalog.fullLoadAt = start
-				r.agCatalog.mu.Unlock()
-			}
-		}
-		cancel()
-		if err == nil {
-			r.agCatalog.mu.Lock()
-			r.agCatalog.loadedAt = start
-			r.agCatalog.mu.Unlock()
-		}
-		if err != nil {
-			log.Warnf("antigravity catalog: load stored rows: %v", err)
-		}
-		for _, a := range auths {
-			if row, ok := rows[a.ID]; ok {
-				r.applyCatalogRow(a.ID, row)
-			}
-		}
-	}
+	r.applyStoredAntigravityCatalogs(ctx, auths)
 	r.pruneCatalogState(auths)
 	if !r.catalogLeader() {
 		return
@@ -272,6 +238,60 @@ func (r *Runtime) antigravityCatalogTick(ctx context.Context, trigger string) {
 		}()
 	}
 	wg.Wait()
+}
+
+// applyStoredAntigravityCatalogs loads stored catalog rows and applies them to auths.
+func (r *Runtime) applyStoredAntigravityCatalogs(ctx context.Context, auths []*coreauth.Auth) {
+	store := r.catalogStore()
+	if store == nil {
+		return
+	}
+	loadCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	start := time.Now()
+	r.agCatalog.mu.Lock()
+	since, fullAt := r.agCatalog.loadedAt, r.agCatalog.fullLoadAt
+	r.agCatalog.mu.Unlock()
+	var rows map[string]AntigravityCatalogRow
+	var err error
+	inc, incremental := store.(AntigravityCatalogIncrementalStore)
+	if incremental && !since.IsZero() && start.Sub(fullAt) < catalogFullReloadEvery {
+		// small overlap guards against clock skew between Homes
+		rows, err = inc.LoadAntigravityCatalogsSince(loadCtx, since.Add(-time.Minute))
+	} else {
+		rows, err = store.LoadAntigravityCatalogs(loadCtx)
+		if err == nil {
+			r.agCatalog.mu.Lock()
+			r.agCatalog.fullLoadAt = start
+			r.agCatalog.mu.Unlock()
+		}
+	}
+	cancel()
+	if err == nil {
+		r.agCatalog.mu.Lock()
+		r.agCatalog.loadedAt = start
+		r.agCatalog.mu.Unlock()
+	}
+	if err != nil {
+		log.Warnf("antigravity catalog: load stored rows: %v", err)
+	}
+	for _, a := range auths {
+		if row, ok := rows[a.ID]; ok {
+			r.applyCatalogRow(a.ID, row)
+		}
+	}
+}
+
+// WarmAntigravityCatalogs applies stored dynamic catalogs synchronously. Called at startup
+// after auths load and before the Home joins the cluster, so the first dispatches see every
+// credential's full model list (otherwise only credentials whose catalog happened to load
+// first are eligible and the rest look "all cooling" for up to one tick).
+func (r *Runtime) WarmAntigravityCatalogs(ctx context.Context) {
+	if r == nil || !antigravityDynamicModelsEnabled() {
+		return
+	}
+	if auths := r.antigravityAuths(); len(auths) > 0 {
+		r.applyStoredAntigravityCatalogs(ctx, auths)
+	}
 }
 
 // pruneCatalogState drops cached rows/event marks of deleted or disabled credentials.

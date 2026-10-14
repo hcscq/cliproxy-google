@@ -172,3 +172,43 @@ func TestStickyDispatchFirstBindWinsAcrossHomes(t *testing.T) {
 		}
 	}
 }
+
+// A bound credential whose model hits a weekly quota 429 must not be retried by
+// later requests of the conversation: the binding moves to a healthy credential.
+func TestStickyDispatchSkipsQuotaCooledBinding(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	modelID := "gemini-sticky-quota-test"
+	ids := []string{"auth-q1", "auth-q2"}
+	for _, id := range ids {
+		registry.GetGlobalRegistry().RegisterClient(id, "antigravity", []*registry.ModelInfo{{ID: modelID, Object: "model", Type: "antigravity"}})
+		if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: id, Provider: "antigravity", Status: coreauth.StatusActive}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(id) })
+	}
+	adapter := &stickyTestAdapter{bindings: map[string]string{}}
+	adapter.allowedModelIDs = []string{modelID}
+	rt := &Runtime{coreManager: manager, clusterAdapter: adapter, cfg: &config.Config{}}
+	h := http.Header{}
+	h.Set(affinityKeyHeader, "conv-q")
+	h.Set(affinitySourceHeader, "prefix")
+	first, err := rt.DispatchForAPIKey(context.Background(), modelID, h, "client-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetAt := time.Now().Add(123 * time.Hour).UTC().Format(time.RFC3339)
+	body := `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 123h6m42s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED","metadata":{"quotaResetDelay":"123h6m42s","quotaResetTimeStamp":"` + resetAt + `"}},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"443202s"}]}}`
+	res := coreauth.NewUsageResult(first.AuthID, "antigravity", modelID, 429, body)
+	res.AuthID = first.AuthID
+	manager.MarkResult(context.Background(), res)
+	got, _ := manager.GetByID(first.AuthID)
+	if st := got.ModelStates[modelID]; st == nil || time.Until(st.NextRetryAfter) < 120*time.Hour {
+		t.Fatalf("weekly 429 not cooled until reset: %+v", st)
+	}
+	for i := 0; i < 3; i++ {
+		r, err := rt.DispatchForAPIKey(context.Background(), modelID, h, "client-key")
+		if err != nil || r.AuthID == first.AuthID {
+			t.Fatalf("request %d still pinned to quota-cooled credential: %v %v", i, r, err)
+		}
+	}
+}
