@@ -226,6 +226,16 @@ const CRED_COLUMNS: FlexCol[] = [
 
 type CredSort = { sort: CredentialSortKey; order: "asc" | "desc" };
 const CRED_SORT_KEY = "cred-sort";
+// Compact provider label (full name in tooltip) so the tier badge fits on one line.
+const PROVIDER_ABBR: Record<string, string> = {
+  antigravity: "AG", "gemini-cli": "GC", gemini: "GM", codex: "CX", claude: "CL", openai: "OA",
+  qwen: "QW", iflow: "IF", vertex: "VX", kiro: "KR", devin: "DV", xai: "XA",
+};
+function providerAbbr(p: string) {
+  const k = (p || "").toLowerCase();
+  return PROVIDER_ABBR[k] ?? (k.length <= 3 ? k.toUpperCase() : k.replace(/[^a-z0-9]/g, "").slice(0, 2).toUpperCase());
+}
+
 // Short subscription badge from loadCodeAssist paidTier (refreshed daily by Home).
 function tierBadge(c: Credential, tr: (zh: string, en: string) => string) {
   const id = (c.subscription_tier || "").toLowerCase();
@@ -731,11 +741,13 @@ export function CredentialsPage() {
                         );
                       })()}
                     </td>
-                    <td title={c.provider}>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-                        <Badge kind="primary">{c.provider}</Badge>
+                    <td>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <span title={c.provider}>
+                          <Badge kind="primary">{providerAbbr(c.provider)}</Badge>
+                        </span>
                         {tierBadge(c, tr)}
-                      </div>
+                      </span>
                     </td>
                     <td>
                       <span
