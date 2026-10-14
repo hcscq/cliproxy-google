@@ -2567,6 +2567,11 @@ func usageObservabilityStatusScope(scope *gorm.DB, status string) *gorm.DB {
 		return scope.Where(`"usage"."failed" = ?`, false)
 	case "failed", "failure", "error":
 		return scope.Where(`"usage"."failed" = ?`, true)
+	case "final_failed":
+		// Failed attempts whose request never succeeded on a later attempt.
+		return scope.Where(`"usage"."failed" = ? AND NOT (`+usageRetrySucceededExists+`)`, true)
+	case "retried_ok":
+		return scope.Where(`"usage"."failed" = ? AND (`+usageRetrySucceededExists+`)`, true)
 	default:
 		statusCode, errAtoi := strconv.Atoi(value)
 		if errAtoi == nil {
@@ -4502,4 +4507,47 @@ func (r *Repository) GetSessionTree(ctx context.Context, identifier string) (*Se
 		Truncated:     truncated,
 		Tree:          roots,
 	}, nil
+}
+
+// usageRetryWindow bounds how long after a failed attempt a success of the same request
+// counts as "retried and succeeded" (requests are capped well below this).
+const usageRetryWindow = 15 * time.Minute
+
+// usageRetrySucceededExists is a correlated EXISTS over the request_id index.
+const usageRetrySucceededExists = `"usage"."request_id" <> '' AND EXISTS (SELECT 1 FROM "usage" AS ok WHERE ok."request_id" = "usage"."request_id" AND ok."failed" = false AND ok."timestamp" >= "usage"."timestamp")`
+
+// UsageRetrySuccess is the later successful attempt of a request that had failed attempts.
+type UsageRetrySuccess struct {
+	RequestID  string    `gorm:"column:request_id"`
+	AuthIndex  string    `gorm:"column:auth_index"`
+	StatusCode int64     `gorm:"column:status_code"`
+	Timestamp  time.Time `gorm:"column:timestamp"`
+}
+
+// UsageRetrySuccesses returns, for the given request ids, their successful attempt within
+// [from, to+usageRetryWindow]. One indexed query per page (request_id index, time-pruned).
+func (r *Repository) UsageRetrySuccesses(ctx context.Context, requestIDs []string, from, to time.Time) (map[string]UsageRetrySuccess, error) {
+	out := map[string]UsageRetrySuccess{}
+	if len(requestIDs) == 0 {
+		return out, nil
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return out, errDB
+	}
+	var rows []UsageRetrySuccess
+	err := db.WithContext(contextOrBackground(ctx)).Table("usage").
+		Select(`request_id, auth_index, 200 AS status_code, "timestamp"`).
+		Where(`request_id IN ? AND failed = ? AND "timestamp" >= ? AND "timestamp" <= ?`, requestIDs, false, from, to.Add(usageRetryWindow)).
+		Order(`"timestamp" ASC`).
+		Scan(&rows).Error
+	if err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		if _, ok := out[row.RequestID]; !ok {
+			out[row.RequestID] = row
+		}
+	}
+	return out, nil
 }

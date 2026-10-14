@@ -134,6 +134,8 @@ function RequestEvents({ from }: { from: string }) {
             <option value="">{tr('全部状态', 'All statuses')}</option>
             <option value="success">{tr('成功', 'Success')}</option>
             <option value="failed">{tr('失败', 'Failed')}</option>
+            <option value="final_failed">{tr('最终失败', 'Final failures')}</option>
+            <option value="retried_ok">{tr('重试后成功', 'Retried OK')}</option>
           </select>
           <select className="select input-sm" style={{ width: 180 }} value={model} onChange={(e) => (setOffset(0), setModel(e.target.value))}>
             <option value="">{tr('全部模型', 'All models')}</option>
@@ -188,7 +190,16 @@ function RequestEvents({ from }: { from: string }) {
                     <div className="faint small">{e.endpoint}</div>
                   </td>
                   <td>
-                    <Badge kind={e.failed ? 'err' : 'ok'}>{e.status_code ?? (e.failed ? 'ERR' : 200)}</Badge>
+                    <Badge kind={e.failed && !e.retried_ok ? 'err' : e.failed ? undefined : 'ok'}>{e.status_code ?? (e.failed ? 'ERR' : 200)}</Badge>
+                    {e.retried_ok && (
+                      <div
+                        className="faint small"
+                        data-testid="row-retried-ok"
+                        title={`${tr('最终', 'final')} ${e.retried_ok.status_code ?? 200} · ${tr('凭据', 'credential')} ${e.retried_ok.auth_index ?? '?'}${e.retried_ok.at ? ` · ${new Date(e.retried_ok.at).toLocaleTimeString()}` : ''}`}
+                      >
+                        {tr('重试后成功', 'retried OK')}
+                      </div>
+                    )}
                   </td>
                   <td className="hide-sm small" title={e.tokens?.cached_tokens ? `${tr('其中缓存命中', 'cached')} ${fmtNum(e.tokens.cached_tokens)}` : undefined}>
                     {fmtCompact(e.tokens?.total_tokens)}

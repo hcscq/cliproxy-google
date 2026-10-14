@@ -36,6 +36,7 @@ func (h *Handler) ListRequestEvents(c *gin.Context) {
 	for index := range result.Records {
 		items = append(items, h.requestEventResponse(&result.Records[index]))
 	}
+	h.annotateRetriedOK(ctx, result.Records, items)
 	c.JSON(http.StatusOK, gin.H{
 		"items":  items,
 		"total":  result.Total,

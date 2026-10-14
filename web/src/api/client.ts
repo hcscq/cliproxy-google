@@ -778,6 +778,8 @@ export interface RequestEvent {
   status?: string;
   failed?: boolean;
   status_code?: number | null;
+  /** Failed attempt whose request later succeeded on another attempt. */
+  retried_ok?: { auth_index?: string; status_code?: number; at?: string } | null;
   provider?: string;
   model?: string;
   original_model?: string;

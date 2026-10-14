@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -1930,4 +1931,48 @@ func firstNonEmptyQueryValue(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// annotateRetriedOK marks failed attempts whose request later succeeded ("retried_ok"),
+// using one indexed lookup for the whole page.
+func (h *Handler) annotateRetriedOK(ctx context.Context, records []cluster.UsageObservabilityRecord, items []gin.H) {
+	if h == nil || h.repo == nil || len(items) == 0 {
+		return
+	}
+	var ids []string
+	seen := map[string]bool{}
+	var from, to time.Time
+	for i := range records {
+		r := &records[i]
+		id := strings.TrimSpace(r.RequestID)
+		if !r.Failed || id == "" {
+			continue
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		if from.IsZero() || r.Timestamp.Before(from) {
+			from = r.Timestamp
+		}
+		if r.Timestamp.After(to) {
+			to = r.Timestamp
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	ok, err := h.repo.UsageRetrySuccesses(ctx, ids, from, to)
+	if err != nil || len(ok) == 0 {
+		return
+	}
+	for i := range records {
+		if i >= len(items) || !records[i].Failed {
+			continue
+		}
+		item := items[i]
+		if s, found := ok[strings.TrimSpace(records[i].RequestID)]; found {
+			item["retried_ok"] = gin.H{"auth_index": s.AuthIndex, "status_code": s.StatusCode, "at": s.Timestamp}
+		}
+	}
 }
