@@ -24,7 +24,7 @@ func runAntigravityRawStream(t *testing.T, sse string) ([][]byte, error) {
 	defer server.Close()
 	ex := NewAntigravityExecutor(&config.Config{RequestRetry: 1})
 	result, err := ex.ExecuteStream(context.Background(), &cliproxyauth.Auth{
-		Metadata: map[string]any{"access_token": "t", "expired": time.Now().Add(time.Hour).Format(time.RFC3339), "project_id": "p"},
+		Metadata:   map[string]any{"access_token": "t", "expired": time.Now().Add(time.Hour).Format(time.RFC3339), "project_id": "p"},
 		Attributes: map[string]string{"base_url": server.URL},
 	}, cliproxyexecutor.Request{Model: "gemini-3.7-flash", Payload: []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)},
 		cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatGemini, ResponseFormat: sdktranslator.FormatGemini, Stream: true})
@@ -83,15 +83,15 @@ data: {"response":{"candidates":[{"content":{"parts":[{"text":"hello"}]},"finish
 
 func TestAntigravityStreamPayloadHasContent(t *testing.T) {
 	cases := map[string]bool{
-		`{"response":{"candidates":[{"content":{"parts":[{"text":""}]}}]}}`:                          false,
-		`{"response":{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"x"}]}}]}}`:   false,
-		`{"response":{"usageMetadata":{"promptTokenCount":2}}}`:                                      false,
-		`{"response":{"candidates":[{"content":{"parts":[{"text":"hm","thought":true}]}}]}}`:         true,
-		`{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"f"}}]}}]}}`:        true,
-		`{"response":{"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL"}]}}`:                   true,
-		`{"response":{"candidates":[{"finishReason":"SAFETY"}]}}`:                                    true,
-		`{"response":{"promptFeedback":{"blockReason":"PROHIBITED_CONTENT"}}}`:                       true,
-		`{"candidates":[{"content":{"parts":[{"text":"plain"}]}}]}`:                                  true,
+		`{"response":{"candidates":[{"content":{"parts":[{"text":""}]}}]}}`:                        false,
+		`{"response":{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"x"}]}}]}}`: false,
+		`{"response":{"usageMetadata":{"promptTokenCount":2}}}`:                                    false,
+		`{"response":{"candidates":[{"content":{"parts":[{"text":"hm","thought":true}]}}]}}`:       true,
+		`{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"f"}}]}}]}}`:      true,
+		`{"response":{"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL"}]}}`:                 true,
+		`{"response":{"candidates":[{"finishReason":"SAFETY"}]}}`:                                  true,
+		`{"response":{"promptFeedback":{"blockReason":"PROHIBITED_CONTENT"}}}`:                     true,
+		`{"candidates":[{"content":{"parts":[{"text":"plain"}]}}]}`:                                true,
 	}
 	for in, want := range cases {
 		if got := antigravityStreamPayloadHasContent([]byte(in)); got != want {
