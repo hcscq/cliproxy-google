@@ -35,6 +35,7 @@ const (
 type antigravityHealthSettings struct {
 	ttfb, nonStream, slow time.Duration
 	byFamily              map[string]time.Duration // streaming TTFB per health bucket
+	nonStreamByFamily     map[string]time.Duration // non-stream attempt limit per health bucket
 	quarantine, maxQ      time.Duration
 	slowEvents            int
 	capacitySteps         []time.Duration
@@ -49,22 +50,36 @@ func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 	antigravityHealthLive.Store(&h)
 }
 
-const defaultAntigravityTTFBByFamily = "3.8=28"
+const defaultAntigravityTTFBByFamily = "3.8=22"
+
+// defaultAntigravityNonStreamByFamily bounds a whole non-streaming 3.8
+// attempt (no first byte exists there). 120s sits above the observed p97 of
+// successful 3.8 non-stream responses, so only hung attempts are cut.
+const defaultAntigravityNonStreamByFamily = "3.8=120"
 
 type familyTTFBCache struct {
 	raw string
 	m   map[string]time.Duration
 }
 
-var antigravityFamilyTTFB atomic.Pointer[familyTTFBCache]
+var antigravityFamilyTTFB, antigravityFamilyNonStream atomic.Pointer[familyTTFBCache]
 
 // parseAntigravityTTFBByFamily parses "3.8=28,2.5=60" (cached by raw string).
 func parseAntigravityTTFBByFamily(raw string) map[string]time.Duration {
+	return parseAntigravityFamilyDurations(raw, defaultAntigravityTTFBByFamily, &antigravityFamilyTTFB)
+}
+
+// parseAntigravityNonStreamByFamily parses the non-stream per-family limits.
+func parseAntigravityNonStreamByFamily(raw string) map[string]time.Duration {
+	return parseAntigravityFamilyDurations(raw, defaultAntigravityNonStreamByFamily, &antigravityFamilyNonStream)
+}
+
+func parseAntigravityFamilyDurations(raw, def string, cache *atomic.Pointer[familyTTFBCache]) map[string]time.Duration {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		raw = defaultAntigravityTTFBByFamily
+		raw = def
 	}
-	if c := antigravityFamilyTTFB.Load(); c != nil && c.raw == raw {
+	if c := cache.Load(); c != nil && c.raw == raw {
 		return c.m
 	}
 	m := map[string]time.Duration{}
@@ -83,7 +98,7 @@ func parseAntigravityTTFBByFamily(raw string) map[string]time.Duration {
 			}
 		}
 	}
-	antigravityFamilyTTFB.Store(&familyTTFBCache{raw: raw, m: m})
+	cache.Store(&familyTTFBCache{raw: raw, m: m})
 	return m
 }
 
@@ -101,6 +116,7 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 		h = cfg.Antigravity.Health
 	}
 	s.byFamily = parseAntigravityTTFBByFamily(h.TTFBTimeoutByFamily)
+	s.nonStreamByFamily = parseAntigravityNonStreamByFamily(h.NonStreamTimeoutByFamily)
 	sec := func(v int, d *time.Duration, unit time.Duration) {
 		switch {
 		case v < 0:
@@ -136,12 +152,23 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 // the request budget allows (cutting it short would only turn a slow answer
 // into an error), which keeps the base limit.
 func (s antigravityHealthSettings) streamTTFB(ctx context.Context, model string) time.Duration {
-	fam, ok := s.byFamily[antigravityHealthBucket(model)]
-	if !ok || fam <= 0 || (s.ttfb > 0 && fam >= s.ttfb) {
-		return s.ttfb
+	return familyAttemptLimit(ctx, s.byFamily, model, s.ttfb)
+}
+
+// nonStreamLimit is the whole-attempt limit for a non-streaming attempt
+// (headers arrive only after generation): the per-family limit when shorter
+// than the base, except for the last attempt the budget allows.
+func (s antigravityHealthSettings) nonStreamLimit(ctx context.Context, model string) time.Duration {
+	return familyAttemptLimit(ctx, s.nonStreamByFamily, model, s.nonStream)
+}
+
+func familyAttemptLimit(ctx context.Context, byFamily map[string]time.Duration, model string, base time.Duration) time.Duration {
+	fam, ok := byFamily[antigravityHealthBucket(model)]
+	if !ok || fam <= 0 || (base > 0 && fam >= base) {
+		return base
 	}
 	if cliproxyauth.RetryBudgetFinalAttempt(ctx, fam) {
-		return s.ttfb
+		return base
 	}
 	return fam
 }

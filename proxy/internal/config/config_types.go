@@ -200,6 +200,10 @@ type AntigravityHealthConfig struct {
 	// Empty = built-in default "3.8=28"; "off" = no per-family override. The
 	// last attempt allowed by the request budget uses the longer base timeout.
 	TTFBTimeoutByFamily string `yaml:"ttfb-timeout-by-family,omitempty" json:"ttfb-timeout-by-family,omitempty"`
+	// NonStreamTimeoutByFamily shortens NonStreamTimeoutSeconds per family for
+	// whole non-streaming attempts, e.g. "3.8=120". Empty = built-in default
+	// "3.8=120"; "off" = none. The last budgeted attempt keeps the base limit.
+	NonStreamTimeoutByFamily string `yaml:"nonstream-timeout-by-family,omitempty" json:"nonstream-timeout-by-family,omitempty"`
 	// Cluster tunes Home's cluster-wide (credential, model-family) health
 	// weighting. Zero = CPA_HEALTH_* env, then built-in default.
 	Cluster AntigravityClusterHealthConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`

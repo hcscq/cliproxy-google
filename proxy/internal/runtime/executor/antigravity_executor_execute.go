@@ -129,7 +129,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 
 	health := antigravityHealthSettingsFrom(e.cfg)
-	attemptTimer := newAntigravityAttemptTimer(ctx, health.nonStream)
+	attemptTimer := newAntigravityAttemptTimer(ctx, health.nonStreamLimit(ctx, baseModel))
 	defer attemptTimer.cancel()
 	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, requestPayload, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
@@ -371,7 +371,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	}
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 	health := antigravityHealthSettingsFrom(e.cfg)
-	attemptTimer := newAntigravityAttemptTimer(ctx, health.ttfb)
+	attemptTimer := newAntigravityAttemptTimer(ctx, health.streamTTFB(ctx, baseModel))
 	defer attemptTimer.cancel()
 	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {

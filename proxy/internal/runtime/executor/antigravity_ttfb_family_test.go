@@ -13,7 +13,7 @@ func TestAntigravityStreamTTFBByFamily(t *testing.T) {
 	antigravityHealthLive.Store(nil)
 	s := antigravityHealthSettingsFrom(&config.Config{})
 	ctx := context.Background()
-	if got := s.streamTTFB(ctx, "gemini-3.8-flash-tiered"); got != 28*time.Second {
+	if got := s.streamTTFB(ctx, "gemini-3.8-flash-tiered"); got != 22*time.Second {
 		t.Fatalf("3.8 default = %s", got)
 	}
 	if got := s.streamTTFB(ctx, "gemini-2.5-flash"); got != 75*time.Second {
@@ -34,5 +34,33 @@ func TestAntigravityStreamTTFBByFamily(t *testing.T) {
 	s = antigravityHealthSettingsFrom(&config.Config{})
 	if s.streamTTFB(ctx, "gemini-3.8-flash") != 75*time.Second {
 		t.Fatal("family limit above base must keep base")
+	}
+}
+
+func TestAntigravityNonStreamLimitByFamily(t *testing.T) {
+	defer antigravityHealthLive.Store(nil)
+	antigravityHealthLive.Store(nil)
+	ctx := context.Background()
+	s := antigravityHealthSettingsFrom(&config.Config{})
+	if got := s.nonStreamLimit(ctx, "gemini-3.8-flash-tiered"); got != 120*time.Second {
+		t.Fatalf("3.8 non-stream default = %s", got)
+	}
+	if got := s.nonStreamLimit(ctx, "gemini-2.5-flash"); got != 180*time.Second {
+		t.Fatalf("2.5 non-stream default = %s", got)
+	}
+	SetAntigravityHealthConfig(config.AntigravityHealthConfig{NonStreamTimeoutByFamily: "3.8=90", TTFBTimeoutByFamily: "3.8=20"})
+	s = antigravityHealthSettingsFrom(&config.Config{})
+	if s.nonStreamLimit(ctx, "gemini-3.8-flash") != 90*time.Second || s.streamTTFB(ctx, "gemini-3.8-flash") != 20*time.Second {
+		t.Fatalf("live override not applied: %v %v", s.nonStreamByFamily, s.byFamily)
+	}
+	SetAntigravityHealthConfig(config.AntigravityHealthConfig{NonStreamTimeoutByFamily: "3.8=300"})
+	s = antigravityHealthSettingsFrom(&config.Config{})
+	if s.nonStreamLimit(ctx, "gemini-3.8-flash") != 180*time.Second {
+		t.Fatal("family limit above base must keep base")
+	}
+	SetAntigravityHealthConfig(config.AntigravityHealthConfig{NonStreamTimeoutByFamily: "off"})
+	s = antigravityHealthSettingsFrom(&config.Config{})
+	if s.nonStreamLimit(ctx, "gemini-3.8-flash") != 180*time.Second {
+		t.Fatal("off must disable")
 	}
 }
