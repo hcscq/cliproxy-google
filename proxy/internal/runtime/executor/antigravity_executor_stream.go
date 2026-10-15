@@ -326,6 +326,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		holdEmpty := antigravityRetryEmptyStreamEnabled()
 		var sawContent, heldTerminal bool
 		var held [][]byte
+		var emptyRaw []byte
 		commitReplay := func() {
 			if !replayCommitted && replayAccumulator != nil && replayAccumulator.terminal && helps.ApplyPatchTranslationError(param) == nil {
 				replayAccumulator.Commit(ctx)
@@ -371,6 +372,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
+			if !sawContent && len(emptyRaw) < emptySampleBodyMax {
+				emptyRaw = append(append(emptyRaw, line...), '\n')
+			}
 			if replayAccumulator != nil {
 				replayAccumulator.ObserveSSELine(line)
 			}
@@ -526,6 +530,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			// Clean EOF but upstream produced no output at all: nothing was sent
 			// to the client yet, so fail retryably and let the conductor try
 			// another credential instead of returning an empty answer.
+			maybeSampleEmptyResponse(ctx, "stream", baseModel, auth.ID, requestPayload, lastSSEJSON(emptyRaw), usage.Detail{})
 			streamErr = statusErr{code: http.StatusBadGateway, msg: antigravityEmptyStreamMessage}
 			stopDeliverySupport()
 			log.Warnf("antigravity executor: upstream stream ended without output (auth=%s model=%s); retrying on another credential", auth.ID, baseModel)

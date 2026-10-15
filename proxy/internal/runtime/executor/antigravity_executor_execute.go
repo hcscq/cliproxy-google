@@ -225,7 +225,9 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	if helps.ApplyPatchTranslationError(param) != nil || len(converted) == 0 {
 		return cliproxyexecutor.Response{}, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
 	}
-	reporter.Publish(ctx, helps.ParseAntigravityUsage(bodyBytes))
+	usageDetail := helps.ParseAntigravityUsage(bodyBytes)
+	maybeSampleEmptyResponse(ctx, "nonstream", baseModel, auth.ID, requestPayload, bodyBytes, usageDetail)
+	reporter.Publish(ctx, usageDetail)
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)
 	}
