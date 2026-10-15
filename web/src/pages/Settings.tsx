@@ -73,6 +73,15 @@ const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] 
     ],
   },
   {
+    zh: '订阅检测',
+    en: 'Subscription tier',
+    compact: true,
+    fields: [
+      { path: 'oauth.providers.antigravity.health.subscription-interval-minutes', type: 'number', def: 60, zh: '订阅等级检测间隔（分钟）', en: 'Tier check interval (min)', hintZh: '每个启用凭据按此间隔（±10% 抖动）经其绑定出口查询订阅等级。重新授权、启用、订阅额度 429、模型目录变化时会立即检测。默认 60。', hintEn: 'Each enabled credential re-reads its subscription tier at this interval (±10% jitter) via its pinned egress. Re-auth, enable, subscription-quota 429 and catalog changes trigger an immediate check. Default 60.' },
+      { path: 'oauth.providers.antigravity.health.subscription-per-minute', type: 'number', def: 300, zh: '订阅检测每分钟上限', en: 'Tier checks per minute', hintZh: '全集群每分钟最多检测次数。1 万凭据每小时一次约需 170/分钟。默认 300。', hintEn: 'Cluster-wide cap. 10k credentials hourly need ~170/min. Default 300.' },
+    ],
+  },
+  {
     zh: '慢凭据与首字超时',
     en: 'Slow credentials & TTFB',
     compact: true,
@@ -80,8 +89,6 @@ const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] 
       { path: 'oauth.providers.antigravity.health.ttfb-timeout-seconds', type: 'number', def: 75, zh: '首字超时（秒）', en: 'TTFB timeout (s)', hintZh: '流式尝试无首字节超过此时间即中止并换凭据（客户端尚未收到任何数据）。默认 75。', hintEn: 'Streaming attempt with no first byte after this is aborted and retried on another credential (client has received nothing). Default 75.' },
       { path: 'oauth.providers.antigravity.health.ttfb-timeout-by-family', type: 'text', def: '3.8=22', zh: '按模型族首字超时', en: 'TTFB by family', hintZh: '如 3.8=22,2.5=60。仅能比上一项更短；请求预算内最后一次尝试仍用上一项的长超时。off = 关闭。', hintEn: 'e.g. 3.8=22,2.5=60. Only shortens the timeout above; the last attempt allowed by the retry budget keeps the long one. off = disabled.' },
       { path: 'oauth.providers.antigravity.health.nonstream-timeout-by-family', type: 'text', def: '3.8=120', zh: '按模型族非流式超时', en: 'Non-stream timeout by family', hintZh: '非流式没有首字，按整次尝试计时，如 3.8=120。仅能比非流式总超时（默认 180）更短；超时换凭据，请求预算内最后一次尝试仍用长超时。off = 关闭。', hintEn: 'Non-stream has no first byte, so this bounds the whole attempt, e.g. 3.8=120. Only shortens the non-stream timeout (default 180); on timeout switch credential; the last budgeted attempt keeps the long one. off = disabled.' },
-      { path: 'oauth.providers.antigravity.health.subscription-interval-minutes', type: 'number', def: 60, zh: '订阅等级检测间隔（分钟）', en: 'Tier check interval (min)', hintZh: '每个启用凭据按此间隔（±10% 抖动）经其绑定出口查询订阅等级。重新授权、启用、订阅额度 429、模型目录变化时会立即检测。默认 60。', hintEn: 'Each enabled credential re-reads its subscription tier at this interval (±10% jitter) via its pinned egress. Re-auth, enable, subscription-quota 429 and catalog changes trigger an immediate check. Default 60.' },
-      { path: 'oauth.providers.antigravity.health.subscription-per-minute', type: 'number', adv: true, def: 300, zh: '订阅检测每分钟上限', en: 'Tier checks per minute', hintZh: '全集群每分钟最多检测次数。1 万凭据每小时一次约需 170/分钟。默认 300。', hintEn: 'Cluster-wide cap. 10k credentials hourly need ~170/min. Default 300.' },
       { path: 'oauth.providers.antigravity.health.cluster.demote-ttfb-p95-seconds', type: 'number', def: 30, zh: '降权：首字 p95 >（秒）', en: 'Demote: TTFB p95 > (s)', hintZh: '(凭据, 模型族) 近期首字 p95 超过即降权到 25% 流量（不低于探测下限）。负数关闭。', hintEn: 'A (credential, family) pair whose recent TTFB p95 exceeds this gets 25% of traffic (>= probe floor). Negative = off.' },
       { path: 'oauth.providers.antigravity.health.cluster.demote-fail-percent', type: 'number', def: 40, zh: '降权：失败率 >（%）', en: 'Demote: fail rate > (%)', hintZh: '近期失败率（5xx/超时，不含 429）超过即降权。负数关闭。', hintEn: 'Recent failure rate (5xx/timeouts, not 429) above this demotes. Negative = off.' },
       { path: 'oauth.providers.antigravity.health.cluster.max-demoted-percent', type: 'number', def: 30, zh: '最多降权比例（%）', en: 'Max demoted share (%)', hintZh: '每个模型族最多降权这么多比例的凭据（最差的优先）。', hintEn: 'At most this share of a family\'s credentials is demoted (worst first).' },
