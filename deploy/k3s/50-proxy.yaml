@@ -53,7 +53,7 @@ spec:
                   matchLabels: {app: cliproxy}
       containers:
         - name: proxy
-          image: ghcr.io/hcscq/cliproxy-google-proxy:sha-27de67c136febd786d066c85240d771c6ec35078
+          image: ghcr.io/hcscq/cliproxy-google-proxy:sha-684e98d5495b6b7c65b2a2dfcbfcb878db43ba7c
           imagePullPolicy: IfNotPresent
           env:
             - {name: GOMEMLIMIT, value: "1700MiB"}
