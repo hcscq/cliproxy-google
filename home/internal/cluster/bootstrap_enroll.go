@@ -105,6 +105,19 @@ func (r *Repository) GarbageCollectEphemeralNodes(ctx context.Context, ttl time.
 				liveIDs[strings.TrimSpace(n.NodeID)] = struct{}{}
 			}
 		}
+		// CPA node rows are a point-in-time snapshot of current connections, so
+		// a proxy that is reconnecting (Home hiccup, target switch) is briefly
+		// absent. Its membership row keeps a timestamp across that gap: any
+		// membership touched within ttl keeps the identity alive.
+		var members []CPANodeMembershipRecord
+		if errMembers := tx.Select("node_id", "last_seen_at", "updated_at").Find(&members).Error; errMembers != nil {
+			return errMembers
+		}
+		for _, m := range members {
+			if !m.LastSeenAt.Before(cutoff) || !m.UpdatedAt.Before(cutoff) {
+				liveIDs[strings.TrimSpace(m.NodeID)] = struct{}{}
+			}
+		}
 		var certs []CertificateRecord
 		if errFind := tx.Select("id", "created_at").Where("ephemeral = ?", true).Find(&certs).Error; errFind != nil {
 			return errFind

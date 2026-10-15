@@ -2282,3 +2282,34 @@ func sleepWithContext(ctx context.Context, d time.Duration) {
 		return
 	}
 }
+
+// IsCertificateRejectedError reports whether Home refused this proxy's client
+// certificate during the TLS handshake (identity revoked or unknown). Retrying
+// with the same certificate can never succeed.
+func IsCertificateRejectedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "tls: bad certificate") || strings.Contains(m, "tls: unknown certificate") ||
+		strings.Contains(m, "tls: certificate required") || strings.Contains(m, "revoked or unknown")
+}
+
+// CertificateRejectWatch tracks how long Home has continuously rejected this
+// proxy's certificate.
+type CertificateRejectWatch struct {
+	since time.Time
+}
+
+// Observe records one subscription attempt result and reports whether the
+// certificate has been rejected continuously for at least after.
+func (w *CertificateRejectWatch) Observe(err error, now time.Time, after time.Duration) bool {
+	if !IsCertificateRejectedError(err) {
+		w.since = time.Time{}
+		return false
+	}
+	if w.since.IsZero() {
+		w.since = now
+	}
+	return now.Sub(w.since) >= after
+}

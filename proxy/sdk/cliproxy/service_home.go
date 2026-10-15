@@ -548,6 +548,7 @@ func (s *Service) runHomeSubscriber(homeCtx context.Context, parentCtx context.C
 			s.cancelServiceRun()
 		}
 	}()
+	var certReject home.CertificateRejectWatch
 	for homeCtx.Err() == nil {
 		supervisor.setPublisherCompletion(nil)
 		client := previousClient
@@ -649,6 +650,14 @@ func (s *Service) runHomeSubscriber(homeCtx context.Context, parentCtx context.C
 				registry.SetReleaseSink(releaseFlusher.MarkDirty)
 			}
 			log.WithError(errRun).Warn("home config subscription lifetime ended")
+			if certReject.Observe(errRun, time.Now(), homeCertRejectRestartAfter) && home.BootstrapConfigured() {
+				// Home revoked this bootstrap identity (e.g. ephemeral GC); the
+				// certificate can never be accepted again. Exit so the container
+				// restarts and self-enrolls with a fresh identity.
+				log.Error("home keeps rejecting this proxy's certificate (identity revoked); exiting to re-enroll")
+				s.cancelServiceRun()
+				return
+			}
 			if !published.Load() && !waitForHomeSubscriberRetry(homeCtx, homeSubscriberPreAckRetryBackoff) {
 				return
 			}
@@ -834,6 +843,10 @@ func (s *Service) detachHomeSubscriberLifetime(client *home.Client, registry *ex
 		forwarder.Deactivate(client)
 	}
 }
+
+// homeCertRejectRestartAfter is how long Home must keep rejecting the client
+// certificate before a bootstrap-enrolled proxy exits to re-enroll.
+const homeCertRejectRestartAfter = 30 * time.Second
 
 func (s *Service) cancelServiceRun() {
 	if s == nil {
