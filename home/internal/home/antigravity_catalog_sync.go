@@ -181,14 +181,19 @@ func (r *Runtime) startAntigravityCatalogLoop(ctx context.Context) {
 		return
 	}
 	if r.coreManager != nil {
-		r.coreManager.SetModelErrorHook(func(authID, provider, model string, status int, _ string) {
+		r.coreManager.SetModelErrorHook(func(authID, provider, model string, status int, msg string) {
 			if !strings.EqualFold(provider, "antigravity") {
 				a, ok := r.coreManager.GetByID(authID)
 				if !ok || a == nil || !strings.EqualFold(a.Provider, "antigravity") {
 					return
 				}
 			}
-			r.TriggerAntigravityCatalogRefresh(authID, strconv.Itoa(status)+" "+model)
+			if status != 429 {
+				r.TriggerAntigravityCatalogRefresh(authID, strconv.Itoa(status)+" "+model)
+			}
+			if subscriptionQuotaMessage(status, msg) {
+				r.RequestSubscriptionCheck(authID, "429 subscription quota")
+			}
 		})
 	}
 	go func() {
@@ -451,6 +456,9 @@ func (r *Runtime) refreshAntigravityCatalogNow(ctx context.Context, authID, trig
 			prevModels, _ = parseAntigravityCatalog(prev.Raw)
 		}
 		row.Added, row.Removed = diffCatalog(prevModels, models, prev.Added, prev.Removed, now)
+		if hasPrev && len(prevModels) > 0 && !sameModelSet(prevModels, models) {
+			r.RequestSubscriptionCheck(authID, "catalog changed")
+		}
 		row.Raw, row.FetchedAt, row.Status, row.Error, row.HTTPStatus, row.ModelCount = raw, now, "ok", "", 200, len(models)
 	}
 	if store := r.catalogStore(); store != nil {
@@ -628,3 +636,26 @@ func (r *Runtime) AntigravityCatalogStatuses() []AntigravityCatalogStatus {
 
 // CatalogLeader reports whether this replica runs the catalog timer.
 func (r *Runtime) CatalogLeader() bool { return r.catalogLeader() }
+
+// sameModelSet reports whether two catalogs list the same model ids.
+func sameModelSet(a, b map[string]antigravityUpstreamModel) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if _, ok := b[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// subscriptionQuotaMessage spots quota errors that hint at the plan
+// ("Individual quota reached. Please upgrade your subscription ...").
+func subscriptionQuotaMessage(status int, msg string) bool {
+	if status != 429 {
+		return false
+	}
+	l := strings.ToLower(msg)
+	return strings.Contains(l, "subscription") || strings.Contains(l, "individual quota")
+}

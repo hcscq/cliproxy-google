@@ -358,6 +358,9 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errUpsert)})
 		return
 	}
+	if !disabled && h.runtime != nil {
+		h.runtime.RequestSubscriptionCheck(auth.ID, "enabled")
+	}
 	if errRefresh := h.refreshAuths(ctx); errRefresh != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errRefresh)})
 		return

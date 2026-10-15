@@ -242,4 +242,5 @@ func (r *Runtime) liftAccountBlock(ctx context.Context, full *coreauth.Auth, now
 		return
 	}
 	log.Infof("account block guard: %s (%s) re-enabled after recheck", full.ID, full.Label)
+	r.RequestSubscriptionCheck(full.ID, "re-enabled")
 }

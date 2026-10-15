@@ -411,6 +411,18 @@ export function CredentialsPage() {
       toast(enabled ? tr("已启用", "Enabled") : tr("已禁用", "Disabled"));
       await creds.reload();
     });
+  const bulkTier = () =>
+    run("bulk-tier", async () => {
+      const ids = sel.list();
+      let ok = 0;
+      for (let i = 0; i < ids.length; i += 50) {
+        const r = await api.refreshSubscriptionTiers(ids.slice(i, i + 50));
+        ok += r.results.filter((x) => x.ok).length;
+        if (ids.length > 50) toast(tr(`处理中 ${Math.min(i + 50, ids.length)}/${ids.length}`, `Working ${Math.min(i + 50, ids.length)}/${ids.length}`));
+      }
+      toast(tr(`已刷新订阅 ${ok}/${ids.length}`, `Tier refreshed ${ok}/${ids.length}`), ok < ids.length ? "err" : "ok");
+      await creds.reload();
+    });
   const bulkToggle = (action: "enable" | "disable") =>
     run(`bulk-${action}`, async () => {
       const ids = sel.list();
@@ -573,6 +585,10 @@ export function CredentialsPage() {
                 data-testid="bulk-egress"
               >
                 {tr("设置出口", "Set egress")}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkTier()} data-testid="bulk-tier">
+                {busy === "bulk-tier" && <Spinner />}
+                {tr("刷新订阅", "Refresh tier")}
               </button>
               <button
                 className="btn btn-sm"
@@ -1130,6 +1146,15 @@ function CredentialDrawer({
       label: t("refreshToken"),
       fn: () => api.refreshCredential(cred.id),
       done: tr("令牌已刷新", "Token refreshed"),
+    },
+    {
+      id: "tier",
+      label: tr("刷新订阅", "Refresh tier"),
+      fn: async () => {
+        const r = await api.refreshSubscriptionTiers([cred.id]);
+        if (!r.results?.[0]?.ok) throw new Error(tr("订阅检测失败", "Tier check failed"));
+      },
+      done: tr("订阅已刷新", "Tier refreshed"),
     },
     {
       id: "quota",

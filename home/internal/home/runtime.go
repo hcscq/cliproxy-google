@@ -61,6 +61,9 @@ type Runtime struct {
 	pluginSyncHTTPClient    pluginstore.HTTPDoer
 	clusterAdapter          ClusterAdapter
 	agCatalog               antigravityCatalogSync
+	subTierReqMu            sync.Mutex
+	subTierReq              map[string]string
+	subTierLastReq          map[string]time.Time
 	prober                  quotaProber
 	egress                  egressState
 	concurrencyAdmitter     ConcurrencyAdmitter

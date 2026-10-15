@@ -39,3 +39,39 @@ func (h *Handler) RefreshAntigravityCatalog(c *gin.Context) {
 		"credentials":      statuses,
 	})
 }
+
+// RefreshSubscriptionTiers re-checks the subscription tier of the given
+// credentials now (manual / bulk action; at most 50 per call).
+func (h *Handler) RefreshSubscriptionTiers(c *gin.Context) {
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "runtime unavailable"})
+		return
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids is required"})
+		return
+	}
+	if len(body.IDs) > 50 {
+		body.IDs = body.IDs[:50]
+	}
+	type result struct {
+		ID       string `json:"id"`
+		OK       bool   `json:"ok"`
+		Tier     string `json:"tier,omitempty"`
+		TierName string `json:"tier_name,omitempty"`
+	}
+	out := make([]result, 0, len(body.IDs))
+	for _, id := range body.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		tier, name, ok := h.runtime.RefreshSubscriptionTierNow(c.Request.Context(), id)
+		out = append(out, result{ID: id, OK: ok, Tier: tier, TierName: name})
+	}
+	_ = h.refreshAuths(c.Request.Context())
+	c.JSON(http.StatusOK, gin.H{"results": out})
+}

@@ -605,6 +605,9 @@ func (h *Handler) persistAntigravityImport(ctx context.Context, existing *coreau
 		if _, errUpsert := h.repo.UpsertAuth(ctx, fresh, "upsert"); errUpsert != nil {
 			return "", false, errUpsert
 		}
+		if h.runtime != nil {
+			h.runtime.RequestSubscriptionCheck(fresh.ID, "re-import")
+		}
 		return fresh.ID, false, nil
 	}
 	metadata := map[string]any{}

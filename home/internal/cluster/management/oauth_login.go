@@ -501,6 +501,9 @@ func (h *Handler) refreshExistingOAuthCredential(ctx context.Context, existing *
 	} else if _, errUpsert := h.repo.UpsertAuth(ctx, existing, "upsert"); errUpsert != nil {
 		return errUpsert
 	}
+	if h.runtime != nil {
+		h.runtime.RequestSubscriptionCheck(existing.ID, "re-auth")
+	}
 	log.Infof("cluster oauth: %s login for existing credential %s refreshed its tokens instead of adding a duplicate", existing.Provider, existing.ID)
 	return h.refreshAuths(ctx)
 }

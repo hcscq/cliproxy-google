@@ -204,6 +204,12 @@ type AntigravityHealthConfig struct {
 	// whole non-streaming attempts, e.g. "3.8=120". Empty = built-in default
 	// "3.8=120"; "off" = none. The last budgeted attempt keeps the base limit.
 	NonStreamTimeoutByFamily string `yaml:"nonstream-timeout-by-family,omitempty" json:"nonstream-timeout-by-family,omitempty"`
+	// SubscriptionIntervalMinutes is how often Home re-reads each enabled
+	// credential's subscription tier (loadCodeAssist, pinned egress). Default 60.
+	SubscriptionIntervalMinutes int `yaml:"subscription-interval-minutes,omitempty" json:"subscription-interval-minutes,omitempty"`
+	// SubscriptionPerMinute caps tier checks per minute cluster-wide (leader).
+	// Default 300 (10k credentials hourly need ~170/min, plus events/retries).
+	SubscriptionPerMinute int `yaml:"subscription-per-minute,omitempty" json:"subscription-per-minute,omitempty"`
 	// Cluster tunes Home's cluster-wide (credential, model-family) health
 	// weighting. Zero = CPA_HEALTH_* env, then built-in default.
 	Cluster AntigravityClusterHealthConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`
