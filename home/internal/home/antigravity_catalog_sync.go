@@ -312,6 +312,15 @@ func (r *Runtime) pruneCatalogState(auths []*coreauth.Auth) {
 			delete(r.agCatalog.lastEvent, id)
 		}
 	}
+	// Forget the in-memory catalog of removed/disabled credentials so a later
+	// re-enable fetches fresh instead of reusing a frozen model list.
+	antigravityCatalogMu.Lock()
+	for id := range antigravityCatalog {
+		if _, ok := live[id]; !ok && !r.agCatalog.inFlight[id] {
+			delete(antigravityCatalog, id)
+		}
+	}
+	antigravityCatalogMu.Unlock()
 }
 
 // catalogDue decides whether the leader should fetch a credential's catalog.

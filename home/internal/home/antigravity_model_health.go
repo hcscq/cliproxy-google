@@ -96,7 +96,9 @@ func (r *Runtime) AntigravityCatalogHealth() []CredentialCatalogHealth {
 	labels := map[string]string{}
 	if r != nil && r.coreManager != nil {
 		for _, a := range r.coreManager.List() {
-			if a != nil {
+			// Disabled credentials keep a frozen last-known catalog; counting it
+			// would advertise models no usable credential serves.
+			if a != nil && !a.Disabled && a.Status != coreauth.StatusDisabled {
 				labels[a.ID] = authDisplayLabel(a)
 			}
 		}
@@ -110,7 +112,7 @@ func (r *Runtime) AntigravityCatalogHealth() []CredentialCatalogHealth {
 		}
 		if r != nil && r.coreManager != nil {
 			if _, ok := labels[authID]; !ok {
-				continue // credential removed
+				continue // credential removed or disabled
 			}
 		}
 		item := CredentialCatalogHealth{AuthID: authID, Label: labels[authID], FetchedAt: entry.health.fetchedAt,
