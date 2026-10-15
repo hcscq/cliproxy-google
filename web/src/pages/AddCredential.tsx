@@ -72,7 +72,9 @@ function OAuthFlow({ onDone, egress, allowPrimary }: { onDone: () => void; egres
     stopPoll();
     setPhase('done');
     if (res.updated_existing) {
-      toast(tr(`账号 ${res.email ?? ''} 已存在，已更新其令牌（未新增重复凭据）`, `Account ${res.email ?? ''} already exists; its tokens were updated (no duplicate added)`));
+      const n = res.seq ? ` #${res.seq}` : '';
+      const re = res.reenabled ? tr('，已解除停用', '; re-enabled') : '';
+      toast(tr(`已更新现有凭据${n}（${res.email ?? ''}）的令牌${re}，未新增重复凭据`, `Updated existing credential${n} (${res.email ?? ''}) tokens${re}; no duplicate added`));
     } else {
       toast(tr('Antigravity 账号已添加', 'Antigravity account added'));
     }

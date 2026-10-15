@@ -597,6 +597,7 @@ func (h *Handler) persistAntigravityImport(ctx context.Context, existing *coreau
 		if stringFromAny(fresh.Metadata["email"]) == "" && enriched.Email != "" {
 			fresh.Metadata["email"] = enriched.Email
 		}
+		clearAccountBlockOnReauth(fresh, now)
 		if enriched.EgressExplicit && enriched.EgressProxyURL != "" {
 			home.ApplyEgressMetadata(fresh, home.EgressSpec{Name: enriched.EgressName, ProxyURL: enriched.EgressProxyURL, IP: enriched.EgressIP})
 		}

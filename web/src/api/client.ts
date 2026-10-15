@@ -1300,7 +1300,7 @@ export interface InfraStatus {
 }
 
 /** Non-secret result of a completed OAuth login (reported by any Home replica). */
-export type OAuthResult = { already_completed?: boolean; credential_id?: string; email?: string; updated_existing?: boolean };
+export type OAuthResult = { already_completed?: boolean; credential_id?: string; email?: string; updated_existing?: boolean; seq?: number; reenabled?: boolean };
 
 export interface RTImportResult {
   index: number;

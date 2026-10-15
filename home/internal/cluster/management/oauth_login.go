@@ -488,7 +488,11 @@ func (h *Handler) refreshExistingOAuthCredential(ctx context.Context, existing *
 		}
 	}
 	existing.UpdatedAt = time.Now().UTC()
-	result := map[string]any{"credential_id": existing.ID, "email": stringFromAny(metadata["email"]), "updated_existing": true}
+	reenabled := clearAccountBlockOnReauth(existing, existing.UpdatedAt)
+	result := map[string]any{"credential_id": existing.ID, "email": stringFromAny(metadata["email"]), "updated_existing": true, "reenabled": reenabled}
+	if seqs, errSeq := h.repo.AuthSeqs(ctx); errSeq == nil && seqs[existing.ID] > 0 {
+		result["seq"] = seqs[existing.ID]
+	}
 	state, _ := ctx.Value(oauthSessionStateKey{}).(string)
 	if state != "" {
 		if errComplete := h.repo.CompleteOAuthSessionWithAuthsResult(ctx, state, []*coreauth.Auth{existing}, result); errComplete != nil {
@@ -499,6 +503,24 @@ func (h *Handler) refreshExistingOAuthCredential(ctx context.Context, existing *
 	}
 	log.Infof("cluster oauth: %s login for existing credential %s refreshed its tokens instead of adding a duplicate", existing.Provider, existing.ID)
 	return h.refreshAuths(ctx)
+}
+
+// clearAccountBlockOnReauth lifts an automatic account-error disable (e.g. 403
+// "Verify your account") once the user has re-authorized the account; the fresh
+// tokens make the old error stale. A manual disable (no auto reason) is kept.
+func clearAccountBlockOnReauth(a *coreauth.Auth, now time.Time) bool {
+	if a == nil || a.Metadata == nil || strings.TrimSpace(stringFromAny(a.Metadata[home.AccountBlockReasonKey])) == "" {
+		return false
+	}
+	a.Disabled = false
+	a.Status = coreauth.StatusActive
+	a.StatusMessage = ""
+	a.LastError = nil
+	a.Metadata["disabled"] = false
+	delete(a.Metadata, home.AccountBlockReasonKey)
+	delete(a.Metadata, "auto_disabled_at")
+	a.Metadata[home.AccountBlockClearedKey] = now.UTC().Format(time.RFC3339)
+	return true
 }
 
 // storeOAuthMetadataWithContext stores an o auth metadata with context.
