@@ -326,7 +326,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		holdEmpty := antigravityRetryEmptyStreamEnabled()
 		var sawContent, heldTerminal bool
 		var held [][]byte
-		var emptyRaw []byte
+		var emptyRaw, lastRaw []byte
 		commitReplay := func() {
 			if !replayCommitted && replayAccumulator != nil && replayAccumulator.terminal && helps.ApplyPatchTranslationError(param) == nil {
 				replayAccumulator.Commit(ctx)
@@ -372,8 +372,10 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
-			if !sawContent && len(emptyRaw) < emptySampleBodyMax {
+			if len(emptyRaw) < emptySampleBodyMax {
 				emptyRaw = append(append(emptyRaw, line...), '\n')
+			} else if bytes.HasPrefix(bytes.TrimSpace(line), []byte("data:")) && len(line) <= emptySampleBodyMax {
+				lastRaw = append(lastRaw[:0], line...)
 			}
 			if replayAccumulator != nil {
 				replayAccumulator.ObserveSSELine(line)
@@ -540,6 +542,13 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			case <-ctx.Done():
 			}
 		} else if ctx.Err() == nil {
+			if d, ok := streamUsage.Detail(); ok && d.OutputTokens == 0 && d.ReasoningTokens == 0 {
+				raw := emptyRaw
+				if len(lastRaw) > 0 {
+					raw = append(append(append([]byte(nil), emptyRaw...), []byte("...\n")...), lastRaw...)
+				}
+				maybeSampleEmptyResponse(ctx, "stream-content", baseModel, auth.ID, requestPayload, lastSSEJSON(raw), d)
+			}
 			// Only a clean end of stream may produce a synthetic terminal event.
 			// Translating [DONE] after a read error would report a truncated
 			// stream as a successful completion.
