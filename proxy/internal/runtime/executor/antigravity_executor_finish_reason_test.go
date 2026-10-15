@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,6 +242,10 @@ func TestAntigravityStreamDoesNotFinalizeEmptyUpstreamStream(t *testing.T) {
 			}
 			for chunk := range result.Chunks {
 				if chunk.Err != nil {
+					// An output-free stream now fails retryably instead of finalizing.
+					if strings.Contains(chunk.Err.Error(), antigravityEmptyStreamMessage) {
+						continue
+					}
 					t.Fatalf("unexpected stream error: %v", chunk.Err)
 				}
 				if finish := gjson.GetBytes(chunk.Payload, "candidates.0.finishReason").String(); finish != "" {

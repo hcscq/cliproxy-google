@@ -323,6 +323,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		var replayCommitted bool
 		var terminalDelivered bool
 		var param any
+		holdEmpty := antigravityRetryEmptyStreamEnabled()
+		var sawContent, heldTerminal bool
+		var held [][]byte
 		commitReplay := func() {
 			if !replayCommitted && replayAccumulator != nil && replayAccumulator.terminal && helps.ApplyPatchTranslationError(param) == nil {
 				replayAccumulator.Commit(ctx)
@@ -466,6 +469,26 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					}
 				}
 			}
+			if holdEmpty && !sawContent {
+				if antigravityStreamPayloadHasContent(payload) {
+					sawContent = true
+				} else if len(held) < antigravityEmptyStreamHoldLimit {
+					// Hold content-free frames (empty text, bare usage) so an
+					// upstream that ends without any output can be retried on
+					// another credential before the client sees a byte.
+					held = append(held, chunks...)
+					if isTerminalChunk {
+						heldTerminal = true
+					}
+					continue
+				} else {
+					sawContent = true
+				}
+				if len(held) > 0 {
+					chunks = append(held, chunks...)
+					held = nil
+				}
+			}
 			for i := range chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
@@ -473,7 +496,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					return
 				}
 			}
-			if isTerminalChunk {
+			if isTerminalChunk || heldTerminal {
 				terminalDelivered = true
 			}
 			if helps.StopApplyPatchStream(ctx, param, reporter, out, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}) {
@@ -497,6 +520,18 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
 			select {
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
+			case <-ctx.Done():
+			}
+		} else if ctx.Err() == nil && holdEmpty && !sawContent {
+			// Clean EOF but upstream produced no output at all: nothing was sent
+			// to the client yet, so fail retryably and let the conductor try
+			// another credential instead of returning an empty answer.
+			streamErr = statusErr{code: http.StatusBadGateway, msg: antigravityEmptyStreamMessage}
+			stopDeliverySupport()
+			log.Warnf("antigravity executor: upstream stream ended without output (auth=%s model=%s); retrying on another credential", auth.ID, baseModel)
+			helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Err: streamErr}:
 			case <-ctx.Done():
 			}
 		} else if ctx.Err() == nil {

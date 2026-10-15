@@ -258,6 +258,7 @@ func TestAntigravityStreamObfuscatesSensitiveSystemInstruction(t *testing.T) {
 	}))
 	defer server.Close()
 
+	t.Setenv("ANTIGRAVITY_RETRY_EMPTY_STREAM", "off") // fixture stream has no output
 	executor := NewAntigravityExecutor(&config.Config{
 		Antigravity:  config.AntigravityConfig{SensitiveWords: []string{"Hermes", "Nous Research"}},
 		RequestRetry: 1,
