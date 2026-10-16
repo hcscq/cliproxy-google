@@ -2,9 +2,10 @@ package home
 
 import (
 	"encoding/json"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"strings"
 	"testing"
+
+	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 )
 
 func TestAntigravityThinkingOffModePerModel(t *testing.T) {

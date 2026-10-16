@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
+
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 )
@@ -32,7 +34,6 @@ import (
 const (
 	antigravityDefaultModelsBaseURL = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityModelsEndpointPath   = "/v1internal:fetchAvailableModels"
-	antigravityModelsUserAgent      = "antigravity/1.11.5 windows/amd64"
 )
 
 type antigravityUpstreamModel struct {
@@ -265,7 +266,7 @@ func fetchAntigravityCatalogRaw(ctx context.Context, auth *coreauth.Auth) ([]byt
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", antigravityModelsUserAgent)
+	req.Header.Set("User-Agent", agversion.UserAgent())
 	resp, err := credentialHTTPClient(auth, 30*time.Second).Do(req)
 	if err != nil {
 		return nil, err

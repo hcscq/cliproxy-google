@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
+
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
@@ -229,7 +231,7 @@ func probeAntigravity(ctx context.Context, auth *coreauth.Auth, model string) Pr
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", antigravityModelsUserAgent)
+	req.Header.Set("User-Agent", agversion.UserAgent())
 	start := time.Now()
 	resp, err := antigravityProbeHTTPClient.Do(req)
 	if err != nil {

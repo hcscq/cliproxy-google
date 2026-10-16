@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
+
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -314,7 +316,7 @@ func sendQuotaProbe(ctx context.Context, auth *coreauth.Auth, model string) (int
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", antigravityModelsUserAgent)
+	req.Header.Set("User-Agent", agversion.UserAgent())
 	resp, err := credentialHTTPClient(auth, quotaProbeTimeout).Do(req)
 	if err != nil {
 		return 0, nil, nil, err

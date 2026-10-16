@@ -7,10 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/ratelimit"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/usageerr"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +15,12 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/ratelimit"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/usageerr"
 
 	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginstore"
@@ -374,6 +376,12 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	if errLoad := r.loadAuths(runCtx); errLoad != nil {
 		return errLoad
 	}
+	agversion.Start(runCtx)
+	func() {
+		vctx, cancel := context.WithTimeout(runCtx, 5*time.Second)
+		defer cancel()
+		agversion.RefreshNow(vctx)
+	}()
 	r.WarmAntigravityCatalogs(runCtx)
 
 	clusterMode := r.clusterAutoRefreshGated()

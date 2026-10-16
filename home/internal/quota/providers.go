@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
+
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
@@ -50,7 +52,7 @@ func (c *Collector) probeAntigravity(ctx context.Context, auth *coreauth.Auth) (
 	if errMarshal != nil {
 		return nil, &probeError{code: "PROBE_REQUEST_INVALID", message: "Antigravity quota request could not be created.", retryable: false}
 	}
-	headers := http.Header{"Content-Type": []string{"application/json"}, "User-Agent": []string{antigravityUserAgent}}
+	headers := http.Header{"Content-Type": []string{"application/json"}, "User-Agent": []string{agversion.UserAgent()}}
 	probeCtx, cancelProbe := context.WithTimeout(ctx, c.options.ProbeTimeout)
 	defer cancelProbe()
 	var lastError *probeError

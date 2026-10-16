@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
+
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -34,7 +36,6 @@ const (
 	subscriptionRequestTTL      = time.Hour
 	subscriptionKVBatch         = 500
 	subscriptionLoadURL         = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
-	subscriptionUserAgent       = "antigravity/1.21.9 darwin/arm64 google-api-nodejs-client/10.3.0"
 )
 
 // subscriptionSettings returns (interval, per-minute cap) from the live config.
@@ -281,14 +282,14 @@ func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now ti
 	if token == "" {
 		return false
 	}
-	reqBody := []byte(`{"metadata":{"ide_type":"ANTIGRAVITY","ide_version":"1.21.9","ide_name":"antigravity"}}`)
+	reqBody := []byte(`{"metadata":{"ide_type":"ANTIGRAVITY","ide_version":"` + agversion.Version() + `","ide_name":"antigravity"}}`)
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, subscriptionLoadURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", subscriptionUserAgent)
+	req.Header.Set("User-Agent", agversion.UserAgent()+" google-api-nodejs-client/10.3.0")
 	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
 	resp, err := credentialHTTPClient(full, subscriptionCallTimeout).Do(req)
 	if err != nil {

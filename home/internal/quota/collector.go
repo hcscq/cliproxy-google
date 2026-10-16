@@ -36,7 +36,6 @@ const (
 	kimiUsageURL               = "https://api.kimi.com/coding/v1/usages"
 	xaiBillingURL              = "https://cli-chat-proxy.grok.com/v1/billing"
 	codexUserAgent             = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
-	antigravityUserAgent       = "antigravity/1.11.5 windows/amd64"
 	xaiTokenAuthHeader         = "X-XAI-Token-Auth"
 	xaiTokenAuthValue          = "xai-grok-cli"
 	xaiClientVersionHeader     = "x-grok-client-version"
