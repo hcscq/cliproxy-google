@@ -187,9 +187,16 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 	statusOf := map[string]string{}
 	all := h.liveAuths(ctx)
 	seqs, _ := h.repo.AuthSeqs(ctx)
+	var reservedSince map[string]time.Time
+	if h.runtime != nil {
+		reservedSince = h.runtime.ReservedSince()
+	}
 	seqQ, seqOnly := parseSeqQuery(f.q)
 	for _, a := range all {
 		st := credentialStatus(a, now)
+		if _, ok := reservedSince[a.ID]; ok && !a.Disabled {
+			st = "reserve"
+		}
 		statusOf[a.ID] = st
 		facets["provider"][a.Provider]++
 		facets["status"][st]++
@@ -244,6 +251,12 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		e["tags"] = cluster.CredentialTags(a)
 		e["group_ids"] = nonNilUints(groupsOf[a.ID])
 		e["state"] = statusOf[a.ID]
+		if t, ok := reservedSince[a.ID]; ok {
+			e["reserved"] = true
+			if !t.IsZero() {
+				e["reserved_since"] = t
+			}
+		}
 		if n := seqs[a.ID]; n > 0 {
 			e["seq"] = n
 		}
@@ -258,6 +271,34 @@ func nonNilUints(v []uint) []uint {
 		return []uint{}
 	}
 	return v
+}
+
+// ReserveStats: GET /credentials/reserve — reserve counts, ban attribution, recent audit.
+func (h *Handler) ReserveStats(c *gin.Context) {
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	st, err := h.repo.ReserveStats(ctx)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "reserve_stats_failed", err)
+		return
+	}
+	if h.runtime != nil {
+		h.runtime.ReserveStatus(&st)
+	}
+	events, _ := h.repo.RecentReserveEvents(ctx, 50)
+	seqs, _ := h.repo.AuthSeqs(ctx)
+	out := make([]gin.H, 0, len(events))
+	for _, e := range events {
+		item := gin.H{"auth_id": e.AuthUUID, "kind": e.Kind, "at": e.At, "was_reserved": e.WasReserved, "detail": e.Detail}
+		if e.ReservedSince != nil {
+			item["reserved_since"] = e.ReservedSince
+		}
+		if n := seqs[e.AuthUUID]; n > 0 {
+			item["seq"] = n
+		}
+		out = append(out, item)
+	}
+	c.JSON(http.StatusOK, gin.H{"stats": st, "events": out})
 }
 
 // BulkCredentials: POST /credentials/bulk
@@ -296,6 +337,33 @@ func (h *Handler) BulkCredentials(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "result": res})
+		return
+	case "reserve", "unreserve":
+		if h.runtime == nil {
+			respondError(c, http.StatusServiceUnavailable, "runtime_unavailable", nil)
+			return
+		}
+		ids := make([]string, 0, len(req.IDs))
+		var failed []string
+		for _, id := range req.IDs {
+			auth, err := h.findOAuthAuth(ctx, authIdentifier{ID: id, Name: id})
+			if err != nil || auth == nil {
+				failed = append(failed, id)
+				continue
+			}
+			ids = append(ids, auth.ID)
+		}
+		reserved := req.Action == "reserve"
+		detail := "手动设为储备"
+		if !reserved {
+			detail = "手动取消储备"
+		}
+		n, err := h.runtime.SetCredentialsReserved(ctx, ids, reserved, detail)
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "reserve_failed", err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "updated": n, "unchanged": len(ids) - n, "failed": nonNilStrings(failed)})
 		return
 	case "enable", "disable", "add_tags", "remove_tags", "set_tags":
 	default:

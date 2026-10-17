@@ -49,13 +49,14 @@ export const STATE_LABEL: Record<CredentialState | 'missing', [string, string]> 
   cooling: ['部分模型冷却', 'Some models cooling'],
   error: ['整体不可用', 'Unavailable'],
   disabled: ['已禁用', 'Disabled'],
+  reserve: ['储备', 'Reserve'],
   missing: ['凭据不存在', 'Missing'],
 };
 
 export function StateBadge({ state }: { state?: CredentialState | 'missing' }) {
   const { tr } = useI18n();
   if (!state) return null;
-  const kind = state === 'ok' ? 'ok' : state === 'cooling' ? 'warn' : state === 'disabled' ? undefined : 'err';
+  const kind = state === 'ok' ? 'ok' : state === 'cooling' ? 'warn' : state === 'disabled' || state === 'reserve' ? undefined : 'err';
   const [zh, en] = STATE_LABEL[state];
   return (
     <Badge kind={kind} dot>
@@ -104,7 +105,7 @@ export function CredentialFilterBar({
       </select>
       <select className="select input-sm" value={value.status ?? ''} onChange={(e) => set('status', e.target.value)} data-testid="cred-filter-status">
         <option value="">{tr('全部状态', 'All states')}</option>
-        {(['ok', 'cooling', 'error', 'disabled'] as const).map((s) => (
+        {(['ok', 'cooling', 'error', 'disabled', 'reserve'] as const).map((s) => (
           <option key={s} value={s}>
             {tr(STATE_LABEL[s][0], STATE_LABEL[s][1])} ({facets?.status?.[s] ?? 0})
           </option>

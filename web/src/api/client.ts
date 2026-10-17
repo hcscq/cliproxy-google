@@ -167,7 +167,7 @@ export class ApiClient {
     files.forEach((f, i) => form.append(`file${i}`, f, f.name));
     return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
   }
-  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string; allow_primary?: boolean }) {
+  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string; allow_primary?: boolean; reserve?: boolean }) {
     return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[] }>('/credentials/import/refresh-tokens', body);
   }
   uploadCredentialJSON(json: string, egressId?: string, allowPrimary?: boolean) {
@@ -352,6 +352,9 @@ export class ApiClient {
   }
   // Large selections are sent in chunks (BULK_CHUNK ids per request) so
   // thousands of credentials neither hit request limits nor block Home for long.
+  reserveStats() {
+    return this.get<{ stats: ReserveStats; events: ReserveEvent[] }>('/credentials/reserve');
+  }
   async bulkCredentials(body: { ids: string[]; action: BulkCredentialAction; tags?: string[]; group_id?: number }, onProgress?: (done: number, total: number) => void) {
     type R = { status: string; updated?: number; unchanged?: number; failed?: string[]; result?: BulkResult };
     const out: R = { status: 'ok' };
@@ -1058,7 +1061,7 @@ export interface CredentialQuery {
   stats_window?: StatsWindow;
 }
 export type CredentialSortKey = 'seq' | 'created' | 'name' | 'status' | 'quota' | 'last_used' | 'egress' | 'success' | 'tier';
-export type CredentialState = 'ok' | 'cooling' | 'error' | 'disabled';
+export type CredentialState = 'ok' | 'cooling' | 'error' | 'disabled' | 'reserve';
 export type StatsWindow = '1h' | '24h' | '7d';
 export interface CallStats {
   calls: number;
@@ -1066,7 +1069,7 @@ export interface CallStats {
   /** error class -> count: 429 | 503 | 403 | 404 | 400 | 5xx | net | cancel | other */
   by_class?: Record<string, number>;
 }
-export type CredentialSearchItem = Credential & { request_cap?: RequestCapUsage; seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
+export type CredentialSearchItem = Credential & { reserved?: boolean; reserved_since?: string; request_cap?: RequestCapUsage; seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
 export interface CredentialSearch {
   items: CredentialSearchItem[];
   total: number;
@@ -1075,7 +1078,7 @@ export interface CredentialSearch {
   page_size: number;
   facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>>;
 }
-export type BulkCredentialAction = 'enable' | 'disable' | 'add_tags' | 'remove_tags' | 'set_tags' | 'add_to_group' | 'remove_from_group';
+export type BulkCredentialAction = 'enable' | 'disable' | 'reserve' | 'unreserve' | 'add_tags' | 'remove_tags' | 'set_tags' | 'add_to_group' | 'remove_from_group';
 export interface BulkResult {
   added: number;
   removed: number;
@@ -1368,3 +1371,16 @@ export interface EgressMove {
 export type ForbiddenCred = { id: string; seq?: number; label: string; category: string; message: string; source: string; last_403_at?: string; count_403_7d: number; ok_7d: number; disabled: boolean; persistent: boolean };
 export type ForbiddenCategory = { key: string; label: string; count: number; persistent: number; items: ForbiddenCred[] };
 export type RequestCapUsage = { mode: 'inherit' | 'custom' | 'unlimited'; tier: string; hourly_cap: number; daily_cap: number; hourly_used: number; daily_used: number; capped_until?: string };
+
+export interface ReserveStats {
+  reserved: number;
+  ever_reserved: number;
+  bans_reserved: number;
+  bans_active: number;
+  bans_after_promotion: number;
+  promotions_24h: number;
+  min_active: number;
+  active: number;
+  shortfall_since?: number;
+}
+export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at: string; was_reserved: boolean; reserved_since?: string; detail?: string }

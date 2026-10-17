@@ -146,6 +146,8 @@ func (r *Runtime) handleQuotaSync(raw string) {
 		coreauth.MarkQuotaBlocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS))
 	case "probe":
 		r.prober.probeNow(msg.AuthID, msg.Model)
+	case "reserve":
+		go r.syncReserve(context.Background())
 	}
 }
 

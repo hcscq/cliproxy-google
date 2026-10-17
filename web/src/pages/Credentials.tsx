@@ -94,6 +94,13 @@ export function credentialStatus(
       </span>
     );
   if (c.disabled) return <Badge>{t("disabled")}</Badge>;
+  const rs = c as Credential & { reserved?: boolean; reserved_since?: string };
+  if (rs.reserved)
+    return (
+      <span title={tr(`储备中：不参与调度，仍刷新令牌/额度${rs.reserved_since ? `；自 ${new Date(rs.reserved_since).toLocaleString()}` : ""}`, `In reserve: not scheduled, still refreshed${rs.reserved_since ? `; since ${new Date(rs.reserved_since).toLocaleString()}` : ""}`)}>
+        <Badge kind="primary" dot>{tr("储备", "Reserve")}</Badge>
+      </span>
+    );
   const buckets = bucketExhaustedMessages(c);
   if (buckets.length > 0 && !c.credential_scope_error)
     return (
@@ -427,6 +434,19 @@ export function CredentialsPage() {
       toast(tr(`已刷新订阅 ${ok}/${ids.length}`, `Tier refreshed ${ok}/${ids.length}`), ok < ids.length ? "err" : "ok");
       await creds.reload();
     });
+  const bulkReserve = (action: "reserve" | "unreserve") =>
+    run(`bulk-${action}`, async () => {
+      const ids = sel.list();
+      const r = await api.bulkCredentials({ ids, action }, ids.length > BULK_CHUNK ? (d, t) => toast(tr(`处理中 ${d}/${t}`, `Working ${d}/${t}`)) : undefined);
+      toast(
+        tr(
+          `已${action === "reserve" ? "设为储备" : "取消储备"} ${r.updated ?? 0} 个${r.unchanged ? `（${r.unchanged} 个无需变更）` : ""}`,
+          `${action === "reserve" ? "Reserved" : "Unreserved"} ${r.updated ?? 0}${r.unchanged ? ` (${r.unchanged} unchanged)` : ""}`,
+        ),
+        r.failed?.length ? "err" : "ok",
+      );
+      await reloadAll();
+    });
   const bulkToggle = (action: "enable" | "disable") =>
     run(`bulk-${action}`, async () => {
       const ids = sel.list();
@@ -607,6 +627,14 @@ export function CredentialsPage() {
               >
                 {busy === "bulk-enable" && <Spinner />}
                 {tr("启用", "Enable")}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkReserve("reserve")} data-testid="bulk-reserve" title={tr("不参与调度，仍保活刷新；可用数不足时自动启用", "Not scheduled but kept alive; auto-promoted on shortfall")}>
+                {busy === "bulk-reserve" && <Spinner />}
+                {tr("设为储备", "Reserve")}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkReserve("unreserve")} data-testid="bulk-unreserve">
+                {busy === "bulk-unreserve" && <Spinner />}
+                {tr("取消储备", "Unreserve")}
               </button>
               <button
                 className="btn btn-sm btn-danger"

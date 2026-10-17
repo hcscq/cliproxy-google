@@ -14,6 +14,7 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
   const [rtPrefill, setRtPrefill] = useState('');
   const [egress, setEgress] = useState('auto');
   const [allowPrimary, setAllowPrimary] = useState<boolean | undefined>(undefined);
+  const [reserve, setReserve] = useState(false);
   const { tr } = useI18n();
   const tabs: [Tab, string][] = [
     ['oauth', t('antigravityLogin')],
@@ -39,7 +40,13 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
         </div>
       )}
       {tab === 'oauth' && <OAuthFlow allowPrimary={allowPrimary} onDone={onAdded} egress={egress} />}
-      {tab === 'tokens' && <RefreshTokenImport allowPrimary={allowPrimary} key={rtPrefill} initialText={rtPrefill} onDone={onAdded} egress={egress} />}
+      {tab === 'tokens' && (
+        <label className="row gap-sm small" style={{ marginBottom: 8 }} title={tr('新建的凭据进入储备：不参与调度，仍保活刷新；可用数不足时自动启用', 'New credentials go to reserve: not scheduled, kept alive, auto-promoted on shortfall')}>
+          <input type="checkbox" checked={reserve} onChange={(e) => setReserve(e.target.checked)} data-testid="add-reserve" />
+          {tr('导入为储备', 'Import as reserve')}
+        </label>
+      )}
+      {tab === 'tokens' && <RefreshTokenImport allowPrimary={allowPrimary} reserve={reserve} key={rtPrefill} initialText={rtPrefill} onDone={onAdded} egress={egress} />}
       {tab === 'upload' && <UploadFiles allowPrimary={allowPrimary} onDone={onAdded} egress={egress} />}
       {tab === 'paste' && <PasteJson allowPrimary={allowPrimary} onDone={onAdded} egress={egress} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
       {tab === 'vertex' && <VertexImport onDone={onAdded} />}
@@ -427,7 +434,7 @@ const RT_STATUS: Record<string, [string, 'ok' | 'warn' | 'err' | 'primary']> = {
   skipped: ['跳过', 'warn'],
 };
 
-function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary }: { onDone: () => void; initialText?: string; egress: string; allowPrimary?: boolean }) {
+function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, reserve }: { onDone: () => void; initialText?: string; egress: string; allowPrimary?: boolean; reserve?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const [text, setText] = useState(initialText);
@@ -447,7 +454,7 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary }: 
     try {
       for (let i = 0; i < chunks.length; i++) {
         setProgress(`${i + 1} / ${chunks.length}`);
-        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry, egress_id: egress, allow_primary: allowPrimary });
+        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry, egress_id: egress, allow_primary: allowPrimary, reserve: reserve || undefined });
         res.results.forEach((r) => all.push({ ...r, index: r.index + offset }));
         offset += res.results.length;
         setResults([...all]);

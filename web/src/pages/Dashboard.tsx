@@ -29,6 +29,7 @@ export function DashboardPage() {
   const quota = useAsync(() => (topIds ? api.quotaCredentials({ ids: topIds, limit: 200 }) : Promise.resolve({ items: [] as QuotaItem[] } as unknown as Awaited<ReturnType<typeof api.quotaCredentials>>)), [topIds], 60000);
   const usage = useAsync(() => api.usageOverview({ interval: 'hour' }), [], 60000);
   const failures = useAsync(() => api.requestEvents({ status: 'failed', limit: 5 }), [], 60000);
+  const reserve = useAsync(() => api.reserveStats().catch(() => null), [], 60000);
 
   const reloadAll = () => Promise.all([topo.reload(), creds.reload(), quota.reload(), usage.reload(), failures.reload()]);
 
@@ -75,7 +76,13 @@ export function DashboardPage() {
         <Stat
           label={t('credentials')}
           value={creds.data ? `${activeCreds} / ${totalCreds}` : '…'}
-          sub={tr('可用 / 总数', 'usable / total')}
+          sub={(() => {
+            const rs = reserve.data?.stats;
+            const n = rs?.reserved ?? statusFacet.reserve ?? 0;
+            const base = tr('可用 / 总数', 'usable / total');
+            if (!n && !rs?.ever_reserved) return base;
+            return `${base} · ${tr(`储备 ${n}`, `reserve ${n}`)}${rs && rs.min_active > 0 ? tr(` · 最低 ${rs.min_active}`, ` · min ${rs.min_active}`) : ''}${rs ? tr(` · 封禁 储备${rs.bans_reserved}/在用${rs.bans_active}`, ` · bans reserve ${rs.bans_reserved}/active ${rs.bans_active}`) : ''}`;
+          })()}
         />
         <Stat
           label={t('requests24h')}

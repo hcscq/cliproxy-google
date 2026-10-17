@@ -27,6 +27,7 @@ func TestRequestCapTierAndWindows(t *testing.T) {
 	if hEnd.In(reqCapZone).Hour() != 0 || dEnd.In(reqCapZone).Day() != 18 {
 		t.Fatalf("windows %v %v", hEnd, dEnd)
 	}
+	_, _, hEnd, dEnd = reqCapWindows(time.Now()) // live windows: evaluate ignores expired ones
 	g := &requestCapGate{}
 	g.limits.Store(map[string]reqCapLimits{"c": {Hourly: 3}})
 	g.evaluate("c", 3, 3, hEnd, dEnd)

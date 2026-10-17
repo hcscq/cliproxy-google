@@ -257,6 +257,13 @@ type Config struct {
 	// QuotaCanary: a probe success before the known quota reset lets exactly one real
 	// request through (cluster-wide) and unlocks only if it succeeds. Default on.
 	QuotaCanary *bool `yaml:"quota-canary,omitempty" json:"quota-canary,omitempty"`
+	// Credential reserve (凭据储备): auto-promote reserved credentials when the active
+	// (enabled, non-reserved) count stays below ReserveMinActive (0 = off).
+	ReserveMinActive       int    `yaml:"reserve-min-active,omitempty" json:"reserve-min-active,omitempty"`
+	ReserveActivationDelay string `yaml:"reserve-activation-delay,omitempty" json:"reserve-activation-delay,omitempty"`
+	ReserveMaxPromotions   int    `yaml:"reserve-max-promotions,omitempty" json:"reserve-max-promotions,omitempty"`
+	ReservePromotionWindow string `yaml:"reserve-promotion-window,omitempty" json:"reserve-promotion-window,omitempty"`
+	ReserveTierFilter      string `yaml:"reserve-tier-filter,omitempty" json:"reserve-tier-filter,omitempty"`
 	// QuotaBucketReprobeSeconds: when the active quota probe reports a bucket (e.g.
 	// Antigravity "Gemini models") at 0%, every model of that bucket on that credential is
 	// skipped and the credential's quota is re-probed at this interval; the block is released
@@ -1773,6 +1780,53 @@ func (c *Config) AccountBlockRecheckInterval() (time.Duration, bool) {
 		secs = 300
 	}
 	return time.Duration(secs) * time.Second, true
+}
+
+// ReserveSettings is the parsed credential reserve configuration.
+type ReserveSettings struct {
+	MinActive       int
+	ActivationDelay time.Duration
+	MaxPromotions   int
+	PromotionWindow time.Duration
+	Tiers           []string // ultra | pro | free | unknown; empty = any
+}
+
+func parseDurationOr(s string, def, lo, hi time.Duration) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(s))
+	if err != nil || strings.TrimSpace(s) == "" {
+		return def
+	}
+	if d < lo {
+		return lo
+	}
+	if d > hi {
+		return hi
+	}
+	return d
+}
+
+// ReserveSettings returns the credential reserve settings with defaults applied:
+// delay 5m (0..24h), at most 3 promotions per 1h window (window 1m..7d).
+func (c *Config) ReserveSettings() ReserveSettings {
+	out := ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour}
+	if c == nil {
+		return out
+	}
+	if c.ReserveMinActive > 0 {
+		out.MinActive = c.ReserveMinActive
+	}
+	out.ActivationDelay = parseDurationOr(c.ReserveActivationDelay, out.ActivationDelay, 0, 24*time.Hour)
+	if c.ReserveMaxPromotions > 0 {
+		out.MaxPromotions = c.ReserveMaxPromotions
+	}
+	out.PromotionWindow = parseDurationOr(c.ReservePromotionWindow, out.PromotionWindow, time.Minute, 7*24*time.Hour)
+	for _, t := range strings.Split(strings.ToLower(c.ReserveTierFilter), ",") {
+		switch t = strings.TrimSpace(t); t {
+		case "ultra", "pro", "free", "unknown":
+			out.Tiers = append(out.Tiers, t)
+		}
+	}
+	return out
 }
 
 // QuotaCanaryEnabled reports routing.cooldown.quota-canary (default true).

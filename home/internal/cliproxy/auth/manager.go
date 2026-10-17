@@ -1665,7 +1665,7 @@ func (m *Manager) scanDispatchAvailability(providers []string, routeModel string
 		if routeKey != "" && (registryRef == nil || !registryRef.ClientSupportsModel(candidate.ID, routeKey)) {
 			continue
 		}
-		if !credentialPolicyAllows(credentialPolicy, candidate) || !requestCapAllows(candidate.ID) {
+		if !credentialPolicyAllows(credentialPolicy, candidate) || !requestCapAllows(candidate.ID) || !reserveAllows(candidate.ID) {
 			continue
 		}
 		resolved := m.resolveDispatchModel(candidate, routeModel)

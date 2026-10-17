@@ -41,7 +41,7 @@ import (
 )
 
 type Runtime struct {
-	reqCap *requestCapGate
+	reqCap       *requestCapGate
 	stateApplyMu sync.Mutex
 	cfgMu        sync.RWMutex
 	cfg          *config.Config
@@ -68,6 +68,9 @@ type Runtime struct {
 	subTierReq              map[string]string
 	subTierLastReq          map[string]time.Time
 	prober                  quotaProber
+	reserve                 credentialReserve
+	reserveStoreOverride    ReserveStore   // tests
+	reserveCfgOverride      *config.Config // tests
 	egress                  egressState
 	concurrencyAdmitter     ConcurrencyAdmitter
 	clusterRefresh          func(context.Context, string, string) ([]byte, error)
@@ -385,6 +388,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	}()
 	r.startRequestCaps(runCtx)
 	r.startQuotaSync(runCtx)
+	r.startCredentialReserve(runCtx)
 	r.WarmAntigravityCatalogs(runCtx)
 
 	clusterMode := r.clusterAutoRefreshGated()

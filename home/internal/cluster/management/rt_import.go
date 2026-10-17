@@ -355,6 +355,8 @@ type rtImportOptions struct {
 	Egress string
 	// AllowPrimary lets auto-balance use node primary IPs (nil = global default).
 	AllowPrimary *bool
+	// Reserve puts newly created credentials into the credential reserve right away.
+	Reserve bool
 }
 
 // credentialIndex finds existing antigravity credentials by email / refresh token.
@@ -515,6 +517,11 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 						res.Status, res.Code, res.Reason = "failed", "store_failed", shortReason(errStore.Error())
 					} else {
 						res.CredentialID = id
+						if created && opts.Reserve && h.runtime != nil {
+							if _, errRes := h.runtime.SetCredentialsReserved(ctx, []string{id}, true, "导入时设为储备"); errRes != nil {
+								res.Warning = "设为储备失败：" + shortReason(errRes.Error())
+							}
+						}
 						if created {
 							res.Status = "created"
 						} else {
@@ -691,6 +698,7 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 		Concurrency  int    `json:"concurrency"`
 		EgressID     string `json:"egress_id"`
 		AllowPrimary *bool  `json:"allow_primary"`
+		Reserve      bool   `json:"reserve"`
 	}
 	if errBind := json.NewDecoder(io.LimitReader(c.Request.Body, 8<<20)).Decode(&body); errBind != nil {
 		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("body must be JSON: {text, items, dry_run}"))
@@ -710,7 +718,7 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
 	defer cancel()
-	results, summary, errImport := h.importAntigravityEntries(ctx, entries, rtImportOptions{DryRun: body.DryRun, Concurrency: body.Concurrency, Egress: body.EgressID, AllowPrimary: body.AllowPrimary})
+	results, summary, errImport := h.importAntigravityEntries(ctx, entries, rtImportOptions{DryRun: body.DryRun, Concurrency: body.Concurrency, Egress: body.EgressID, AllowPrimary: body.AllowPrimary, Reserve: body.Reserve})
 	if errImport != nil {
 		respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 		return

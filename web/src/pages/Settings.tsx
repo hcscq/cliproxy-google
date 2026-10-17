@@ -66,6 +66,17 @@ const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] 
     ],
   },
   {
+    zh: '凭据储备',
+    en: 'Credential reserve',
+    fields: [
+      { path: 'routing.reserve.min-active', type: 'number', def: 0, zh: '最低可用凭据数', en: 'Minimum active credentials', hintZh: '可用 = 已启用且非储备（额度冷却中的仍计入，被封禁的会被停用故不计）。低于此数时自动启用储备凭据。0 = 关闭', hintEn: 'Active = enabled and not reserved (quota-cooled still counts; banned ones get disabled). Below this, reserves are promoted. 0 = off' },
+      { path: 'routing.reserve.activation-delay', type: 'text', def: '5m', zh: '启用延迟', en: 'Activation delay', hintZh: '不足状态持续多久后才启用储备（Go 时长）。默认 5m', hintEn: 'How long a shortfall must persist before promoting (Go duration). Default 5m' },
+      { path: 'routing.reserve.max-promotions', type: 'number', def: 3, zh: '窗口内最多启用数', en: 'Max promotions per window', hintZh: '限速：每个窗口最多自动启用的储备数。默认 3', hintEn: 'Rate limit per window. Default 3' },
+      { path: 'routing.reserve.promotion-window', type: 'text', def: '1h', zh: '限速窗口', en: 'Promotion window', hintZh: 'Go 时长，默认 1h', hintEn: 'Go duration, default 1h' },
+      { path: 'routing.reserve.tier-filter', type: 'text', def: '', zh: '仅启用这些订阅', en: 'Tier filter', hintZh: '逗号分隔：ultra,pro,free,unknown；留空 = 不限。顺序：健康优先，其次最早导入', hintEn: 'Comma list: ultra,pro,free,unknown; empty = any. Order: healthy first, then oldest import' },
+    ],
+  },
+  {
     zh: 'Antigravity',
     en: 'Antigravity',
     fields: [

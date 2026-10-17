@@ -242,7 +242,7 @@ func schedulerPredicate(modelKey string, tried map[string]struct{}, allowed map[
 				return false
 			}
 		}
-		return authAllowedByID(entry.auth.ID, allowed) && credentialPolicyAllows(credentialPolicy, entry.auth) && requestCapAllows(entry.auth.ID) && quotaBlockAllows(entry.auth.ID, modelKey)
+		return authAllowedByID(entry.auth.ID, allowed) && credentialPolicyAllows(credentialPolicy, entry.auth) && requestCapAllows(entry.auth.ID) && reserveAllows(entry.auth.ID) && quotaBlockAllows(entry.auth.ID, modelKey)
 	}
 }
 
