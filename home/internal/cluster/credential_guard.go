@@ -17,11 +17,16 @@ var guardedCredentialKeys = []string{"refresh_token", "access_token", "id_token"
 // credentialSecretsLost returns the first guarded key that is non-empty in the
 // stored auth JSON but missing/empty in the next auth JSON, or "".
 func credentialSecretsLost(existingJSON, nextJSON string) string {
-	prev := authMetadataStrings(existingJSON)
+	prev, prevKind := authMetadataStrings(existingJSON)
 	if len(prev) == 0 {
 		return ""
 	}
-	next := authMetadataStrings(nextJSON)
+	next, nextKind := authMetadataStrings(nextJSON)
+	// A deliberate credential-kind change (e.g. OAuth -> API key, or a provider
+	// change) legitimately replaces the secret set; light copies never do this.
+	if nextKind.apiKey || nextKind.provider != prevKind.provider {
+		return ""
+	}
 	for _, k := range guardedCredentialKeys {
 		if prev[k] != "" && next[k] == "" {
 			return k
@@ -30,12 +35,23 @@ func credentialSecretsLost(existingJSON, nextJSON string) string {
 	return ""
 }
 
-func authMetadataStrings(raw string) map[string]string {
+type credentialKind struct {
+	provider string
+	apiKey   bool
+}
+
+func authMetadataStrings(raw string) (map[string]string, credentialKind) {
 	var doc struct {
-		Metadata map[string]any `json:"metadata"`
+		Provider   string            `json:"provider"`
+		Attributes map[string]string `json:"attributes"`
+		Metadata   map[string]any    `json:"metadata"`
 	}
 	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &doc) != nil {
-		return nil
+		return nil, credentialKind{}
+	}
+	kind := credentialKind{
+		provider: strings.ToLower(strings.TrimSpace(doc.Provider)),
+		apiKey:   strings.TrimSpace(doc.Attributes["api_key"]) != "" || strings.EqualFold(strings.TrimSpace(doc.Attributes["auth_kind"]), "apikey"),
 	}
 	out := make(map[string]string, len(guardedCredentialKeys))
 	for _, k := range guardedCredentialKeys {
@@ -43,5 +59,5 @@ func authMetadataStrings(raw string) map[string]string {
 			out[k] = strings.TrimSpace(v)
 		}
 	}
-	return out
+	return out, kind
 }

@@ -20,6 +20,9 @@ func TestCredentialSecretsLost(t *testing.T) {
 	if got := credentialSecretsLost(light, light); got != "" {
 		t.Fatalf("no stored secrets: got %q", got)
 	}
+	if got := credentialSecretsLost(full, `{"attributes":{"auth_kind":"apikey","api_key":"k"},"metadata":{"type":"codex"}}`); got != "" {
+		t.Fatalf("deliberate kind change must be allowed: got %q", got)
+	}
 	if got := credentialSecretsLost(full, `{"metadata":{"refresh_token":"r","access_token":""}}`); got != "access_token" {
 		t.Fatalf("emptied access token: got %q", got)
 	}
