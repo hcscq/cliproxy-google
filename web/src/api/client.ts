@@ -179,6 +179,12 @@ export class ApiClient {
   updateCredentialFields(id: string, fields: Record<string, unknown>) {
     return this.patch<{ status: string }>('/credentials/fields', { id, ...fields });
   }
+  forbiddenCredentials() {
+    return this.get<{ total: number; categories: ForbiddenCategory[] }>('/credentials/forbidden');
+  }
+  purgeForbiddenCredentials(ids: string[], dryRun = false) {
+    return this.post<{ status: string; dry_run: boolean; deleted?: string[]; skipped?: string[]; failed?: string[]; backup_prefix: string }>('/credentials/forbidden/purge', { ids, dry_run: dryRun });
+  }
   deleteCredential(id: string) {
     return this.del<{ status: string }>('/credentials', { id });
   }
@@ -1353,3 +1359,6 @@ export interface EgressMove {
   to: string;
   to_ip: string;
 }
+
+export type ForbiddenCred = { id: string; seq?: number; label: string; category: string; message: string; source: string; last_403_at?: string; count_403_7d: number; ok_7d: number; disabled: boolean; persistent: boolean };
+export type ForbiddenCategory = { key: string; label: string; count: number; persistent: number; items: ForbiddenCred[] };

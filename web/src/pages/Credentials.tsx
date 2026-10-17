@@ -5,6 +5,7 @@ import {
   credentialUsable,
   isSupportedProvider,
   type Credential,
+  type ForbiddenCred,
   type CredentialGroupSummary,
   type CredentialQuery,
   type CredentialSortKey,
@@ -380,6 +381,7 @@ export function CredentialsPage() {
   const sel = useSelection<string>();
   const [adding, setAdding] = useState(false);
   const [bulkEgress, setBulkEgress] = useState(false);
+  const [purge403, setPurge403] = useState(false);
   const [selected, setSelected] = useState<CredentialSearchItem | null>(null);
   const [bulk, setBulk] = useState<
     null | "add_to_group" | "remove_from_group" | "add_tags" | "remove_tags"
@@ -496,6 +498,9 @@ export function CredentialsPage() {
           >
             {busy === "quota-refresh" ? <Spinner /> : <IconRefresh />}
             {tr("刷新额度", "Refresh quota")}
+          </button>
+          <button className="btn" onClick={() => setPurge403(true)} data-testid="purge-403">
+            {tr("清理 403 凭据", "Remove 403 creds")}
           </button>
           <button
             className="btn btn-primary"
@@ -857,6 +862,15 @@ export function CredentialsPage() {
           }}
         />
       )}
+      {purge403 && (
+        <Purge403Modal
+          onClose={() => setPurge403(false)}
+          onDone={async () => {
+            setPurge403(false);
+            await reloadAll();
+          }}
+        />
+      )}
       {bulkEgress && (
         <BulkEgressModal
           ids={sel.list()}
@@ -894,6 +908,114 @@ export function CredentialsPage() {
         />
       )}
     </div>
+  );
+}
+
+function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () => Promise<void> }) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast, confirm } = useUi();
+  const { busy, run } = useAction();
+  const data = useAsync(() => api.forbiddenCredentials(), []);
+  const [cats, setCats] = useState<Record<string, boolean>>({});
+  const [onlyPersistent, setOnlyPersistent] = useState(true);
+  const [excluded, setExcluded] = useState<Record<string, boolean>>({});
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const categories = data.data?.categories ?? [];
+  useEffect(() => {
+    if (data.data) setCats({ tos_violation: true });
+  }, [data.data]);
+  const eligible = (it: ForbiddenCred) => !onlyPersistent || it.persistent;
+  const chosen = categories.filter((c) => cats[c.key]).flatMap((c) => c.items.filter((it) => eligible(it) && !excluded[it.id]));
+  const apply = () =>
+    run("purge403", async () => {
+      const ok = await confirm({
+        title: tr("确认删除", "Confirm removal"),
+        body: tr(
+          `将删除 ${chosen.length} 个凭据（软删除，删除前备份到 kv_store，可恢复）。`,
+          `Remove ${chosen.length} credentials (soft delete, backed up first).`,
+        ),
+        confirmText: tr(`删除 ${chosen.length} 个`, `Remove ${chosen.length}`),
+        danger: true,
+      });
+      if (!ok) return;
+      const r = await api.purgeForbiddenCredentials(chosen.map((c) => c.id));
+      toast(
+        tr(`已删除 ${r.deleted?.length ?? 0}，跳过 ${r.skipped?.length ?? 0}，失败 ${r.failed?.length ?? 0}`, `Removed ${r.deleted?.length ?? 0}`),
+        r.failed?.length ? "err" : "ok",
+      );
+      await onDone();
+    });
+  return (
+    <Modal
+      wide
+      title={tr("清理 403 凭据", "Remove 403 credentials")}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {tr("取消", "Cancel")}
+          </button>
+          <button className="btn btn-danger" disabled={!chosen.length || !!busy} onClick={() => void apply()} data-testid="purge-403-apply">
+            {busy && <Spinner />}
+            {tr(`删除 ${chosen.length} 个`, `Remove ${chosen.length}`)}
+          </button>
+        </>
+      }
+    >
+      {data.loading && !data.data ? (
+        <Spinner />
+      ) : !categories.length ? (
+        <p className="hint">{tr("当前没有 403 凭据。", "No 403 credentials.")}</p>
+      ) : (
+        <div className="stack">
+          <label className="small">
+            <input type="checkbox" checked={onlyPersistent} onChange={(e) => setOnlyPersistent(e.target.checked)} data-testid="purge-403-persistent" />{" "}
+            {tr("仅持续性 403（自动停用，或 7 天内 ≥3 次且无成功）", "Persistent 403 only (auto-disabled, or ≥3 in 7d with no success)")}
+          </label>
+          {categories.map((c) => (
+            <div key={c.key} className="card" style={{ padding: 8 }} data-testid={`purge-403-cat-${c.key}`}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="checkbox" checked={!!cats[c.key]} onChange={(e) => setCats({ ...cats, [c.key]: e.target.checked })} />
+                <b>{c.label}</b>
+                <span className="hint">
+                  {tr(`${c.count} 个 · 持续 ${c.persistent}`, `${c.count} · persistent ${c.persistent}`)}
+                </span>
+                <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => setOpen({ ...open, [c.key]: !open[c.key] })}>
+                  {open[c.key] ? tr("收起", "Hide") : tr("展开", "Show")}
+                </button>
+              </div>
+              {open[c.key] && (
+                <table className="table small" style={{ marginTop: 6 }}>
+                  <tbody>
+                    {c.items.map((it) => (
+                      <tr key={it.id} style={{ opacity: eligible(it) ? 1 : 0.5 }}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            disabled={!cats[c.key] || !eligible(it)}
+                            checked={!!cats[c.key] && eligible(it) && !excluded[it.id]}
+                            onChange={(e) => setExcluded({ ...excluded, [it.id]: !e.target.checked })}
+                          />
+                        </td>
+                        <td>#{it.seq ?? "?"}</td>
+                        <td>{it.label}</td>
+                        <td title={it.message} style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {it.message}
+                        </td>
+                        <td>{it.last_403_at ? fmtTime(it.last_403_at) : "-"}</td>
+                        <td>{tr(`7天 ${it.count_403_7d} 次 / 成功 ${it.ok_7d}`, `7d ${it.count_403_7d} / ok ${it.ok_7d}`)}</td>
+                        <td>{it.persistent ? tr("持续", "persistent") : tr("偶发", "transient")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 
