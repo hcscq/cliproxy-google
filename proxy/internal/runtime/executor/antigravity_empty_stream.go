@@ -31,6 +31,9 @@ func antigravityRetryEmptyStreamEnabled() bool {
 // only empty / thought parts, or there are no candidates and no block reason.
 // MAX_TOKENS, SAFETY etc. and any blockReason are not empty.
 func antigravityNonStreamEmpty(body []byte) bool {
+	if !gjson.ValidBytes(body) {
+		return false // not a single JSON reply (e.g. SSE text): leave it alone
+	}
 	root := gjson.ParseBytes(body)
 	if r := root.Get("response"); r.Exists() && r.IsObject() {
 		root = r

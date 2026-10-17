@@ -22,6 +22,7 @@ func TestAntigravityNonStreamEmpty(t *testing.T) {
 		`{"response":{"candidates":[{"finishReason":"STOP","content":{"parts":[{"functionCall":{"name":"f"}}]}}]}}`: false,
 		`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"plain"}]}}]}`:                           false,
 	}
+	cases["data: {\"response\":{\"candidates\":[{\"finishReason\":\"STOP\"}]}}\n\n"] = false
 	for body, want := range cases {
 		if got := antigravityNonStreamEmpty([]byte(body)); got != want {
 			t.Errorf("%s: got %v want %v", body, got, want)
