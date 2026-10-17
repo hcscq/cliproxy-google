@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { HealthBadge } from '../components/HealthCheck';
+import { downloadBlob as saveHealthCsv } from '../format';
 import { ReserveShortAlert } from '../components/ReserveAlert';
 import { useAction, useApi, useAsync, useUi } from "../app-context";
 import {
@@ -449,6 +451,20 @@ export function CredentialsPage() {
       );
       await reloadAll();
     });
+  const bulkHealth = () =>
+    run("bulk-health", async () => {
+      const ids = sel.list();
+      let n = 0;
+      for (let i = 0; i < ids.length; i += 500) n += (await api.startHealthCheck(ids.slice(i, i + 500))).accepted;
+      toast(tr(`已开始体检 ${n} 个（按并发限制逐个进行，稍后刷新查看）`, `Health check started for ${n} (rate-limited; refresh later)`));
+      setTimeout(() => void reloadAll(), 15000);
+    });
+  const exportHealthFailed = () =>
+    run("health-export", async () => {
+      const ids = sel.list();
+      const blob = (await api.exportHealth({ status: "fail", format: "csv", ids: ids.length ? ids.join(",") : undefined })) as Blob;
+      saveHealthCsv(blob, `health-check-failed-${new Date().toISOString().slice(0, 10)}.csv`);
+    });
   const bulkToggle = (action: "enable" | "disable") =>
     run(`bulk-${action}`, async () => {
       const ids = sel.list();
@@ -631,6 +647,14 @@ export function CredentialsPage() {
                 {busy === "bulk-enable" && <Spinner />}
                 {tr("启用", "Enable")}
               </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkHealth()} data-testid="bulk-health" title={tr("等级/额度/模型目录/真实最小请求（经固定出口）", "Tier / quota / catalog / one real minimal request via pinned egress")}>
+                {busy === "bulk-health" && <Spinner />}
+                {tr("体检", "Health check")}
+              </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => void exportHealthFailed()} data-testid="health-export" title={tr("导出所选中体检失败的账号（邮箱、原因、上游原文、时间、批次），用于找供应商售后", "Export failed checks of the selection for supplier claims")}>
+                {busy === "health-export" && <Spinner />}
+                {tr("导出体检失败", "Export failed")}
+              </button>
               <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkReserve("reserve")} data-testid="bulk-reserve" title={tr("不参与调度，仍保活刷新；可用数不足时自动启用", "Not scheduled but kept alive; auto-promoted on shortfall")}>
                 {busy === "bulk-reserve" && <Spinner />}
                 {tr("设为储备", "Reserve")}
@@ -811,7 +835,7 @@ export function CredentialsPage() {
                         className="cell-status"
                         title={statusTooltip(c, tr)}
                       >
-                        {credentialStatus(c, t, tr)}{healthBadges(c)}
+                        {credentialStatus(c, t, tr)}{healthBadges(c)}<HealthBadge h={(c as CredentialSearchItem).health} />
                       </span>
                       <RequestCapLine u={c.request_cap} />
                       {c.egress_ip && (() => {
@@ -1446,7 +1470,7 @@ function CredentialDrawer({
       <div className="stack">
         <div className="row">
           <Badge kind="primary">{cred.provider}</Badge>
-          {credentialStatus(cred, t, tr)}{healthBadges(cred)}
+          {credentialStatus(cred, t, tr)}{healthBadges(cred)}<HealthBadge h={cred.health} />
           <QuotaStatusBadge item={quota} />
         </div>
         {cred.credential_scope_error && cred.status_message && (

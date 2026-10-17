@@ -6,8 +6,8 @@ export function reserveShortText(s: ReserveStats | null | undefined, tr: (zh: st
   if (!s || !s.short) return null;
   const hasReserve = s.reserved > 0;
   return tr(
-    `储备不足：在用 ${s.active} / 最低 ${s.min_active}，储备 ${s.reserved}${hasReserve ? '（无符合订阅筛选的）' : ''}`,
-    `Reserve short: active ${s.active} / min ${s.min_active}, reserve ${s.reserved}${hasReserve ? ' (none match the tier filter)' : ''}`,
+    `储备不足：在用 ${s.active} / 最低 ${s.min_active}，储备 ${s.reserved}${hasReserve ? '（无符合订阅筛选/体检条件的）' : ''}`,
+    `Reserve short: active ${s.active} / min ${s.min_active}, reserve ${s.reserved}${hasReserve ? ' (none match the tier filter / check policy)' : ''}`,
   );
 }
 

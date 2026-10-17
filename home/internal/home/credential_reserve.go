@@ -38,6 +38,7 @@ type ReserveCandidate struct {
 	CreatedAt time.Time `gorm:"column:created_at"`
 	Tier      string    `gorm:"column:tier"`
 	Healthy   bool      `gorm:"column:healthy"`
+	Health    string    `gorm:"column:health"` // import health check: pass | fail | running | "" (unchecked)
 }
 
 // ReserveStats is the panel summary.
@@ -109,6 +110,17 @@ func (r *Runtime) syncReserve(ctx context.Context) {
 	}
 	coreauth.SetReservedCredentials(ids)
 	r.reserve.since.Store(m)
+	if r.ImportCheckSettings().BlockFailed {
+		if hs, ok := s.(interface {
+			ListHealthFailedIDs(context.Context) (map[string]struct{}, error)
+		}); ok {
+			if failed, err := hs.ListHealthFailedIDs(cctx); err == nil {
+				coreauth.SetHealthBlockedCredentials(failed)
+			}
+		}
+	} else {
+		coreauth.SetHealthBlockedCredentials(nil)
+	}
 }
 
 // ReserveChanged re-reads the reserve set now and tells the other Homes to do the same.
@@ -146,7 +158,7 @@ func (r *Runtime) ReserveStatus(ctx context.Context, st *ReserveStats) {
 			st.Active = n
 		}
 		if c, err := s.ListReserveCandidates(ctx); err == nil {
-			st.Eligible = len(orderReserveCandidates(c, cfg.Tiers))
+			st.Eligible = len(orderReserveCandidates(c, cfg.Tiers, r.ImportCheckSettings().Promote))
 		}
 	}
 	st.Short = st.MinActive > 0 && st.Active >= 0 && st.Active < st.MinActive && st.Eligible == 0
@@ -195,6 +207,19 @@ func (r *Runtime) logReserveState(state string, logf func()) {
 	logf()
 }
 
+// healthAllowsPromotion applies the import health check promotion policy:
+// pass = only passed; not-failed = passed or unchecked; any = ignore checks.
+func healthAllowsPromotion(health, policy string) bool {
+	switch policy {
+	case "any":
+		return true
+	case "not-failed":
+		return health != "fail"
+	default:
+		return health == "pass"
+	}
+}
+
 func reserveTierClass(tier string) string {
 	t := strings.ToLower(tier)
 	switch {
@@ -210,7 +235,7 @@ func reserveTierClass(tier string) string {
 
 // orderReserveCandidates applies the tier filter and the promotion order: healthy
 // first, then oldest import (sequence number, then created_at).
-func orderReserveCandidates(in []ReserveCandidate, tiers []string) []ReserveCandidate {
+func orderReserveCandidates(in []ReserveCandidate, tiers []string, healthPolicy string) []ReserveCandidate {
 	allow := map[string]bool{}
 	for _, t := range tiers {
 		allow[t] = true
@@ -218,6 +243,9 @@ func orderReserveCandidates(in []ReserveCandidate, tiers []string) []ReserveCand
 	out := make([]ReserveCandidate, 0, len(in))
 	for _, c := range in {
 		if len(allow) > 0 && !allow[reserveTierClass(c.Tier)] {
+			continue
+		}
+		if !healthAllowsPromotion(c.Health, healthPolicy) {
 			continue
 		}
 		out = append(out, c)
@@ -277,7 +305,7 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 		log.WithError(err).Debug("credential reserve: candidate lookup failed")
 		return
 	}
-	cands = orderReserveCandidates(cands, cfg.Tiers)
+	cands = orderReserveCandidates(cands, cfg.Tiers, r.ImportCheckSettings().Promote)
 	r.reserve.eligible.Store(int64(len(cands)))
 	if r.reserve.shortfallSince.IsZero() {
 		r.reserve.shortfallSince = now

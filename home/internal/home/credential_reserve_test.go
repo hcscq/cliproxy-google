@@ -75,11 +75,11 @@ func TestOrderReserveCandidates(t *testing.T) {
 		{ID: "old-sick", Seq: 1, Healthy: false, Tier: "g1-pro-tier", CreatedAt: base},
 		{ID: "old-healthy", Seq: 2, Healthy: true, Tier: "free-tier", CreatedAt: base},
 	}
-	got := orderReserveCandidates(in, nil)
+	got := orderReserveCandidates(in, nil, "any")
 	if got[0].ID != "old-healthy" || got[1].ID != "new-healthy" || got[2].ID != "old-sick" {
 		t.Fatalf("order = %v", got)
 	}
-	got = orderReserveCandidates(in, []string{"pro"})
+	got = orderReserveCandidates(in, []string{"pro"}, "any")
 	if len(got) != 2 || got[0].ID != "new-healthy" {
 		t.Fatalf("tier filter = %v", got)
 	}
@@ -107,7 +107,7 @@ func TestReserveControlDelayAndRateLimit(t *testing.T) {
 	store := &fakeReserveStore{reserved: map[string]time.Time{}, active: 2}
 	for i, id := range []string{"r1", "r2", "r3", "r4", "r5"} {
 		store.reserved[id] = time.Now()
-		store.cands = append(store.cands, ReserveCandidate{ID: id, Seq: int64(i + 1), Healthy: true})
+		store.cands = append(store.cands, ReserveCandidate{ID: id, Seq: int64(i + 1), Healthy: true, Health: "pass"})
 	}
 	r := reserveTestRuntime(store, &config.Config{ReserveMinActive: 6, ReserveActivationDelay: "5m", ReserveMaxPromotions: 2, ReservePromotionWindow: "1h"})
 	defer coreauth.SetReservedCredentials(nil)
@@ -133,7 +133,7 @@ func TestReserveControlDelayAndRateLimit(t *testing.T) {
 }
 
 func TestReserveControlOffAndRecovered(t *testing.T) {
-	store := &fakeReserveStore{reserved: map[string]time.Time{"r1": time.Now()}, cands: []ReserveCandidate{{ID: "r1", Healthy: true}}, active: 1}
+	store := &fakeReserveStore{reserved: map[string]time.Time{"r1": time.Now()}, cands: []ReserveCandidate{{ID: "r1", Healthy: true, Health: "pass"}}, active: 1}
 	r := reserveTestRuntime(store, &config.Config{})
 	r.reserveControl(context.Background(), time.Now().Add(time.Hour))
 	if len(store.promotes) != 0 || store.bans != 1 {
@@ -171,7 +171,7 @@ func TestReserveControlEmptyReserveQuietAndWarns(t *testing.T) {
 	}
 	// Reserves exist but none match the tier filter: same quiet behaviour.
 	store.reserved["r1"] = now
-	store.cands = []ReserveCandidate{{ID: "r1", Tier: "free-tier", Healthy: true}}
+	store.cands = []ReserveCandidate{{ID: "r1", Tier: "free-tier", Healthy: true, Health: "pass"}}
 	r.reserveCfgOverride = &config.Config{ReserveMinActive: 10, ReserveActivationDelay: "0s", ReserveTierFilter: "ultra"}
 	for i := 0; i < 5; i++ {
 		r.reserveControl(context.Background(), now.Add(time.Hour+time.Duration(i)*30*time.Second))
@@ -186,5 +186,25 @@ func TestReserveControlEmptyReserveQuietAndWarns(t *testing.T) {
 	r.reserveControl(context.Background(), now.Add(2*time.Hour+30*time.Second))
 	if c := strings.Count(buf.String(), "储备不足"); c != 2 {
 		t.Fatalf("new shortfall should log again, got %d", c)
+	}
+}
+
+func TestReservePromotionHealthPolicy(t *testing.T) {
+	in := []ReserveCandidate{{ID: "p", Seq: 3, Health: "pass"}, {ID: "f", Seq: 1, Health: "fail"}, {ID: "u", Seq: 2}}
+	ids := func(c []ReserveCandidate) string {
+		s := ""
+		for _, x := range c {
+			s += x.ID
+		}
+		return s
+	}
+	if got := ids(orderReserveCandidates(in, nil, "pass")); got != "p" {
+		t.Fatalf("pass policy = %q", got)
+	}
+	if got := ids(orderReserveCandidates(in, nil, "not-failed")); got != "up" {
+		t.Fatalf("not-failed policy = %q", got)
+	}
+	if got := ids(orderReserveCandidates(in, nil, "any")); got != "fup" {
+		t.Fatalf("any policy = %q", got)
 	}
 }

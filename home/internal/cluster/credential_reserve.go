@@ -140,13 +140,17 @@ func (r *Repository) ListReserveCandidates(ctx context.Context) ([]home.ReserveC
 	var rows []home.ReserveCandidate
 	q := `SELECT a.uuid AS id, COALESCE(a.seq,0) AS seq, a.created_at AS created_at,
 		COALESCE(a.auth_json->'metadata'->>'subscription_tier','') AS tier,
-		(COALESCE(a.status,'') = 'active' AND COALESCE(a.unavailable,false) = false AND COALESCE(a.auth_json->>'status_message','') = '') AS healthy
+		(COALESCE(a.status,'') = 'active' AND COALESCE(a.unavailable,false) = false AND COALESCE(a.auth_json->>'status_message','') = '') AS healthy,
+		COALESCE(h.status,'') AS health
 		FROM auth a JOIN credential_reserve r ON r.auth_uuid = a.uuid
+		LEFT JOIN credential_health_check h ON h.auth_uuid = a.uuid
 		WHERE r.reserved AND a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false`
 	if db.Dialector.Name() != "postgres" {
 		q = `SELECT a.uuid AS id, COALESCE(a.seq,0) AS seq, a.created_at AS created_at, '' AS tier,
-			(COALESCE(a.status,'') = 'active' AND COALESCE(a.unavailable,false) = false) AS healthy
+			(COALESCE(a.status,'') = 'active' AND COALESCE(a.unavailable,false) = false) AS healthy,
+			COALESCE(h.status,'') AS health
 			FROM auth a JOIN credential_reserve r ON r.auth_uuid = a.uuid
+			LEFT JOIN credential_health_check h ON h.auth_uuid = a.uuid
 			WHERE r.reserved AND a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false`
 	}
 	if err := db.WithContext(contextOrBackground(ctx)).Raw(q).Scan(&rows).Error; err != nil {

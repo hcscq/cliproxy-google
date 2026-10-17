@@ -16,3 +16,11 @@ func TestReserveExcludesFromScheduling(t *testing.T) {
 		t.Fatal("cleared set must allow")
 	}
 }
+
+func TestHealthBlockedExcluded(t *testing.T) {
+	defer SetHealthBlockedCredentials(nil)
+	SetHealthBlockedCredentials(map[string]struct{}{"f": {}})
+	if reserveAllows("f") || !reserveAllows("ok") {
+		t.Fatal("failed health check must be excluded when blocking is on")
+	}
+}

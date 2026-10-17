@@ -167,8 +167,8 @@ export class ApiClient {
     files.forEach((f, i) => form.append(`file${i}`, f, f.name));
     return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
   }
-  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string; allow_primary?: boolean; reserve?: boolean }) {
-    return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[] }>('/credentials/import/refresh-tokens', body);
+  importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string; allow_primary?: boolean; reserve?: boolean; health_check?: boolean; batch_id?: string }) {
+    return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[]; batch_id?: string; health_batch_id?: string }>('/credentials/import/refresh-tokens', body);
   }
   uploadCredentialJSON(json: string, egressId?: string, allowPrimary?: boolean) {
     return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
@@ -352,6 +352,17 @@ export class ApiClient {
   }
   // Large selections are sent in chunks (BULK_CHUNK ids per request) so
   // thousands of credentials neither hit request limits nor block Home for long.
+  startHealthCheck(ids: string[]) {
+    return this.post<{ status: string; accepted: number; failed: string[] }>('/credentials/health-check', { ids });
+  }
+  healthBatch(batchId: string) {
+    return this.get<{ batch_id: string; imported: number; summary: HealthSummary; items: HealthItem[] }>('/credentials/health-check/batch', { batch_id: batchId });
+  }
+  exportHealth(q: { batch_id?: string; status?: 'fail' | 'all'; ids?: string; format?: 'csv' | 'text' }) {
+    return q.format === 'text'
+      ? this.request<string>('GET', '/credentials/health-check/export', { query: q as Query, responseType: 'text' })
+      : this.request<Blob>('GET', '/credentials/health-check/export', { query: q as Query, responseType: 'blob' });
+  }
   reserveStats() {
     return this.get<{ stats: ReserveStats; events: ReserveEvent[] }>('/credentials/reserve');
   }
@@ -1046,6 +1057,8 @@ export interface CredentialQuery {
   q?: string;
   provider?: string;
   status?: string;
+  /** import health check: pass | fail | running | unchecked */
+  health?: string;
   domain?: string;
   tag?: string;
   /** group id, or "none" for credentials in no group */
@@ -1069,14 +1082,14 @@ export interface CallStats {
   /** error class -> count: 429 | 503 | 403 | 404 | 400 | 5xx | net | cancel | other */
   by_class?: Record<string, number>;
 }
-export type CredentialSearchItem = Credential & { reserved?: boolean; reserved_since?: string; request_cap?: RequestCapUsage; seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
+export type CredentialSearchItem = Credential & { health?: HealthInfo; reserved?: boolean; reserved_since?: string; request_cap?: RequestCapUsage; seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
 export interface CredentialSearch {
   items: CredentialSearchItem[];
   total: number;
   all: number;
   page: number;
   page_size: number;
-  facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>>;
+  facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>> & { health?: Record<string, number> };
 }
 export type BulkCredentialAction = 'enable' | 'disable' | 'reserve' | 'unreserve' | 'add_tags' | 'remove_tags' | 'set_tags' | 'add_to_group' | 'remove_from_group';
 export interface BulkResult {
@@ -1386,3 +1399,7 @@ export interface ReserveStats {
   shortfall_since?: number;
 }
 export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at: string; was_reserved: boolean; reserved_since?: string; detail?: string }
+
+export interface HealthInfo { status: 'pass' | 'fail' | 'running' | string; categories: string[]; reasons?: string[]; checked_at?: string; tier?: string; evidence?: string }
+export interface HealthSummary { total: number; pass: number; fail: number; running: number; by_category: Record<string, number> }
+export interface HealthItem extends HealthInfo { auth_id: string; seq?: number; email?: string; batch_id?: string; imported_at?: string; model?: string }

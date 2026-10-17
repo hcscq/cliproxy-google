@@ -37,4 +37,27 @@ func ReservedCredentialCount() int {
 	return len(m)
 }
 
-func reserveAllows(authID string) bool { return !IsCredentialReserved(authID) }
+var healthBlocked atomic.Value // map[string]struct{}
+
+// SetHealthBlockedCredentials replaces the set of credentials excluded from scheduling
+// because their import health check failed (only when that option is on).
+func SetHealthBlockedCredentials(ids map[string]struct{}) {
+	if ids == nil {
+		ids = map[string]struct{}{}
+	}
+	healthBlocked.Store(ids)
+}
+
+// IsCredentialHealthBlocked reports whether authID is excluded by a failed health check.
+func IsCredentialHealthBlocked(authID string) bool {
+	m, _ := healthBlocked.Load().(map[string]struct{})
+	if len(m) == 0 {
+		return false
+	}
+	_, ok := m[strings.TrimSpace(authID)]
+	return ok
+}
+
+func reserveAllows(authID string) bool {
+	return !IsCredentialReserved(authID) && !IsCredentialHealthBlocked(authID)
+}

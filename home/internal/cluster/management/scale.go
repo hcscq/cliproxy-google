@@ -191,6 +191,9 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 	if h.runtime != nil {
 		reservedSince = h.runtime.ReservedSince()
 	}
+	health := h.healthAnnotations(ctx)
+	healthQ := strings.TrimSpace(c.Query("health"))
+	facets["health"] = map[string]int{}
 	seqQ, seqOnly := parseSeqQuery(f.q)
 	for _, a := range all {
 		st := credentialStatus(a, now)
@@ -198,6 +201,11 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 			st = "reserve"
 		}
 		statusOf[a.ID] = st
+		hs := "unchecked"
+		if hx, ok := health[a.ID]; ok {
+			hs, _ = hx["status"].(string)
+		}
+		facets["health"][hs]++
 		facets["provider"][a.Provider]++
 		facets["status"][st]++
 		if d := cluster.EmailDomain(cluster.CredentialEmail(a)); d != "" {
@@ -212,7 +220,7 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		} else if seqOnly {
 			continue
 		}
-		if fa.match(a, st, groupsOf[a.ID], excluded) {
+		if fa.match(a, st, groupsOf[a.ID], excluded) && (healthQ == "" || healthQ == hs) {
 			matched = append(matched, a)
 		}
 	}
@@ -251,6 +259,9 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		e["tags"] = cluster.CredentialTags(a)
 		e["group_ids"] = nonNilUints(groupsOf[a.ID])
 		e["state"] = statusOf[a.ID]
+		if hx, ok := health[a.ID]; ok {
+			e["health"] = hx
+		}
 		if t, ok := reservedSince[a.ID]; ok {
 			e["reserved"] = true
 			if !t.IsZero() {

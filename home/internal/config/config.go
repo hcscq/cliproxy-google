@@ -264,6 +264,14 @@ type Config struct {
 	ReserveMaxPromotions   int    `yaml:"reserve-max-promotions,omitempty" json:"reserve-max-promotions,omitempty"`
 	ReservePromotionWindow string `yaml:"reserve-promotion-window,omitempty" json:"reserve-promotion-window,omitempty"`
 	ReserveTierFilter      string `yaml:"reserve-tier-filter,omitempty" json:"reserve-tier-filter,omitempty"`
+	// Import health check (导入体检).
+	ImportCheckOnImport     *bool  `yaml:"import-check-on-import,omitempty" json:"import-check-on-import,omitempty"`
+	ImportCheckExpectedTier string `yaml:"import-check-expected-tier,omitempty" json:"import-check-expected-tier,omitempty"`
+	ImportCheckQuotaMinPct  int    `yaml:"import-check-quota-min-percent,omitempty" json:"import-check-quota-min-percent,omitempty"`
+	ImportCheckModel        string `yaml:"import-check-model,omitempty" json:"import-check-model,omitempty"`
+	ImportCheckConcurrency  int    `yaml:"import-check-concurrency,omitempty" json:"import-check-concurrency,omitempty"`
+	ImportCheckPromote      string `yaml:"import-check-promote,omitempty" json:"import-check-promote,omitempty"`
+	ImportCheckBlockFailed  bool   `yaml:"import-check-block-failed,omitempty" json:"import-check-block-failed,omitempty"`
 	// QuotaBucketReprobeSeconds: when the active quota probe reports a bucket (e.g.
 	// Antigravity "Gemini models") at 0%, every model of that bucket on that credential is
 	// skipped and the credential's quota is re-probed at this interval; the block is released
@@ -1780,6 +1788,51 @@ func (c *Config) AccountBlockRecheckInterval() (time.Duration, bool) {
 		secs = 300
 	}
 	return time.Duration(secs) * time.Second, true
+}
+
+// ImportCheckSettings is the parsed import health check configuration.
+type ImportCheckSettings struct {
+	OnImport     bool
+	ExpectedTier string  // ultra | pro | free | "" (any)
+	QuotaMin     float64 // minimum remaining ratio of every quota window
+	Model        string
+	Concurrency  int
+	Promote      string // pass | not-failed | any
+	BlockFailed  bool
+}
+
+// ImportCheckSettings returns the import health check settings with defaults:
+// on import, expect pro, quota windows >= 95%, gemini-2.5-flash-lite, 3 at a time,
+// promote only passed reserves, failed credentials still scheduled.
+func (c *Config) ImportCheckSettings() ImportCheckSettings {
+	out := ImportCheckSettings{OnImport: true, ExpectedTier: "pro", QuotaMin: 0.95, Model: "gemini-2.5-flash-lite", Concurrency: 3, Promote: "pass"}
+	if c == nil {
+		return out
+	}
+	if c.ImportCheckOnImport != nil {
+		out.OnImport = *c.ImportCheckOnImport
+	}
+	if t := strings.ToLower(strings.TrimSpace(c.ImportCheckExpectedTier)); t != "" {
+		if t == "any" || t == "none" {
+			t = ""
+		}
+		out.ExpectedTier = t
+	}
+	if c.ImportCheckQuotaMinPct > 0 && c.ImportCheckQuotaMinPct <= 100 {
+		out.QuotaMin = float64(c.ImportCheckQuotaMinPct) / 100
+	}
+	if m := strings.TrimSpace(c.ImportCheckModel); m != "" {
+		out.Model = m
+	}
+	if c.ImportCheckConcurrency > 0 {
+		out.Concurrency = min(c.ImportCheckConcurrency, 16)
+	}
+	switch p := strings.TrimSpace(c.ImportCheckPromote); p {
+	case "pass", "not-failed", "any":
+		out.Promote = p
+	}
+	out.BlockFailed = c.ImportCheckBlockFailed
+	return out
 }
 
 // ReserveSettings is the parsed credential reserve configuration.

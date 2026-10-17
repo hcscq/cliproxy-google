@@ -699,6 +699,8 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 		EgressID     string `json:"egress_id"`
 		AllowPrimary *bool  `json:"allow_primary"`
 		Reserve      bool   `json:"reserve"`
+		HealthCheck  *bool  `json:"health_check"`
+		BatchID      string `json:"batch_id"`
 	}
 	if errBind := json.NewDecoder(io.LimitReader(c.Request.Body, 8<<20)).Decode(&body); errBind != nil {
 		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("body must be JSON: {text, items, dry_run}"))
@@ -723,7 +725,36 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": body.DryRun, "summary": summary, "results": results})
+	resp := gin.H{"status": "ok", "dry_run": body.DryRun, "summary": summary, "results": results}
+	if !body.DryRun {
+		// Record the import batch of every newly created credential (warranty evidence),
+		// then health-check them in the background; the dialog polls the batch summary.
+		batch := strings.TrimSpace(body.BatchID)
+		if batch == "" || len(batch) > 64 {
+			batch = newHealthBatchID()
+		}
+		var created []string
+		for _, res := range results {
+			if res.Status == "created" && res.CredentialID != "" {
+				created = append(created, res.CredentialID)
+			}
+		}
+		if len(created) > 0 {
+			if err := h.repo.RecordCredentialImports(ctx, created, batch, time.Now(), "refresh_token"); err != nil {
+				log.Warnf("rt import: record batch %s: %v", batch, err)
+			}
+			check := h.runtime != nil && h.runtime.ImportCheckSettings().OnImport
+			if body.HealthCheck != nil {
+				check = *body.HealthCheck && h.runtime != nil
+			}
+			if check {
+				h.startHealthChecks(created)
+				resp["health_batch_id"] = batch
+			}
+		}
+		resp["batch_id"] = batch
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 type egressCtxKey struct{}

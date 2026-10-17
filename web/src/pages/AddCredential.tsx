@@ -5,6 +5,9 @@ import { useI18n } from '../i18n';
 import { CopyButton, Modal, Spinner } from '../components/ui';
 import { IconExternal, IconUpload } from '../components/icons';
 import { AllowPrimaryToggle, EgressSelect } from '../components/EgressSelect';
+import { healthCategoryLabel, healthSummaryText } from '../components/HealthCheck';
+import { downloadBlob } from '../format';
+import type { HealthItem, HealthSummary } from '../api/client';
 
 type Tab = 'oauth' | 'tokens' | 'upload' | 'paste' | 'vertex';
 
@@ -442,6 +445,8 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
   const [progress, setProgress] = useState('');
   const [results, setResults] = useState<RTImportResult[] | null>(null);
   const [lastDry, setLastDry] = useState(true);
+  const [healthCheck, setHealthCheck] = useState(true);
+  const [healthBatch, setHealthBatch] = useState<string | null>(null);
   const chunks = chunkTokenInput(text);
   const count = chunks.reduce((a, c) => a + (c.items?.length ?? c.text?.split('\n').length ?? 0), 0);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -449,12 +454,15 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
     setBusy(true);
     setResults(null);
     setLastDry(dry);
+    const batchId = `rt-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}-${Math.random().toString(36).slice(2, 8)}`;
+    let checking = false;
     const all: RTImportResult[] = [];
     let offset = 0;
     try {
       for (let i = 0; i < chunks.length; i++) {
         setProgress(`${i + 1} / ${chunks.length}`);
-        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry, egress_id: egress, allow_primary: allowPrimary, reserve: reserve || undefined });
+        const res = await api.importRefreshTokens({ ...chunks[i], dry_run: dry, egress_id: egress, allow_primary: allowPrimary, reserve: reserve || undefined, health_check: healthCheck, batch_id: dry ? undefined : batchId });
+        if (res.health_batch_id) checking = true;
         res.results.forEach((r) => all.push({ ...r, index: r.index + offset }));
         offset += res.results.length;
         setResults([...all]);
@@ -467,6 +475,7 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
         n('failed') ? 'err' : 'ok',
       );
       if (!dry && (n('created') || n('updated'))) onDone();
+      if (!dry) setHealthBatch(checking ? batchId : null);
     } catch (e) {
       toastError(e);
     } finally {
@@ -505,6 +514,10 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
           }}
         />
         <span className="faint small">识别到 {count} 条</span>
+        <label className="row gap-sm small" title="新建的凭据导入后自动体检：订阅等级、额度是否全新、模型目录、经固定出口发 1 个最小真实请求（检测需验证/403/429）。结果可导出给供应商售后。">
+          <input type="checkbox" checked={healthCheck} onChange={(e) => setHealthCheck(e.target.checked)} data-testid="rt-import-health" />
+          导入后体检
+        </label>
         <span className="spacer" />
         {progress && <span className="faint small">批次 {progress}</span>}
         <button className="btn" disabled={!count || busy} onClick={() => void run(true)} data-testid="rt-import-dry">
@@ -516,6 +529,7 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
           导入
         </button>
       </div>
+      {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
       {results && (
         <div className="table-wrap scroll-list" style={{ maxHeight: 280 }}>
           <table className="table compact">
@@ -547,6 +561,101 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Import batch health check progress + failures, with supplier-claim export. */
+function HealthBatchPanel({ batchId }: { batchId: string }) {
+  const api = useApi();
+  const { toast, toastError } = useUi();
+  const { tr } = useI18n();
+  const [data, setData] = useState<{ imported: number; summary: HealthSummary; items: HealthItem[] } | null>(null);
+  useEffect(() => {
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = Date.now();
+    const tick = async () => {
+      try {
+        const r = await api.healthBatch(batchId);
+        if (stop) return;
+        setData(r);
+        const done = r.summary.total >= r.imported && r.summary.running === 0 && r.summary.total > 0;
+        if (done || Date.now() - started > 15 * 60_000) return;
+      } catch {
+        /* keep polling */
+      }
+      if (!stop) timer = setTimeout(() => void tick(), 4000);
+    };
+    void tick();
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [api, batchId]);
+  const s = data?.summary;
+  const pending = data ? Math.max(0, data.imported - (s?.total ?? 0)) + (s?.running ?? 0) : 0;
+  return (
+    <div className="alert small stack" data-testid="health-batch">
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <b>{tr('导入体检', 'Import check')}</b>
+        <span>{s ? healthSummaryText(s, tr) : tr('体检排队中…', 'Queued…')}</span>
+        {pending > 0 && (
+          <span className="faint">
+            <Spinner /> {tr(`剩余 ${pending}`, `${pending} left`)}
+          </span>
+        )}
+        <span className="spacer" />
+        <span className="faint mono">{batchId}</span>
+        <button
+          className="btn btn-sm"
+          disabled={!s?.fail}
+          onClick={async () => {
+            try {
+              downloadBlob((await api.exportHealth({ batch_id: batchId, status: 'fail', format: 'csv' })) as Blob, `health-failed-${batchId}.csv`);
+            } catch (e) {
+              toastError(e);
+            }
+          }}
+          data-testid="health-batch-csv"
+        >
+          {tr('导出失败 CSV', 'Export CSV')}
+        </button>
+        <button
+          className="btn btn-sm"
+          disabled={!s?.fail}
+          onClick={async () => {
+            try {
+              const text = (await api.exportHealth({ batch_id: batchId, status: 'fail', format: 'text' })) as string;
+              await navigator.clipboard.writeText(text);
+              toast(tr('已复制（邮箱 / 原因 / 时间 / 上游原文）', 'Copied'));
+            } catch (e) {
+              toastError(e);
+            }
+          }}
+          data-testid="health-batch-copy"
+        >
+          {tr('复制失败列表', 'Copy failed')}
+        </button>
+      </div>
+      {!!data?.items.length && (
+        <div className="table-wrap scroll-list" style={{ maxHeight: 200 }}>
+          <table className="table compact">
+            <tbody>
+              {data.items.map((it) => (
+                <tr key={it.auth_id}>
+                  <td className="faint">{it.seq ? `#${it.seq}` : ''}</td>
+                  <td className="ellipsis" style={{ maxWidth: 220 }}>{it.email}</td>
+                  <td>{it.status === 'running' ? tr('体检中', 'Checking') : (it.categories ?? []).map((c) => healthCategoryLabel(c, tr, it.tier)).join(' / ')}</td>
+                  <td className="small ellipsis" style={{ maxWidth: 320 }} title={[...(it.reasons ?? []), it.evidence ?? ''].join('\n')}>
+                    {(it.reasons ?? []).join('；')}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

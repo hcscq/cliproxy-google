@@ -111,6 +111,14 @@ export function CredentialFilterBar({
           </option>
         ))}
       </select>
+      <select className="select input-sm" value={value.health ?? ''} onChange={(e) => set('health', e.target.value)} data-testid="cred-filter-health">
+        <option value="">{tr('全部体检', 'All checks')}</option>
+        {([['pass', '体检通过', 'Passed'], ['fail', '体检失败', 'Failed'], ['running', '体检中', 'Checking'], ['unchecked', '未体检', 'Unchecked']] as const).map(([k, zh, en]) => (
+          <option key={k} value={k}>
+            {tr(zh, en)} ({facets?.health?.[k] ?? 0})
+          </option>
+        ))}
+      </select>
       <select className="select input-sm" value={value.domain ?? ''} onChange={(e) => set('domain', e.target.value)} data-testid="cred-filter-domain">
         <option value="">{tr('全部邮箱域', 'All domains')}</option>
         {facetOptions(facets?.domain).map(([k, n]) => (

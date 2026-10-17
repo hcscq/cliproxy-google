@@ -66,6 +66,19 @@ const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] 
     ],
   },
   {
+    zh: '导入体检',
+    en: 'Import health check',
+    fields: [
+      { path: 'credentials.import-check.on-import', type: 'bool', def: true, zh: '导入后自动体检', en: 'Check after import', hintZh: '新导入的凭据自动检查：订阅等级、额度是否全新、模型目录、经固定出口发 1 个最小真实请求（检测需验证 / 403 / 429）。结果与上游原文可导出给供应商。', hintEn: 'New credentials are checked: tier, fresh quota, catalog, one minimal real request via pinned egress (verify / 403 / 429). Results with raw upstream text are exportable.' },
+      { path: 'credentials.import-check.expected-tier', type: 'text', def: 'pro', zh: '期望订阅', en: 'Expected tier', hintZh: 'ultra / pro / free；any = 不检查。默认 pro', hintEn: 'ultra / pro / free; any = skip. Default pro' },
+      { path: 'credentials.import-check.quota-min-percent', type: 'number', def: 95, zh: '额度全新阈值（%）', en: 'Fresh quota threshold (%)', hintZh: '每个额度窗口剩余都需 ≥ 此值，否则判为额度非新。默认 95', hintEn: 'Every quota window must have at least this much left. Default 95' },
+      { path: 'credentials.import-check.model', type: 'text', def: 'gemini-2.5-flash-lite', zh: '测试模型', en: 'Test model', hintZh: '最小真实请求（maxOutputTokens 1）使用的模型', hintEn: 'Model of the minimal request (maxOutputTokens 1)' },
+      { path: 'credentials.import-check.concurrency', type: 'number', def: 3, zh: '体检并发', en: 'Check concurrency', hintZh: '每个 Home 同时体检的凭据数（1–16），避免突发。默认 3', hintEn: 'Concurrent checks per Home (1–16). Default 3' },
+      { path: 'credentials.import-check.promote', type: 'select', options: ['pass', 'not-failed', 'any'], def: 'pass', zh: '储备启用条件', en: 'Reserve promotion requires', hintZh: 'pass = 仅体检通过；not-failed = 通过或未体检；any = 不看体检。默认 pass', hintEn: 'pass = passed only; not-failed = passed or unchecked; any = ignore. Default pass' },
+      { path: 'credentials.import-check.block-failed', type: 'bool', def: false, zh: '体检失败不参与调度', en: 'Do not schedule failed', hintZh: '开启后体检失败的凭据不接请求（仍保活），重新体检通过后恢复。默认关闭', hintEn: 'Failed credentials get no requests (kept alive) until a re-check passes. Default off' },
+    ],
+  },
+  {
     zh: '凭据储备',
     en: 'Credential reserve',
     fields: [
