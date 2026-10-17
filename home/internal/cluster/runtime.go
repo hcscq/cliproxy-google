@@ -843,6 +843,12 @@ func modelMetadataFromAuth(auth *coreauth.Auth) map[string]any {
 	if weight, exists := auth.Metadata["weight"]; exists {
 		metadata["weight"] = weight
 	}
+	// Request caps are resolved from the light runtime auth (tier + override).
+	for _, k := range []string{"subscription_tier", "request_cap_mode", "request_cap_hourly", "request_cap_daily"} {
+		if v, exists := auth.Metadata[k]; exists && v != nil {
+			metadata[k] = v
+		}
+	}
 	if len(metadata) == 0 {
 		return nil
 	}
