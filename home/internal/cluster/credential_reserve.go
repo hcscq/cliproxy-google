@@ -159,15 +159,27 @@ func (r *Repository) ListReserveCandidates(ctx context.Context) ([]home.ReserveC
 	return rows, nil
 }
 
-// CountActiveCredentials counts live, enabled (bans disable), non-reserved credentials.
-func (r *Repository) CountActiveCredentials(ctx context.Context) (int, error) {
+// CountActiveCredentials counts available credentials: live, enabled (bans and
+// egress/error pauses disable), not reserved, status not error, with a refresh token,
+// and not failed by the import health check. countCooled=false also excludes
+// credentials that are wholly quota-cooled right now.
+func (r *Repository) CountActiveCredentials(ctx context.Context, countCooled bool) (int, error) {
 	db, err := r.database()
 	if err != nil {
 		return 0, err
 	}
+	q := `SELECT COUNT(*) FROM auth a WHERE a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false
+		AND COALESCE(a.status,'') <> 'error'
+		AND a.uuid NOT IN (SELECT auth_uuid FROM credential_reserve WHERE reserved)
+		AND a.uuid NOT IN (SELECT auth_uuid FROM credential_health_check WHERE status = 'fail')`
+	if db.Dialector.Name() == "postgres" {
+		q += ` AND COALESCE(a.auth_json->'metadata'->>'refresh_token','') <> ''`
+	}
+	if !countCooled {
+		q += ` AND NOT (COALESCE(a.unavailable,false) AND a.next_retry_after IS NOT NULL AND a.next_retry_after > CURRENT_TIMESTAMP)`
+	}
 	var n int64
-	err = db.WithContext(contextOrBackground(ctx)).Raw(`SELECT COUNT(*) FROM auth WHERE deleted_at IS NULL AND COALESCE(disabled,false) = false
-		AND uuid NOT IN (SELECT auth_uuid FROM credential_reserve WHERE reserved)`).Scan(&n).Error
+	err = db.WithContext(contextOrBackground(ctx)).Raw(q).Scan(&n).Error
 	return int(n), err
 }
 
@@ -271,12 +283,12 @@ func (a *RuntimeAdapter) ListReserveCandidates(ctx context.Context) ([]home.Rese
 	return r.ListReserveCandidates(ctx)
 }
 
-func (a *RuntimeAdapter) CountActiveCredentials(ctx context.Context) (int, error) {
+func (a *RuntimeAdapter) CountActiveCredentials(ctx context.Context, countCooled bool) (int, error) {
 	r, err := a.reserveRepo()
 	if err != nil {
 		return 0, err
 	}
-	return r.CountActiveCredentials(ctx)
+	return r.CountActiveCredentials(ctx, countCooled)
 }
 
 func (a *RuntimeAdapter) CountReserveEvents(ctx context.Context, kind string, since time.Time) (int, error) {

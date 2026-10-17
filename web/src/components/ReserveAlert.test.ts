@@ -7,7 +7,7 @@ const base: ReserveStats = { reserved: 0, ever_reserved: 0, bans_reserved: 0, ba
 
 describe('reserveShortText', () => {
   it('warns when short with empty reserve', () => {
-    expect(reserveShortText(base, zh)).toBe('储备不足：在用 3 / 最低 10，储备 0');
+    expect(reserveShortText(base, zh)).toBe('储备不足：可用 3 / 最低 10，储备 0');
   });
   it('notes tier filter when reserves exist but none eligible', () => {
     expect(reserveShortText({ ...base, reserved: 2 }, zh)).toContain('无符合订阅筛选');

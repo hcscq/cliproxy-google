@@ -22,9 +22,10 @@ import (
 // broadcast. The leader Home promotes reserves when the active count stays below the
 // configured minimum.
 //
-// Active count = live, enabled, non-reserved credentials. Quota-cooled credentials
-// still count (cooldowns are temporary and would cause promotion churn); banned
-// credentials are disabled by the ban handler and so do not count.
+// Active count = available credentials: enabled (bans/egress or error pauses disable),
+// not reserved, not in error, with a refresh token and not failed by the import
+// health check. Quota-cooled credentials count by default (routing.reserve.count-cooled)
+// since cooldowns are temporary and would cause promotion churn.
 
 const (
 	reserveSyncEvery    = 10 * time.Second
@@ -61,7 +62,7 @@ type ReserveStore interface {
 	ListReservedCredentials(ctx context.Context) (map[string]time.Time, error)
 	SetCredentialsReserved(ctx context.Context, ids []string, reserved bool, kind, detail string) (int, error)
 	ListReserveCandidates(ctx context.Context) ([]ReserveCandidate, error)
-	CountActiveCredentials(ctx context.Context) (int, error)
+	CountActiveCredentials(ctx context.Context, countCooled bool) (int, error)
 	CountReserveEvents(ctx context.Context, kind string, since time.Time) (int, error)
 	RecordReserveBans(ctx context.Context) (int, error)
 }
@@ -154,7 +155,7 @@ func (r *Runtime) ReserveStatus(ctx context.Context, st *ReserveStats) {
 	st.MinActive = cfg.MinActive
 	st.Active, st.Eligible = -1, -1
 	if s := r.reserveStore(); s != nil {
-		if n, err := s.CountActiveCredentials(ctx); err == nil {
+		if n, err := s.CountActiveCredentials(ctx, cfg.CountCooled); err == nil {
 			st.Active = n
 		}
 		if c, err := s.ListReserveCandidates(ctx); err == nil {
@@ -281,7 +282,7 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 		log.Infof("credential reserve: recorded %d ban(s)", n)
 	}
 	cfg := r.reserveSettings()
-	active, err := s.CountActiveCredentials(cctx)
+	active, err := s.CountActiveCredentials(cctx, cfg.CountCooled)
 	if err != nil {
 		log.WithError(err).Debug("credential reserve: active count failed")
 		return

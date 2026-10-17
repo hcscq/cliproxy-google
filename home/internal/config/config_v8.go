@@ -87,7 +87,7 @@ func buildV8Paths() []configPath {
 		{"quota-canary", "routing.cooldown.quota-canary"},
 		{"reserve-min-active", "routing.reserve.min-active"}, {"reserve-activation-delay", "routing.reserve.activation-delay"},
 		{"reserve-max-promotions", "routing.reserve.max-promotions"}, {"reserve-promotion-window", "routing.reserve.promotion-window"},
-		{"reserve-tier-filter", "routing.reserve.tier-filter"},
+		{"reserve-tier-filter", "routing.reserve.tier-filter"}, {"reserve-count-cooled", "routing.reserve.count-cooled"},
 		{"import-check-on-import", "credentials.import-check.on-import"}, {"import-check-expected-tier", "credentials.import-check.expected-tier"},
 		{"import-check-quota-min-percent", "credentials.import-check.quota-min-percent"}, {"import-check-model", "credentials.import-check.model"},
 		{"import-check-concurrency", "credentials.import-check.concurrency"}, {"import-check-promote", "credentials.import-check.promote"},

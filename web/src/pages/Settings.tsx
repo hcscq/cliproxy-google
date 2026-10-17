@@ -82,7 +82,8 @@ const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] 
     zh: '凭据储备',
     en: 'Credential reserve',
     fields: [
-      { path: 'routing.reserve.min-active', type: 'number', def: 0, zh: '最低可用凭据数', en: 'Minimum active credentials', hintZh: '可用 = 已启用且非储备（额度冷却中的仍计入，被封禁的会被停用故不计）。低于此数时自动启用储备凭据。0 = 关闭', hintEn: 'Active = enabled and not reserved (quota-cooled still counts; banned ones get disabled). Below this, reserves are promoted. 0 = off' },
+      { path: 'routing.reserve.min-active', type: 'number', def: 0, zh: '最低可用凭据数', en: 'Minimum active credentials', hintZh: '可用凭据（见下方口径）低于此数时自动启用储备凭据。0 = 关闭', hintEn: 'Active = enabled and not reserved (quota-cooled still counts; banned ones get disabled). Below this, reserves are promoted. 0 = off' },
+      { path: 'routing.reserve.count-cooled', type: 'bool', def: true, zh: '额度冷却计入可用', en: 'Count quota-cooled as available', hintZh: '可用 = 已启用、非储备、非错误/暂停、有令牌、体检未失败。开启时整体额度冷却中的也算可用（避免反复启用）；关闭则不算。默认开启', hintEn: 'Available = enabled, not reserved, not error/paused, has token, health check not failed. On: quota-cooled count (avoids churn); off: they do not. Default on' },
       { path: 'routing.reserve.activation-delay', type: 'text', def: '5m', zh: '启用延迟', en: 'Activation delay', hintZh: '不足状态持续多久后才启用储备（Go 时长）。默认 5m', hintEn: 'How long a shortfall must persist before promoting (Go duration). Default 5m' },
       { path: 'routing.reserve.max-promotions', type: 'number', def: 3, zh: '窗口内最多启用数', en: 'Max promotions per window', hintZh: '限速：每个窗口最多自动启用的储备数。默认 3', hintEn: 'Rate limit per window. Default 3' },
       { path: 'routing.reserve.promotion-window', type: 'text', def: '1h', zh: '限速窗口', en: 'Promotion window', hintZh: 'Go 时长，默认 1h', hintEn: 'Go duration, default 1h' },

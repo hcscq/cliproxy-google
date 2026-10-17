@@ -18,6 +18,8 @@ type fakeReserveStore struct {
 	active   int
 	promotes []time.Time
 	bans     int
+
+	lastCountCooled bool
 }
 
 func (f *fakeReserveStore) ListReservedCredentials(context.Context) (map[string]time.Time, error) {
@@ -56,7 +58,10 @@ func (f *fakeReserveStore) SetCredentialsReserved(_ context.Context, ids []strin
 func (f *fakeReserveStore) ListReserveCandidates(context.Context) ([]ReserveCandidate, error) {
 	return append([]ReserveCandidate(nil), f.cands...), nil
 }
-func (f *fakeReserveStore) CountActiveCredentials(context.Context) (int, error) { return f.active, nil }
+func (f *fakeReserveStore) CountActiveCredentials(_ context.Context, countCooled bool) (int, error) {
+	f.lastCountCooled = countCooled
+	return f.active, nil
+}
 func (f *fakeReserveStore) CountReserveEvents(_ context.Context, _ string, since time.Time) (int, error) {
 	n := 0
 	for _, t := range f.promotes {
@@ -206,5 +211,20 @@ func TestReservePromotionHealthPolicy(t *testing.T) {
 	}
 	if got := ids(orderReserveCandidates(in, nil, "any")); got != "fup" {
 		t.Fatalf("any policy = %q", got)
+	}
+}
+
+func TestReserveCountCooledSetting(t *testing.T) {
+	store := &fakeReserveStore{reserved: map[string]time.Time{}, active: 50}
+	r := reserveTestRuntime(store, &config.Config{ReserveMinActive: 10})
+	r.reserveControl(context.Background(), time.Now())
+	if !store.lastCountCooled {
+		t.Fatal("quota-cooled must count as available by default")
+	}
+	off := false
+	r.reserveCfgOverride = &config.Config{ReserveMinActive: 10, ReserveCountCooled: &off}
+	r.reserveControl(context.Background(), time.Now())
+	if store.lastCountCooled {
+		t.Fatal("setting off must exclude quota-cooled")
 	}
 }

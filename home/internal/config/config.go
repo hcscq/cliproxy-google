@@ -264,6 +264,7 @@ type Config struct {
 	ReserveMaxPromotions   int    `yaml:"reserve-max-promotions,omitempty" json:"reserve-max-promotions,omitempty"`
 	ReservePromotionWindow string `yaml:"reserve-promotion-window,omitempty" json:"reserve-promotion-window,omitempty"`
 	ReserveTierFilter      string `yaml:"reserve-tier-filter,omitempty" json:"reserve-tier-filter,omitempty"`
+	ReserveCountCooled     *bool  `yaml:"reserve-count-cooled,omitempty" json:"reserve-count-cooled,omitempty"`
 	// Import health check (导入体检).
 	ImportCheckOnImport     *bool  `yaml:"import-check-on-import,omitempty" json:"import-check-on-import,omitempty"`
 	ImportCheckExpectedTier string `yaml:"import-check-expected-tier,omitempty" json:"import-check-expected-tier,omitempty"`
@@ -1842,6 +1843,7 @@ type ReserveSettings struct {
 	MaxPromotions   int
 	PromotionWindow time.Duration
 	Tiers           []string // ultra | pro | free | unknown; empty = any
+	CountCooled     bool     // quota-cooled credentials count as available (default true)
 }
 
 func parseDurationOr(s string, def, lo, hi time.Duration) time.Duration {
@@ -1861,9 +1863,12 @@ func parseDurationOr(s string, def, lo, hi time.Duration) time.Duration {
 // ReserveSettings returns the credential reserve settings with defaults applied:
 // delay 5m (0..24h), at most 3 promotions per 1h window (window 1m..7d).
 func (c *Config) ReserveSettings() ReserveSettings {
-	out := ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour}
+	out := ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour, CountCooled: true}
 	if c == nil {
 		return out
+	}
+	if c.ReserveCountCooled != nil {
+		out.CountCooled = *c.ReserveCountCooled
 	}
 	if c.ReserveMinActive > 0 {
 		out.MinActive = c.ReserveMinActive

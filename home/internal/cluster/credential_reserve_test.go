@@ -24,7 +24,7 @@ func TestCredentialReserveRoundTrip(t *testing.T) {
 	if err != nil || len(got) != 2 || got["a1"].IsZero() {
 		t.Fatalf("list = %v err=%v (only live auths)", got, err)
 	}
-	if active, _ := repo.CountActiveCredentials(ctx); active != 1 {
+	if active, _ := repo.CountActiveCredentials(ctx, true); active != 1 {
 		t.Fatalf("active = %d", active)
 	}
 	cands, err := repo.ListReserveCandidates(ctx)
@@ -44,7 +44,23 @@ func TestCredentialReserveRoundTrip(t *testing.T) {
 	if len(evs) != 4 || evs[0].Kind != "promote" || !evs[0].WasReserved || evs[0].ReservedSince == nil {
 		t.Fatalf("events = %+v", evs)
 	}
-	if active, _ := repo.CountActiveCredentials(ctx); active != 2 {
+	if active, _ := repo.CountActiveCredentials(ctx, true); active != 2 {
 		t.Fatalf("active after promote = %d", active)
+	}
+	// Failed health check, error status and quota-cooled (when not counted) are not available.
+	_ = repo.SaveHealthCheck(ctx, CredentialHealthCheck{AuthUUID: "a1", Status: "fail", CheckedAt: time.Now()})
+	if active, _ := repo.CountActiveCredentials(ctx, true); active != 1 {
+		t.Fatalf("active with failed check = %d", active)
+	}
+	_ = db.Exec(`UPDATE auth SET unavailable = true, next_retry_after = ? WHERE uuid = 'a3'`, time.Now().Add(time.Hour)).Error
+	if active, _ := repo.CountActiveCredentials(ctx, true); active != 1 {
+		t.Fatalf("cooled counted = %d", active)
+	}
+	if active, _ := repo.CountActiveCredentials(ctx, false); active != 0 {
+		t.Fatalf("cooled not counted = %d", active)
+	}
+	_ = db.Exec(`UPDATE auth SET unavailable = false, status = 'error' WHERE uuid = 'a3'`).Error
+	if active, _ := repo.CountActiveCredentials(ctx, true); active != 0 {
+		t.Fatalf("error status counted = %d", active)
 	}
 }
