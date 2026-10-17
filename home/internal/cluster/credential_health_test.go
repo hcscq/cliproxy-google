@@ -31,3 +31,29 @@ func TestCredentialHealthStore(t *testing.T) {
 		t.Fatalf("failed = %v", failed)
 	}
 }
+
+func TestHealthSweepIDs(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	db, _ := repo.database()
+	for i, id := range []string{"r1", "r2", "n1", "old"} {
+		if err := db.Exec(`INSERT INTO auth (uuid, auth_json, id, provider, status, disabled, seq, created_at) VALUES (?, '{}', ?, 'antigravity', 'active', false, ?, ?)`, id, id, i+1, time.Now()).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _ = repo.SetCredentialsReserved(ctx, []string{"r1", "r2"}, true, "reserve", "")
+	_ = repo.RecordCredentialImports(ctx, []string{"n1"}, "b", time.Now(), "rt")
+	_ = repo.RecordCredentialImports(ctx, []string{"old"}, "b0", time.Now().Add(-48*time.Hour), "rt")
+	_ = repo.SaveHealthCheck(ctx, CredentialHealthCheck{AuthUUID: "r2", Status: "pass", CheckedAt: time.Now()})
+	ids, err := repo.ListHealthSweepIDs(ctx, 10)
+	if err != nil || len(ids) != 2 || ids[0] != "r1" || ids[1] != "n1" {
+		t.Fatalf("sweep = %v err=%v", ids, err)
+	}
+	_ = repo.SaveHealthCheck(ctx, CredentialHealthCheck{AuthUUID: "r1", Status: "running", CheckedAt: time.Now()})
+	if ids, _ := repo.ListHealthSweepIDs(ctx, 10); len(ids) != 1 {
+		t.Fatalf("running must not be re-picked: %v", ids)
+	}
+	_ = repo.SaveHealthCheck(ctx, CredentialHealthCheck{AuthUUID: "r1", Status: "running", CheckedAt: time.Now().Add(-time.Hour)})
+	if ids, _ := repo.ListHealthSweepIDs(ctx, 10); len(ids) != 2 {
+		t.Fatalf("stale running must be re-picked: %v", ids)
+	}
+}

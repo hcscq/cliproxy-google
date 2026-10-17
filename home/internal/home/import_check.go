@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
@@ -284,4 +285,38 @@ func (r *Runtime) ImportCheckSettings() config.ImportCheckSettings {
 		return r.reserveCfgOverride.ImportCheckSettings()
 	}
 	return r.Config().ImportCheckSettings()
+}
+
+// SetHealthCheckRunner registers the check executor (management layer), used by the
+// leader's sweep of unchecked reserved / newly imported credentials.
+func (r *Runtime) SetHealthCheckRunner(fn func(ctx context.Context, ids []string)) {
+	r.healthRunner.Store(fn)
+}
+
+// healthSweep (leader) checks unchecked reserved / recently imported credentials when
+// import checks are on, one sweep at a time.
+func (r *Runtime) healthSweep(ctx context.Context) {
+	if !r.ImportCheckSettings().OnImport || !r.healthSweeping.CompareAndSwap(false, true) {
+		return
+	}
+	fn, _ := r.healthRunner.Load().(func(context.Context, []string))
+	s, ok := r.reserveStore().(interface {
+		ListHealthSweepIDs(context.Context, int) ([]string, error)
+	})
+	if fn == nil || !ok {
+		r.healthSweeping.Store(false)
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ids, err := s.ListHealthSweepIDs(cctx, 200)
+	cancel()
+	if err != nil || len(ids) == 0 {
+		r.healthSweeping.Store(false)
+		return
+	}
+	log.Infof("health check: sweeping %d unchecked credential(s)", len(ids))
+	go func() {
+		defer r.healthSweeping.Store(false)
+		fn(ctx, ids)
+	}()
 }

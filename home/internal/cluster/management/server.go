@@ -31,7 +31,11 @@ type Handler struct {
 
 // NewHandler creates a new handler.
 func NewHandler(repo *cluster.Repository, runtime *home.Runtime, nodeIP string, nodePort int) *Handler {
-	return &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort, heartbeatTimeout: cluster.DefaultHeartbeatTimeout(), pluginStoreAuth: pluginauth.NewService(repo)}
+	h := &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort, heartbeatTimeout: cluster.DefaultHeartbeatTimeout(), pluginStoreAuth: pluginauth.NewService(repo)}
+	if runtime != nil {
+		runtime.SetHealthCheckRunner(h.runHealthChecks)
+	}
+	return h
 }
 
 // SetForwardTLSConfig sets the TLS config used for cluster HTTP forwarding.

@@ -69,6 +69,8 @@ type Runtime struct {
 	subTierLastReq          map[string]time.Time
 	prober                  quotaProber
 	reserve                 credentialReserve
+	healthRunner            atomic.Value // func(context.Context, []string)
+	healthSweeping          atomic.Bool
 	reserveStoreOverride    ReserveStore   // tests
 	reserveCfgOverride      *config.Config // tests
 	egress                  egressState

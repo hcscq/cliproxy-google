@@ -119,6 +119,7 @@ func (r *Repository) SaveHealthCheck(ctx context.Context, rec CredentialHealthCh
 	if err != nil {
 		return err
 	}
+	rec.CheckedAt = rec.CheckedAt.UTC()
 	return db.WithContext(contextOrBackground(ctx)).Save(&rec).Error
 }
 
@@ -222,4 +223,32 @@ func (a *RuntimeAdapter) ListHealthFailedIDs(ctx context.Context) (map[string]st
 		return nil, err
 	}
 	return r.ListHealthFailedIDs(ctx)
+}
+
+// ListHealthSweepIDs returns enabled credentials that should be health-checked
+// automatically: reserved or imported in the last 24h, with no check yet or a
+// check stuck in "running" for 15 minutes (Home restarted mid-check).
+func (r *Repository) ListHealthSweepIDs(ctx context.Context, limit int) ([]string, error) {
+	db, err := r.database()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	var ids []string
+	err = db.WithContext(contextOrBackground(ctx)).Raw(`SELECT a.uuid FROM auth a
+		WHERE a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false AND COALESCE(a.provider,'') = 'antigravity'
+		AND (a.uuid IN (SELECT auth_uuid FROM credential_reserve WHERE reserved)
+		     OR a.uuid IN (SELECT auth_uuid FROM credential_import WHERE imported_at > ?))
+		AND NOT EXISTS (SELECT 1 FROM credential_health_check h WHERE h.auth_uuid = a.uuid AND (h.status <> 'running' OR h.checked_at > ?))
+		ORDER BY a.seq LIMIT ?`, now.Add(-24*time.Hour), now.Add(-15*time.Minute), limit).Scan(&ids).Error
+	return ids, err
+}
+
+// ListHealthSweepIDs exposes the lookup to the Home runtime.
+func (a *RuntimeAdapter) ListHealthSweepIDs(ctx context.Context, limit int) ([]string, error) {
+	r, err := a.reserveRepo()
+	if err != nil {
+		return nil, err
+	}
+	return r.ListHealthSweepIDs(ctx, limit)
 }

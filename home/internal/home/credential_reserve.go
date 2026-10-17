@@ -193,6 +193,7 @@ func (r *Runtime) startCredentialReserve(ctx context.Context) {
 			case <-ctl.C:
 				if r.catalogLeader() {
 					r.reserveControl(ctx, time.Now())
+					r.healthSweep(ctx)
 				}
 			}
 		}
