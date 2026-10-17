@@ -1672,6 +1672,9 @@ func (m *Manager) scanDispatchAvailability(providers []string, routeModel string
 		if strings.TrimSpace(resolved.Model) == "" {
 			continue
 		}
+		if !quotaBlockAllows(candidate.ID, resolved.Model) || (routeKey != "" && !quotaBlockAllows(candidate.ID, routeKey)) {
+			continue
+		}
 		authForAvailability := m.effectiveAvailabilityAuth(candidate, summary.now)
 		available, reason, next := dispatchAvailabilityForModel(authForAvailability, resolved.Key, routeModel, summary.now)
 		if !available && reason != blockReasonCooldown {

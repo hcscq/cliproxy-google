@@ -100,6 +100,8 @@ func (m *Manager) ClearQuotaCooldown(ctx context.Context, credentialID, model st
 		return result, errors.New("auth manager: missing auth id")
 	}
 	requestedModel := canonicalModelKey(model)
+	ClearQuotaBlock(credentialID, requestedModel)
+	notifyQuotaBlockCleared(credentialID, requestedModel)
 	result.CredentialID = credentialID
 	result.Model = requestedModel
 	if ctx == nil {

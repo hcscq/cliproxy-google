@@ -142,14 +142,15 @@ func TestPlanQuotaBucketActionsKeepsLongResetAndReleasesOnRecovery(t *testing.T)
 	}
 }
 
-func TestCoolingQuotaPairsSkipsLongReset(t *testing.T) {
+func TestCoolingQuotaPairsIncludesLongReset(t *testing.T) {
 	now := time.Now()
 	mk := func(d time.Duration) *coreauth.Auth {
 		return &coreauth.Auth{ID: "x", Provider: "antigravity", ModelStates: map[string]*coreauth.ModelState{
 			"m": {Unavailable: true, NextRetryAfter: now.Add(d), LastError: &coreauth.Error{HTTPStatus: 429}}}}
 	}
-	if n := len(coolingQuotaPairs([]*coreauth.Auth{mk(123 * time.Hour)}, now)); n != 0 {
-		t.Fatalf("weekly cooldown probed per model: %d", n)
+	// Long resets are probed too (backoff-capped) to catch early/bonus resets.
+	if n := len(coolingQuotaPairs([]*coreauth.Auth{mk(123 * time.Hour)}, now)); n != 1 {
+		t.Fatalf("long cooldown not probed: %d", n)
 	}
 	if n := len(coolingQuotaPairs([]*coreauth.Auth{mk(time.Minute)}, now)); n != 1 {
 		t.Fatalf("short cooldown not probed: %d", n)

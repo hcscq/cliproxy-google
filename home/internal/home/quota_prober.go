@@ -33,8 +33,6 @@ const (
 	quotaProbeMaxPerSecond = 5
 	quotaProbeConcurrency  = 4
 	quotaProbeTimeout      = 30 * time.Second
-	// quotaProbeLongResetSkip: cooldowns further out than this are left to the bucket re-probe.
-	quotaProbeLongResetSkip = time.Hour
 )
 
 var quotaProbeGeneratePath = "/v1internal:generateContent"
@@ -56,7 +54,49 @@ type quotaProber struct {
 	mu      sync.Mutex
 	next    map[string]time.Time
 	running map[string]bool
+	level   map[string]int // probes answered "still exhausted" in the current cooldown
 	started bool
+}
+
+// probeNow makes the (credential, model) pair (all cooling models when model is "")
+// due at the next tick. Used when the quota collector sees a bucket's remaining
+// fraction rise (e.g. a Google bonus reset) so hidden per-model windows are re-checked
+// at once instead of at the backoff schedule.
+func (p *quotaProber) probeNow(authID, model string) {
+	authID = strings.TrimSpace(authID)
+	if p == nil || authID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.next == nil {
+		return
+	}
+	now := time.Now()
+	if model != "" {
+		p.next[authID+"|"+model] = now
+		return
+	}
+	for key := range p.next {
+		if strings.HasPrefix(key, authID+"|") {
+			p.next[key] = now
+		}
+	}
+}
+
+// quotaProbeBackoffStep returns the wait before the next probe of a pair that has
+// already been answered "still exhausted" level times.
+func quotaProbeBackoffStep(steps []time.Duration, level int) time.Duration {
+	if len(steps) == 0 {
+		return time.Minute
+	}
+	if level < 0 {
+		level = 0
+	}
+	if level >= len(steps) {
+		level = len(steps) - 1
+	}
+	return steps[level]
 }
 
 type quotaProbeTarget struct {
@@ -93,6 +133,13 @@ func quotaProbeRate(pairs int, interval time.Duration) int {
 	return need
 }
 
+func (r *Runtime) quotaProbeBackoff() []time.Duration {
+	if cfg := r.Config(); cfg != nil {
+		return cfg.QuotaProbeBackoff()
+	}
+	return []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute}
+}
+
 func (r *Runtime) quotaProbeInterval() time.Duration {
 	if cfg := r.Config(); cfg != nil {
 		return cfg.QuotaProbeInterval()
@@ -109,6 +156,7 @@ func (r *Runtime) startQuotaProber(ctx context.Context) {
 	r.prober.started = true
 	r.prober.next = map[string]time.Time{}
 	r.prober.running = map[string]bool{}
+	r.prober.level = map[string]int{}
 	r.prober.mu.Unlock()
 	go func() {
 		sem := make(chan struct{}, envInt("HOME_QUOTA_PROBE_CONCURRENCY", quotaProbeConcurrency*4))
@@ -176,12 +224,9 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 				// Bucket blocks are re-checked by the quota collector, not per-model probes.
 				continue
 			}
-			if st.NextRetryAfter.Sub(now) > quotaProbeLongResetSkip {
-				// Long upstream reset (e.g. weekly "Individual quota reached"): the quota
-				// collector's bucket re-probe releases it early; per-model probes would only
-				// burn a 429 every interval.
-				continue
-			}
+			// Long upstream resets are probed too (on the backoff schedule, capped at a
+			// few probes per hour): Google grants early/bonus resets, and releasing them
+			// on bucket ratios instead sent real traffic into hidden per-model windows.
 			out = append(out, quotaProbeTarget{auth: a, model: model, reset: st.NextRetryAfter})
 		}
 	}
@@ -191,6 +236,7 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 	pairs := coolingQuotaPairs(r.coreManager.ListMatching(func(a *coreauth.Auth) bool { return hasCoolingQuotaPair(a, now) }), now)
 	interval := r.quotaProbeInterval()
+	steps := r.quotaProbeBackoff()
 	r.prober.mu.Lock()
 	defer r.prober.mu.Unlock()
 	live := make(map[string]bool, len(pairs))
@@ -204,9 +250,11 @@ func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 		live[key] = true
 		next, known := r.prober.next[key]
 		if !known {
-			// First sight (incl. right after deploy): spread the first probe over one interval.
-			next = now.Add(time.Duration(rand.Int63n(int64(interval)/4 + 1)))
+			// First sight (incl. right after deploy): first backoff step, spread to avoid bursts.
+			first := quotaProbeBackoffStep(steps, 0)
+			next = now.Add(first/2 + time.Duration(rand.Int63n(int64(first)/2+1)))
 			r.prober.next[key] = next
+			r.prober.level[key] = 0
 		}
 		if r.prober.running[key] || now.Before(next) || len(due) >= budget {
 			continue
@@ -217,6 +265,7 @@ func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 	for key := range r.prober.next {
 		if !live[key] && !r.prober.running[key] {
 			delete(r.prober.next, key)
+			delete(r.prober.level, key)
 		}
 	}
 	return due, rate
@@ -232,12 +281,25 @@ func jitter(d time.Duration) time.Duration {
 
 func (r *Runtime) runQuotaProbe(ctx context.Context, t quotaProbeTarget) {
 	key := t.auth.ID + "|" + t.model
-	interval := r.quotaProbeInterval()
-	status := QuotaProbeStatus{At: time.Now().UTC()}
+	steps := r.quotaProbeBackoff()
+	started := time.Now()
+	status := QuotaProbeStatus{At: started.UTC()}
+	var probeCode int
+	var probeBody []byte
 	defer func() {
+		r.recordProbeUsage(t, started, probeCode, probeBody, status.Result)
 		r.prober.mu.Lock()
 		delete(r.prober.running, key)
-		next := time.Now().Add(jitter(interval))
+		level := r.prober.level[key]
+		switch status.Result {
+		case "quota":
+			level++
+			r.prober.level[key] = level
+		case "ok":
+			delete(r.prober.level, key)
+			level = 0
+		}
+		next := time.Now().Add(jitter(quotaProbeBackoffStep(steps, level)))
 		r.prober.next[key] = next
 		r.prober.mu.Unlock()
 		status.NextProbe = next.UTC()
@@ -257,6 +319,7 @@ func (r *Runtime) runQuotaProbe(ctx context.Context, t quotaProbeTarget) {
 		}
 	}
 	code, header, body, err := sendQuotaProbe(pctx, full, t.model)
+	probeCode, probeBody = code, body
 	status.HTTPStatus = code
 	switch {
 	case err != nil:
@@ -271,6 +334,10 @@ func (r *Runtime) runQuotaProbe(ctx context.Context, t quotaProbeTarget) {
 		status.Result = "quota"
 		res := coreauth.Result{AuthID: t.auth.ID, Provider: "antigravity", Model: t.model,
 			Error: &coreauth.Error{HTTPStatus: http.StatusTooManyRequests, Message: "quota probe: still exhausted"}, RestartQuotaWindow: true}
+		if coreauth.IsModelQuotaExhaustedBody("antigravity", string(body)) {
+			res.Error.Code = coreauth.ModelQuotaExhaustedCode
+			res.Error.Message = "模型额度耗尽（探测）"
+		}
 		if d, at := quotaProbeHint(header, body, time.Now()); d != nil {
 			res.RetryAfter = d
 			status.Detail = "upstream hint " + d.Round(time.Second).String()
@@ -354,4 +421,46 @@ func quotaProbeHint(header http.Header, body []byte, now time.Time) (*time.Durat
 		}
 	}
 	return nil, nil
+}
+
+// recordProbeUsage logs one probe as a usage row (event_type "probe", executor
+// "QuotaProbe") so probes are countable; it is persisted only, never fed back into
+// scheduler state (the probe outcome is applied explicitly above).
+func (r *Runtime) recordProbeUsage(t quotaProbeTarget, started time.Time, code int, body []byte, result string) {
+	if r == nil || t.auth == nil {
+		return
+	}
+	failed := !(code >= 200 && code < 300)
+	payload := map[string]any{
+		"usage_id":      "probe-" + t.auth.ID + "-" + t.model + "-" + strconv.FormatInt(started.UnixNano(), 36),
+		"request_id":    "probe-" + strconv.FormatInt(started.UnixNano(), 36),
+		"timestamp":     started.UTC().Format(time.RFC3339Nano),
+		"event_type":    "probe",
+		"provider":      "antigravity",
+		"executor_type": "QuotaProbe",
+		"model":         t.model,
+		"alias":         t.model,
+		"auth_index":    t.auth.ID,
+		"auth_id":       t.auth.ID,
+		"source":        t.auth.Label,
+		"latency_ms":    time.Since(started).Milliseconds(),
+		"failed":        failed,
+	}
+	if failed {
+		b := string(body)
+		if len(b) > 2000 {
+			b = b[:2000]
+		}
+		if code <= 0 {
+			b = "probe " + result
+		}
+		payload["fail"] = map[string]any{"status_code": code, "body": b}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = r.PersistClusterUsagePayload(ctx, string(raw), time.Now().UTC())
 }

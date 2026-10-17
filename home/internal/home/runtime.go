@@ -384,6 +384,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 		agversion.RefreshNow(vctx)
 	}()
 	r.startRequestCaps(runCtx)
+	r.startQuotaSync(runCtx)
 	r.WarmAntigravityCatalogs(runCtx)
 
 	clusterMode := r.clusterAutoRefreshGated()

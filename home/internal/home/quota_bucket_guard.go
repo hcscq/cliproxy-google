@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
@@ -68,6 +69,7 @@ func quotaBucketLabel(bucket string) string {
 type quotaBucketVerdict struct {
 	known     bool
 	exhausted bool
+	ratio     float64   // lowest remaining ratio among the bucket's windows
 	resetAt   time.Time // latest reset among exhausted windows (zero = unknown)
 }
 
@@ -78,7 +80,10 @@ func quotaBucketVerdicts(windows []QuotaBucketWindow, now time.Time) map[string]
 		if (bucket != quotaBucketGemini && bucket != quotaBucketThirdParty) || w.RemainingRatio == nil {
 			continue
 		}
-		v := out[bucket]
+		v, seen := out[bucket]
+		if !seen || *w.RemainingRatio < v.ratio {
+			v.ratio = *w.RemainingRatio
+		}
 		v.known = true
 		if *w.RemainingRatio <= 0 {
 			v.exhausted = true
@@ -175,7 +180,11 @@ func planQuotaBucketActions(auth *coreauth.Auth, models map[string][]string, ver
 			// Release cooldowns this guard set, and (when the probe shows quota back) long
 			// quota cooldowns from upstream reset hints. Short 429 cooldowns keep their own path.
 			guardState := isQuotaBucketState(st)
-			longQuota := enabled && v.known && st.Quota.Exceeded && st.NextRetryAfter.Sub(now) > 2*reprobe
+			// An explicit per-model QUOTA_EXHAUSTED is a hidden per-model window: the bucket
+			// ratio says nothing about it, so it is never released here (the per-model prober
+			// re-checks it, and is nudged when the bucket ratio rises).
+			hiddenModelQuota := st.LastError != nil && st.LastError.Code == coreauth.ModelQuotaExhaustedCode
+			longQuota := enabled && v.known && st.Quota.Exceeded && !hiddenModelQuota && st.NextRetryAfter.Sub(now) > 2*reprobe
 			if (guardState && (v.known || !enabled)) || longQuota {
 				out = append(out, quotaBucketAction{model: model, bucket: bucket})
 			}
@@ -214,8 +223,9 @@ func (r *Runtime) ApplyQuotaBucketWindows(ctx context.Context, authID string, wi
 		}
 		released++
 	}
-	if blocked > 0 || released > 0 {
-		log.Infof("quota bucket guard: %s (%s): %d model(s) blocked, %d released", auth.ID, auth.Label, blocked, released)
+	probed := r.nudgeProbesOnBucketRise(auth, quotaBucketVerdicts(windows, now), now)
+	if blocked > 0 || released > 0 || probed > 0 {
+		log.Infof("quota bucket guard: %s (%s): %d model(s) blocked, %d released, %d probed now (bucket rising)", auth.ID, auth.Label, blocked, released, probed)
 	}
 }
 
@@ -235,4 +245,44 @@ func QuotaBucketExhausted(windows []QuotaBucketWindow) bool {
 		}
 	}
 	return false
+}
+
+// bucketRatios remembers the last remaining ratio per (credential, bucket).
+var bucketRatios sync.Map // "authID|bucket" -> float64
+
+// nudgeProbesOnBucketRise makes every cooling per-model 429 pair of a bucket whose
+// remaining ratio rose since the previous collector run due for an immediate probe
+// (e.g. Google granted a bonus/early reset). Returns the number of pairs nudged.
+func (r *Runtime) nudgeProbesOnBucketRise(auth *coreauth.Auth, verdicts map[string]quotaBucketVerdict, now time.Time) int {
+	if auth == nil {
+		return 0
+	}
+	rising := map[string]bool{}
+	for bucket, v := range verdicts {
+		if !v.known {
+			continue
+		}
+		key := auth.ID + "|" + bucket
+		prev, had := bucketRatios.Load(key)
+		bucketRatios.Store(key, v.ratio)
+		if had && v.ratio > prev.(float64)+0.0001 {
+			rising[bucket] = true
+		}
+	}
+	if len(rising) == 0 {
+		return 0
+	}
+	n := 0
+	for model, st := range auth.ModelStates {
+		if st == nil || !st.Unavailable || !st.NextRetryAfter.After(now) || st.LastError == nil || st.LastError.HTTPStatus != http.StatusTooManyRequests || isQuotaBucketState(st) {
+			continue
+		}
+		if !rising[antigravityModelBucket(model)] {
+			continue
+		}
+		r.prober.probeNow(auth.ID, model)
+		publishQuotaSync(quotaSyncMsg{Kind: "probe", AuthID: auth.ID, Model: model})
+		n++
+	}
+	return n
 }

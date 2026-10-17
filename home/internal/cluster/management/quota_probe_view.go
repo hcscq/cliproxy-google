@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 )
 
@@ -32,6 +33,10 @@ func (h *Handler) annotateQuotaProbes(ctx context.Context, entries []gin.H) {
 				// Re-checked by the credential quota probe, not by per-model probes.
 				item["bucket_exhausted"] = true
 				continue
+			}
+			if item["error_code"] == coreauth.ModelQuotaExhaustedCode {
+				// Explicit per-model QUOTA_EXHAUSTED: a hidden per-model quota window.
+				item["model_quota"] = true
 			}
 			item["probe_managed"] = true
 			item["quota_short_cooldown_seconds"] = shortSecs

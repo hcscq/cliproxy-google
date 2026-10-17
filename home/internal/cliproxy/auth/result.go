@@ -1059,6 +1059,10 @@ func NewUsageResult(authIndex, provider, model string, statusCode int, body stri
 		message = fmt.Sprintf("request failed with status %d", statusCode)
 	}
 	retryAfter, resetAt := parseUsageRetryHints(provider, body, statusCode)
+	code := ""
+	if statusCode == http.StatusTooManyRequests && IsModelQuotaExhaustedBody(provider, body) {
+		code = ModelQuotaExhaustedCode
+	}
 	return Result{
 		AuthIndex:  authIndex,
 		Provider:   provider,
@@ -1067,10 +1071,30 @@ func NewUsageResult(authIndex, provider, model string, statusCode int, body stri
 		RetryAfter: retryAfter,
 		ResetAt:    resetAt,
 		Error: &Error{
+			Code:       code,
 			Message:    message,
 			HTTPStatus: statusCode,
 		},
 	}
+}
+
+// ModelQuotaExhaustedCode marks a per-(credential, model) cooldown caused by an explicit
+// upstream QUOTA_EXHAUSTED for that model ("hidden" per-model quota: the credential's
+// bucket can still show remaining quota). Such cooldowns run until the upstream reset and
+// are only released early by a successful per-model probe, never by bucket ratios.
+const ModelQuotaExhaustedCode = "model_quota_exhausted"
+
+// IsModelQuotaExhaustedBody reports an Antigravity 429 whose ErrorInfo reason is QUOTA_EXHAUSTED.
+func IsModelQuotaExhaustedBody(provider, body string) bool {
+	if !strings.EqualFold(strings.TrimSpace(provider), "antigravity") || !strings.Contains(body, "QUOTA_EXHAUSTED") || !gjson.Valid(body) {
+		return false
+	}
+	for _, d := range gjson.Get(body, "error.details").Array() {
+		if d.Get("@type").String() == "type.googleapis.com/google.rpc.ErrorInfo" && strings.EqualFold(strings.TrimSpace(d.Get("reason").String()), "QUOTA_EXHAUSTED") {
+			return true
+		}
+	}
+	return false
 }
 
 func parseUsageRetryHints(provider, body string, statusCode int) (*time.Duration, *time.Time) {

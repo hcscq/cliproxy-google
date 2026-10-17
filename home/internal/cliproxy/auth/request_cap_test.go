@@ -10,7 +10,7 @@ type capGateRec struct{ ids []string }
 func (g *capGateRec) OnDispatch(id string) { g.ids = append(g.ids, id) }
 
 func TestRequestCapPredicate(t *testing.T) {
-	pred := schedulerPredicate(nil, nil, "", 0, 0)
+	pred := schedulerPredicate("", nil, nil, "", 0, 0)
 	e := &scheduledAuth{auth: &Auth{ID: "x"}}
 	if !pred(e) {
 		t.Fatal("uncapped should pass")

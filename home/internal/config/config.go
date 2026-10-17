@@ -251,6 +251,9 @@ type Config struct {
 	// QuotaProbeIntervalSeconds is how often the Home leader probes cooling (credential, model)
 	// pairs (0 = env QUOTA_PROBE_INTERVAL_SECONDS or 60).
 	QuotaProbeIntervalSeconds int `yaml:"quota-probe-interval-seconds" json:"quota-probe-interval-seconds"`
+	// QuotaProbeBackoff is the per-pair re-probe schedule for cooling (credential, model)
+	// pairs, comma-separated Go durations; the last step repeats (default "1m,2m,5m,15m,30m").
+	QuotaProbeBackoffSchedule string `yaml:"quota-probe-backoff" json:"quota-probe-backoff"`
 	// QuotaBucketReprobeSeconds: when the active quota probe reports a bucket (e.g.
 	// Antigravity "Gemini models") at 0%, every model of that bucket on that credential is
 	// skipped and the credential's quota is re-probed at this interval; the block is released
@@ -1767,6 +1770,32 @@ func (c *Config) AccountBlockRecheckInterval() (time.Duration, bool) {
 		secs = 300
 	}
 	return time.Duration(secs) * time.Second, true
+}
+
+// QuotaProbeBackoff returns the per-pair re-probe schedule (each step 10s..6h).
+func (c *Config) QuotaProbeBackoff() []time.Duration {
+	def := []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute}
+	if c == nil || strings.TrimSpace(c.QuotaProbeBackoffSchedule) == "" {
+		return def
+	}
+	var out []time.Duration
+	for _, part := range strings.Split(c.QuotaProbeBackoffSchedule, ",") {
+		d, err := time.ParseDuration(strings.TrimSpace(part))
+		if err != nil {
+			return def
+		}
+		if d < 10*time.Second {
+			d = 10 * time.Second
+		}
+		if d > 6*time.Hour {
+			d = 6 * time.Hour
+		}
+		out = append(out, d)
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 // QuotaProbeInterval returns the effective cooling-pair probe interval.

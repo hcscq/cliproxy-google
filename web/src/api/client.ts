@@ -629,6 +629,8 @@ export interface ModelCooldown {
   error_code?: string;
   /** Blocked because the credential's quota probe shows this model's bucket at 0%. */
   bucket_exhausted?: boolean;
+  /** Explicit per-model QUOTA_EXHAUSTED (hidden per-model quota window). */
+  model_quota?: boolean;
   quota_short_cooldown_seconds?: number;
   quota_probe_interval_seconds?: number;
   probe?: QuotaProbeStatus;

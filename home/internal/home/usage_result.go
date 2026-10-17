@@ -2,6 +2,7 @@ package home
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
@@ -45,6 +46,11 @@ func (r *Runtime) RecordUsagePayload(ctx context.Context, payload string) {
 	if strings.EqualFold(provider, "antigravity") {
 		applyClusterHealth(ctx, r.coreManager.HealthAuthID(result), model, statusCode, body,
 			gjson.Get(payload, "ttft_ms").Int(), gjson.Get(payload, "latency_ms").Int(), &result)
+	}
+	if statusCode == http.StatusTooManyRequests && !result.Success {
+		if id := r.coreManager.HealthAuthID(result); id != "" {
+			r.blockAndPublishQuotaCooldown(id, result)
+		}
 	}
 	r.coreManager.MarkResult(ctx, result)
 }

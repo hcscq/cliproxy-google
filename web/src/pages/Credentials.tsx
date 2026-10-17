@@ -808,6 +808,7 @@ export function CredentialsPage() {
                         error={quota.error}
                         loading={!quota.data && !quota.error}
                       />
+                      <ModelQuotaLine c={c} />
                     </td>
                     <td className="hide-sm">
                       <CallStatsCell s={c.call_stats} window={statsWindow} />
@@ -930,6 +931,31 @@ export function CredentialsPage() {
 
 function fmtN(n: number) {
   return n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n);
+}
+
+/** Hidden per-model quota windows (explicit upstream QUOTA_EXHAUSTED for one model while
+ * the bucket may still show quota): model + upstream reset, compact. */
+function ModelQuotaLine({ c }: { c: Credential }) {
+  const list = coolingModels(c).filter((m) => m.model_quota || m.error_code === "model_quota_exhausted");
+  if (!list.length) return null;
+  const short = (m: string) => m.replace(/^gemini-/, "");
+  const title = list
+    .map((m) => {
+      const probe = m.probe ? ` · 探测 ${m.probe.result} ${new Date(m.probe.at).toLocaleTimeString()}，下次 ${new Date(m.probe.next_probe).toLocaleTimeString()}` : "";
+      return `${m.model} 重置 ${m.next_retry_after ? new Date(m.next_retry_after).toLocaleString() : "?"}${probe}`;
+    })
+    .join("\n");
+  return (
+    <div className="faint small nowrap" title={title} style={{ marginTop: 2 }}>
+      <span style={{ color: "var(--warn, #b7791f)" }}>模型额度</span>{" "}
+      {list.map((m, i) => (
+        <span key={m.model} className="mono">
+          {i > 0 ? " · " : ""}
+          {short(m.model)}→{m.next_retry_after ? fmtResetShort(m.next_retry_after) : "?"}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function RequestCapLine({ u }: { u?: RequestCapUsage }) {
@@ -1459,6 +1485,7 @@ function CredentialDrawer({
         <div>
           <h3 style={{ marginBottom: 8 }}>{t("quota")}</h3>
           <QuotaWindows item={quota} />
+          <ModelQuotaLine c={cred} />
         </div>
 
         <CallStatsPanel credentialId={cred.id} window={statsWindow} onWindow={onStatsWindow} />

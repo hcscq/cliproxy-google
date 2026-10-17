@@ -383,7 +383,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	if shard == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	predicate := schedulerPredicate(tried, allowedAuthIDsFromOptions(opts), credentialPolicyFromOptions(opts), requestRetryRoundFromOptions(opts), requestRetryDefaultFromOptions(opts))
+	predicate := schedulerPredicate(modelKey, tried, allowedAuthIDsFromOptions(opts), credentialPolicyFromOptions(opts), requestRetryRoundFromOptions(opts), requestRetryDefaultFromOptions(opts))
 	if picked := shard.pickReadyLocked(preferWebsocket, strategy, predicate); picked != nil {
 		return picked, nil
 	}
@@ -424,7 +424,7 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 		strategy = s.strategy
 	}
 
-	predicate := schedulerPredicate(tried, allowedAuthIDsFromOptions(opts), credentialPolicyFromOptions(opts), requestRetryRoundFromOptions(opts), requestRetryDefaultFromOptions(opts))
+	predicate := schedulerPredicate(modelKey, tried, allowedAuthIDsFromOptions(opts), credentialPolicyFromOptions(opts), requestRetryRoundFromOptions(opts), requestRetryDefaultFromOptions(opts))
 	candidateShards := make([]*modelScheduler, len(normalized))
 	bestPriority := 0
 	hasCandidate := false
