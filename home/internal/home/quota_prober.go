@@ -55,6 +55,7 @@ type quotaProber struct {
 	next    map[string]time.Time
 	running map[string]bool
 	level   map[string]int // probes answered "still exhausted" in the current cooldown
+	carry   map[string]int // backoff level kept across a canary unlock (key -> level)
 	started bool
 }
 
@@ -133,6 +134,13 @@ func quotaProbeRate(pairs int, interval time.Duration) int {
 	return need
 }
 
+func (r *Runtime) quotaCanaryEnabled() bool {
+	if cfg := r.Config(); cfg != nil {
+		return cfg.QuotaCanaryEnabled()
+	}
+	return true
+}
+
 func (r *Runtime) quotaProbeBackoff() []time.Duration {
 	if cfg := r.Config(); cfg != nil {
 		return cfg.QuotaProbeBackoff()
@@ -157,6 +165,7 @@ func (r *Runtime) startQuotaProber(ctx context.Context) {
 	r.prober.next = map[string]time.Time{}
 	r.prober.running = map[string]bool{}
 	r.prober.level = map[string]int{}
+	r.prober.carry = map[string]int{}
 	r.prober.mu.Unlock()
 	go func() {
 		sem := make(chan struct{}, envInt("HOME_QUOTA_PROBE_CONCURRENCY", quotaProbeConcurrency*4))
@@ -253,8 +262,15 @@ func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 			// First sight (incl. right after deploy): first backoff step, spread to avoid bursts.
 			first := quotaProbeBackoffStep(steps, 0)
 			next = now.Add(first/2 + time.Duration(rand.Int63n(int64(first)/2+1)))
+			lvl := 0
+			if c, ok := r.prober.carry[key]; ok {
+				// Re-blocked after a failed canary: continue the backoff, don't restart it.
+				lvl = c
+				next = now.Add(jitter(quotaProbeBackoffStep(steps, lvl)))
+				delete(r.prober.carry, key)
+			}
 			r.prober.next[key] = next
-			r.prober.level[key] = 0
+			r.prober.level[key] = lvl
 		}
 		if r.prober.running[key] || now.Before(next) || len(due) >= budget {
 			continue
@@ -298,6 +314,9 @@ func (r *Runtime) runQuotaProbe(ctx context.Context, t quotaProbeTarget) {
 		case "ok":
 			delete(r.prober.level, key)
 			level = 0
+		case "canary":
+			// Not proven yet: keep the step; a canary QUOTA_EXHAUSTED advances it.
+			r.prober.carry[key] = level
 		}
 		next := time.Now().Add(jitter(quotaProbeBackoffStep(steps, level)))
 		r.prober.next[key] = next
@@ -328,6 +347,14 @@ func (r *Runtime) runQuotaProbe(ctx context.Context, t quotaProbeTarget) {
 		status.Result = "ok"
 		if _, errClear := r.coreManager.ClearQuotaCooldown(pctx, t.auth.ID, t.model); errClear != nil {
 			status.Detail = "clear failed: " + errClear.Error()
+		}
+		if r.quotaCanaryEnabled() && t.reset.After(time.Now().Add(5*time.Second)) {
+			// Before the known reset a 1-token probe can pass while real requests still
+			// get QUOTA_EXHAUSTED: hold the pair and let one real request decide.
+			status.Result = "canary"
+			r.armQuotaCanary(t.auth.ID, t.model, t.reset)
+			log.Infof("quota probe: %s %s passed before reset %s; canary armed", t.auth.ID, t.model, t.reset.UTC().Format(time.RFC3339))
+			break
 		}
 		log.Infof("quota probe: %s %s recovered, cooldown cleared", t.auth.ID, t.model)
 	case code == http.StatusTooManyRequests:

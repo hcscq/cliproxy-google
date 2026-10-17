@@ -89,6 +89,46 @@ func (r *Runtime) blockAndPublishQuotaCooldown(authID string, result coreauth.Re
 		UntilMS: quotaCooldownUntil(result, time.Now()).UnixMilli(), Code: result.Error.Code, Message: msg})
 }
 
+// armQuotaCanary arms the single canary on this Home and tells the others to hold.
+func (r *Runtime) armQuotaCanary(authID, model string, reset time.Time) {
+	coreauth.ArmQuotaCanary(authID, model, reset)
+	publishQuotaSync(quotaSyncMsg{Kind: "hold", AuthID: authID, Model: model, UntilMS: reset.UnixMilli()})
+	quotaCanaryArmed.Add(1)
+}
+
+// observeQuotaCanary settles a canary from a real result: success unlocks the pair
+// cluster-wide; a 429 lets the normal path re-block it and advances the backoff step.
+func (r *Runtime) observeQuotaCanary(authID string, result coreauth.Result) {
+	if strings.TrimSpace(authID) == "" || result.Model == "" {
+		return
+	}
+	key := authID + "|" + result.Model
+	if result.Success {
+		if coreauth.QuotaCanarySucceeded(authID, result.Model) {
+			publishQuotaSync(quotaSyncMsg{Kind: "clear", AuthID: authID, Model: result.Model})
+			r.prober.mu.Lock()
+			if r.prober.carry != nil {
+				delete(r.prober.carry, key)
+			}
+			r.prober.mu.Unlock()
+			quotaCanaryOK.Add(1)
+			log.Infof("quota canary: %s %s succeeded, unlocked", authID, result.Model)
+		}
+		return
+	}
+	if result.Error != nil && result.Error.HTTPStatus == http.StatusTooManyRequests && coreauth.QuotaCanaryClaimed(authID, result.Model) {
+		r.prober.mu.Lock()
+		if r.prober.carry != nil {
+			r.prober.carry[key]++
+		}
+		r.prober.mu.Unlock()
+		quotaCanaryFail.Add(1)
+		log.Infof("quota canary: %s %s still exhausted, re-blocked", authID, result.Model)
+	}
+}
+
+var quotaCanaryArmed, quotaCanaryOK, quotaCanaryFail atomic.Int64
+
 func (r *Runtime) handleQuotaSync(raw string) {
 	var msg quotaSyncMsg
 	if json.Unmarshal([]byte(raw), &msg) != nil || msg.Origin == quotaSyncOrigin || r.coreManager == nil {
@@ -101,6 +141,9 @@ func (r *Runtime) handleQuotaSync(raw string) {
 		}
 	case "clear":
 		coreauth.ClearQuotaBlock(msg.AuthID, msg.Model)
+	case "hold":
+		// Another Home holds the canary for this pair; keep it blocked here.
+		coreauth.MarkQuotaBlocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS))
 	case "probe":
 		r.prober.probeNow(msg.AuthID, msg.Model)
 	}
@@ -120,6 +163,9 @@ func (r *Runtime) startQuotaSync(ctx context.Context) {
 			case <-t.C:
 				if n := quotaSyncApplied.Swap(0); n > 0 {
 					log.Infof("quota sync: applied %d remote 429 cooldown(s) in the last 5m", n)
+				}
+				if a, ok, f := quotaCanaryArmed.Swap(0), quotaCanaryOK.Swap(0), quotaCanaryFail.Swap(0); a+ok+f > 0 {
+					log.Infof("quota canary: armed=%d ok=%d failed=%d in the last 5m", a, ok, f)
 				}
 			}
 		}

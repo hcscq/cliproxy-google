@@ -254,6 +254,9 @@ type Config struct {
 	// QuotaProbeBackoff is the per-pair re-probe schedule for cooling (credential, model)
 	// pairs, comma-separated Go durations; the last step repeats (default "1m,2m,5m,15m,30m").
 	QuotaProbeBackoffSchedule string `yaml:"quota-probe-backoff" json:"quota-probe-backoff"`
+	// QuotaCanary: a probe success before the known quota reset lets exactly one real
+	// request through (cluster-wide) and unlocks only if it succeeds. Default on.
+	QuotaCanary *bool `yaml:"quota-canary,omitempty" json:"quota-canary,omitempty"`
 	// QuotaBucketReprobeSeconds: when the active quota probe reports a bucket (e.g.
 	// Antigravity "Gemini models") at 0%, every model of that bucket on that credential is
 	// skipped and the credential's quota is re-probed at this interval; the block is released
@@ -1770,6 +1773,11 @@ func (c *Config) AccountBlockRecheckInterval() (time.Duration, bool) {
 		secs = 300
 	}
 	return time.Duration(secs) * time.Second, true
+}
+
+// QuotaCanaryEnabled reports routing.cooldown.quota-canary (default true).
+func (c *Config) QuotaCanaryEnabled() bool {
+	return c == nil || c.QuotaCanary == nil || *c.QuotaCanary
 }
 
 // QuotaProbeBackoff returns the per-pair re-probe schedule (each step 10s..6h).

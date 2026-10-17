@@ -91,3 +91,59 @@ func TestQuotaSyncIgnoresOwnOrigin(t *testing.T) {
 	raw, _ := json.Marshal(quotaSyncMsg{Origin: quotaSyncOrigin, Kind: "cool", AuthID: "x", Model: "m", UntilMS: time.Now().Add(time.Hour).UnixMilli()})
 	r.handleQuotaSync(string(raw)) // nil manager + own origin: must be a no-op, no panic
 }
+
+func TestQuotaCanaryConfigDefaultOn(t *testing.T) {
+	var c *config.Config
+	if !c.QuotaCanaryEnabled() || !(&config.Config{}).QuotaCanaryEnabled() {
+		t.Fatal("canary should default on")
+	}
+	off := false
+	if (&config.Config{QuotaCanary: &off}).QuotaCanaryEnabled() {
+		t.Fatal("toggle off ignored")
+	}
+}
+
+func TestQuotaCanarySettle(t *testing.T) {
+	r := &Runtime{}
+	r.prober.carry = map[string]int{}
+	id, model := "cn-1", "gemini-2.5-flash"
+	defer coreauth.ClearQuotaBlock(id, "")
+	reset := time.Now().Add(time.Hour)
+
+	// failure: claimed canary + 429 advances carried backoff, stays blocked
+	r.prober.carry[id+"|"+model] = 2
+	coreauth.ArmQuotaCanary(id, model, reset)
+	if _, blocked := coreauth.QuotaBlockedUntil(id, model); !blocked {
+		t.Fatal("canary pair must be blocked for others")
+	}
+	if !coreauth.QuotaCanaryPending(id, model) {
+		t.Fatal("canary pending")
+	}
+	res := coreauth.Result{AuthID: id, Model: model, Error: &coreauth.Error{HTTPStatus: 429}}
+	r.observeQuotaCanary(id, res) // not claimed yet: no change
+	if r.prober.carry[id+"|"+model] != 2 {
+		t.Fatal("unclaimed canary must not advance backoff")
+	}
+	if !coreauth.QuotaBlockAllows(id, model) || coreauth.QuotaBlockAllows(id, model) {
+		t.Fatal("exactly one canary")
+	}
+	r.observeQuotaCanary(id, res)
+	if r.prober.carry[id+"|"+model] != 3 {
+		t.Fatal("canary 429 must advance backoff")
+	}
+	r.blockAndPublishQuotaCooldown(id, coreauth.Result{AuthID: id, Model: model, ResetAt: &reset, Error: &coreauth.Error{HTTPStatus: 429}})
+	if coreauth.QuotaBlockAllows(id, model) || coreauth.QuotaCanaryPending(id, model) {
+		t.Fatal("re-blocked without canary")
+	}
+
+	// success: claimed canary + success unlocks and drops carry
+	coreauth.ArmQuotaCanary(id, model, reset)
+	_ = coreauth.QuotaBlockAllows(id, model)
+	r.observeQuotaCanary(id, coreauth.Result{AuthID: id, Model: model, Success: true})
+	if !coreauth.QuotaBlockAllows(id, model) {
+		t.Fatal("success should unlock")
+	}
+	if _, ok := r.prober.carry[id+"|"+model]; ok {
+		t.Fatal("carry should be dropped on success")
+	}
+}

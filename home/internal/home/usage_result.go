@@ -47,8 +47,9 @@ func (r *Runtime) RecordUsagePayload(ctx context.Context, payload string) {
 		applyClusterHealth(ctx, r.coreManager.HealthAuthID(result), model, statusCode, body,
 			gjson.Get(payload, "ttft_ms").Int(), gjson.Get(payload, "latency_ms").Int(), &result)
 	}
-	if statusCode == http.StatusTooManyRequests && !result.Success {
-		if id := r.coreManager.HealthAuthID(result); id != "" {
+	if id := r.coreManager.HealthAuthID(result); id != "" {
+		r.observeQuotaCanary(id, result)
+		if statusCode == http.StatusTooManyRequests && !result.Success {
 			r.blockAndPublishQuotaCooldown(id, result)
 		}
 	}

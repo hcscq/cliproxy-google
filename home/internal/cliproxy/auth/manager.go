@@ -1672,7 +1672,11 @@ func (m *Manager) scanDispatchAvailability(providers []string, routeModel string
 		if strings.TrimSpace(resolved.Model) == "" {
 			continue
 		}
-		if !quotaBlockAllows(candidate.ID, resolved.Model) || (routeKey != "" && !quotaBlockAllows(candidate.ID, routeKey)) {
+		allowQuota := quotaBlockAllows(candidate.ID, resolved.Model)
+		if allowQuota && routeKey != "" && canonicalModelKey(routeKey) != canonicalModelKey(resolved.Model) {
+			allowQuota = quotaBlockAllows(candidate.ID, routeKey)
+		}
+		if !allowQuota {
 			continue
 		}
 		authForAvailability := m.effectiveAvailabilityAuth(candidate, summary.now)
