@@ -1381,6 +1381,8 @@ export interface ReserveStats {
   promotions_24h: number;
   min_active: number;
   active: number;
+  eligible: number;
+  short: boolean;
   shortfall_since?: number;
 }
 export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at: string; was_reserved: boolean; reserved_since?: string; detail?: string }

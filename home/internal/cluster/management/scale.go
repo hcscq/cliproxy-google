@@ -283,7 +283,7 @@ func (h *Handler) ReserveStats(c *gin.Context) {
 		return
 	}
 	if h.runtime != nil {
-		h.runtime.ReserveStatus(&st)
+		h.runtime.ReserveStatus(ctx, &st)
 	}
 	events, _ := h.repo.RecentReserveEvents(ctx, 50)
 	seqs, _ := h.repo.AuthSeqs(ctx)

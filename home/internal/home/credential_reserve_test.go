@@ -1,12 +1,15 @@
 package home
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	log "github.com/sirupsen/logrus"
 )
 
 type fakeReserveStore struct {
@@ -140,5 +143,48 @@ func TestReserveControlOffAndRecovered(t *testing.T) {
 	r.reserveControl(context.Background(), time.Now())
 	if len(store.promotes) != 0 {
 		t.Fatal("no shortfall, no promotion")
+	}
+}
+
+func TestReserveControlEmptyReserveQuietAndWarns(t *testing.T) {
+	store := &fakeReserveStore{reserved: map[string]time.Time{}, active: 3}
+	r := reserveTestRuntime(store, &config.Config{ReserveMinActive: 10, ReserveActivationDelay: "0s"})
+	defer coreauth.SetReservedCredentials(nil)
+	var buf bytes.Buffer
+	prev := log.StandardLogger().Out
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+	now := time.Now()
+	for i := 0; i < 20; i++ { // 10 minutes of 30s ticks
+		r.reserveControl(context.Background(), now.Add(time.Duration(i)*30*time.Second))
+	}
+	if len(store.promotes) != 0 {
+		t.Fatal("nothing to promote")
+	}
+	if c := strings.Count(buf.String(), "储备不足"); c != 1 {
+		t.Fatalf("empty-reserve warning logged %d times, want once per state change", c)
+	}
+	var st ReserveStats
+	r.ReserveStatus(context.Background(), &st)
+	if !st.Short || st.Active != 3 || st.Eligible != 0 || st.MinActive != 10 {
+		t.Fatalf("status = %+v, want short", st)
+	}
+	// Reserves exist but none match the tier filter: same quiet behaviour.
+	store.reserved["r1"] = now
+	store.cands = []ReserveCandidate{{ID: "r1", Tier: "free-tier", Healthy: true}}
+	r.reserveCfgOverride = &config.Config{ReserveMinActive: 10, ReserveActivationDelay: "0s", ReserveTierFilter: "ultra"}
+	for i := 0; i < 5; i++ {
+		r.reserveControl(context.Background(), now.Add(time.Hour+time.Duration(i)*30*time.Second))
+	}
+	if len(store.promotes) != 0 || strings.Count(buf.String(), "储备不足") != 1 {
+		t.Fatal("tier-filtered reserve must not promote or re-log")
+	}
+	// Recovery then a new shortfall logs again (state change).
+	store.active = 10
+	r.reserveControl(context.Background(), now.Add(2*time.Hour))
+	store.active = 3
+	r.reserveControl(context.Background(), now.Add(2*time.Hour+30*time.Second))
+	if c := strings.Count(buf.String(), "储备不足"); c != 2 {
+		t.Fatalf("new shortfall should log again, got %d", c)
 	}
 }

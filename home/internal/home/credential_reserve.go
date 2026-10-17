@@ -50,6 +50,8 @@ type ReserveStats struct {
 	Promotions24h      int   `json:"promotions_24h"`
 	MinActive          int   `json:"min_active"`
 	Active             int   `json:"active"`
+	Eligible           int   `json:"eligible"` // reserves matching the tier filter (-1 = not checked)
+	Short              bool  `json:"short"`    // active < min and no eligible reserve
 	ShortfallSinceUnix int64 `json:"shortfall_since,omitempty"`
 }
 
@@ -68,7 +70,8 @@ type credentialReserve struct {
 	mu             sync.Mutex
 	shortfallSince time.Time
 	lastActive     atomic.Int64
-	lastThrottle   time.Time
+	state          string       // last logged shortfall state (ok|waiting|limited|empty|promoted)
+	eligible       atomic.Int64 // eligible reserves at the last check (-1 = unknown)
 }
 
 func (r *Runtime) reserveStore() ReserveStore {
@@ -132,9 +135,21 @@ func (r *Runtime) SetCredentialsReserved(ctx context.Context, ids []string, rese
 }
 
 // ReserveStatus fills controller-side fields of the panel stats.
-func (r *Runtime) ReserveStatus(st *ReserveStats) {
-	st.MinActive = r.reserveSettings().MinActive
-	st.Active = int(r.reserve.lastActive.Load())
+// Active/eligible are computed live from the store, so any Home (not only the leader
+// running the promoter) reports them correctly.
+func (r *Runtime) ReserveStatus(ctx context.Context, st *ReserveStats) {
+	cfg := r.reserveSettings()
+	st.MinActive = cfg.MinActive
+	st.Active, st.Eligible = -1, -1
+	if s := r.reserveStore(); s != nil {
+		if n, err := s.CountActiveCredentials(ctx); err == nil {
+			st.Active = n
+		}
+		if c, err := s.ListReserveCandidates(ctx); err == nil {
+			st.Eligible = len(orderReserveCandidates(c, cfg.Tiers))
+		}
+	}
+	st.Short = st.MinActive > 0 && st.Active >= 0 && st.Active < st.MinActive && st.Eligible == 0
 	r.reserve.mu.Lock()
 	if !r.reserve.shortfallSince.IsZero() {
 		st.ShortfallSinceUnix = r.reserve.shortfallSince.Unix()
@@ -169,6 +184,15 @@ func (r *Runtime) startCredentialReserve(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// logReserveState logs only when the shortfall state changes (caller holds reserve.mu).
+func (r *Runtime) logReserveState(state string, logf func()) {
+	if r.reserve.state == state {
+		return
+	}
+	r.reserve.state = state
+	logf()
 }
 
 func reserveTierClass(tier string) string {
@@ -238,17 +262,36 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	r.reserve.mu.Lock()
 	defer r.reserve.mu.Unlock()
 	if cfg.MinActive <= 0 || active >= cfg.MinActive {
+		r.reserve.eligible.Store(-1)
 		if !r.reserve.shortfallSince.IsZero() {
 			log.Infof("credential reserve: active %d >= minimum %d, shortfall cleared", active, cfg.MinActive)
 		}
 		r.reserve.shortfallSince = time.Time{}
+		r.reserve.state = "ok"
 		return
 	}
+	// Short: count eligible reserves every check so the panel can warn even before
+	// the activation delay; with none, nothing below runs (no promotion, no errors).
+	cands, err := s.ListReserveCandidates(cctx)
+	if err != nil {
+		log.WithError(err).Debug("credential reserve: candidate lookup failed")
+		return
+	}
+	cands = orderReserveCandidates(cands, cfg.Tiers)
+	r.reserve.eligible.Store(int64(len(cands)))
 	if r.reserve.shortfallSince.IsZero() {
 		r.reserve.shortfallSince = now
-		log.Infof("credential reserve: active %d < minimum %d; promoting after %s if it persists", active, cfg.MinActive, cfg.ActivationDelay)
+	}
+	if len(cands) == 0 {
+		r.logReserveState("empty", func() {
+			log.Warnf("credential reserve: 储备不足 — active %d < minimum %d and no eligible reserve credential (tier filter %v)", active, cfg.MinActive, cfg.Tiers)
+		})
+		return
 	}
 	if now.Sub(r.reserve.shortfallSince) < cfg.ActivationDelay {
+		r.logReserveState("waiting", func() {
+			log.Infof("credential reserve: active %d < minimum %d; promoting after %s if it persists (%d eligible)", active, cfg.MinActive, cfg.ActivationDelay, len(cands))
+		})
 		return
 	}
 	used, err := s.CountReserveEvents(cctx, "promote", now.Add(-cfg.PromotionWindow))
@@ -260,24 +303,12 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 		n = budget
 	}
 	if n <= 0 {
-		if now.Sub(r.reserve.lastThrottle) > 10*time.Minute {
-			r.reserve.lastThrottle = now
+		r.logReserveState("limited", func() {
 			log.Warnf("credential reserve: active %d < minimum %d but promotion limit %d per %s reached", active, cfg.MinActive, cfg.MaxPromotions, cfg.PromotionWindow)
-		}
+		})
 		return
 	}
-	cands, err := s.ListReserveCandidates(cctx)
-	if err != nil {
-		return
-	}
-	cands = orderReserveCandidates(cands, cfg.Tiers)
-	if len(cands) == 0 {
-		if now.Sub(r.reserve.lastThrottle) > 10*time.Minute {
-			r.reserve.lastThrottle = now
-			log.Warnf("credential reserve: active %d < minimum %d and no eligible reserve credential", active, cfg.MinActive)
-		}
-		return
-	}
+	r.reserve.state = "promoted"
 	if n > len(cands) {
 		n = len(cands)
 	}

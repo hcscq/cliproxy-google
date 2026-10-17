@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ReserveShortAlert } from '../components/ReserveAlert';
 import { useAction, useApi, useAsync, useUi } from "../app-context";
 import {
   coolingModels,
@@ -377,6 +378,7 @@ export function CredentialsPage() {
     localStorage.setItem(STATS_WINDOW_KEY, w);
     setStatsWindowState(w);
   };
+  const reserveInfo = useAsync(() => api.reserveStats().catch(() => null), [], 60000);
   const creds = useAsync(
     () => api.searchCredentials({ ...filter, ...sort, stats_window: statsWindow, page, page_size: size }),
     [filter, sort, page, size, statsWindow],
@@ -463,6 +465,7 @@ export function CredentialsPage() {
 
   return (
     <div className="stack">
+      <ReserveShortAlert stats={reserveInfo.data?.stats} />
       <div className="page-head">
         <div>
           <h1>{t("credentials")}</h1>

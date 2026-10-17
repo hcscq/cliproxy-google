@@ -7,6 +7,7 @@ import { Badge, Card, Empty, ErrorBox, Loading, Stat } from '../components/ui';
 import { RankList, TrendChart } from '../components/charts';
 import { QuotaStatusBadge, QuotaWindows } from '../components/quota';
 import { IconRefresh } from '../components/icons';
+import { ReserveShortAlert } from '../components/ReserveAlert';
 
 export const DASHBOARD_TOP_N = 8;
 
@@ -62,6 +63,7 @@ export function DashboardPage() {
         </button>
       </div>
 
+      <ReserveShortAlert stats={reserve.data?.stats} />
       <div className="grid grid-4">
         <Stat
           label={t('homeReplicas')}
