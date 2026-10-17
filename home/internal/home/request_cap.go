@@ -32,6 +32,59 @@ var reqCapZone = time.FixedZone("UTC+8", 8*3600)
 
 type reqCapLimits struct{ Hourly, Daily int64 }
 
+// RequestCapMeta is the per-credential input to request-cap evaluation, read
+// from the auth store by a dedicated lookup. The gate must never rely on the
+// light runtime auth metadata (which deliberately carries no tier/cap keys);
+// widening that metadata once caused light copies to be persisted over full rows.
+type RequestCapMeta struct {
+	Tier   string
+	Mode   string
+	Hourly string
+	Daily  string
+}
+
+type requestCapMetaSource interface {
+	ListRequestCapMeta(ctx context.Context) (map[string]RequestCapMeta, error)
+}
+
+// capAuthFromMeta builds a throwaway auth carrying only the cap inputs, used
+// solely for evaluation (never stored or handed to the manager).
+func capAuthFromMeta(id string, m RequestCapMeta) *coreauth.Auth {
+	md := map[string]any{"subscription_tier": m.Tier}
+	if m.Mode != "" {
+		md[RequestCapModeKey] = m.Mode
+	}
+	if m.Hourly != "" {
+		md[RequestCapHourlyKey] = m.Hourly
+	}
+	if m.Daily != "" {
+		md[RequestCapDailyKey] = m.Daily
+	}
+	return &coreauth.Auth{ID: id, Metadata: md}
+}
+
+// requestCapInputs returns the cap-evaluation view of all enabled credentials
+// from the dedicated lookup; ok=false when the lookup is unavailable.
+func (r *Runtime) requestCapInputs(ctx context.Context) ([]*coreauth.Auth, bool) {
+	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
+		return nil, false
+	}
+	src, ok := r.clusterAdapter.(requestCapMetaSource)
+	if !ok || src == nil {
+		return nil, false
+	}
+	metas, err := src.ListRequestCapMeta(ctx)
+	if err != nil {
+		log.WithError(err).Debug("request cap: meta lookup failed")
+		return nil, false
+	}
+	out := make([]*coreauth.Auth, 0, len(metas))
+	for id, m := range metas {
+		out = append(out, capAuthFromMeta(id, m))
+	}
+	return out, true
+}
+
 // RequestCapUsage is what the panel shows for one credential.
 type RequestCapUsage struct {
 	Mode        string    `json:"mode"`
@@ -230,7 +283,16 @@ func (g *requestCapGate) sync(ctx context.Context) {
 	if r == nil || r.coreManager == nil {
 		return
 	}
-	auths := r.coreManager.ListLight(func(a *coreauth.Auth) bool { return a != nil && !a.Disabled })
+	auths, ok := r.requestCapInputs(ctx)
+	if !ok {
+		// Keep the previous limits on a transient lookup failure.
+		return
+	}
+	g.buildAndApply(ctx, auths)
+}
+
+func (g *requestCapGate) buildAndApply(ctx context.Context, auths []*coreauth.Auth) {
+	r := g.r
 	limits := make(map[string]reqCapLimits)
 	modes := make(map[string][2]string, len(auths))
 	for _, a := range auths {

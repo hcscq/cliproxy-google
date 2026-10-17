@@ -274,6 +274,11 @@ func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 				}
 				record = preservedRecord
 			}
+			if !existing.DeletedAt.Valid {
+				if lost := credentialSecretsLost(string(existing.AuthJSON), string(record.AuthJSON)); lost != "" {
+					return fmt.Errorf("%w: uuid=%s key=%s op=%s", ErrAuthCredentialLoss, record.UUID, lost, op)
+				}
+			}
 			sameJSON, errJSONEqual := semanticJSONEqual([]byte(existing.AuthJSON), []byte(record.AuthJSON))
 			if errJSONEqual != nil {
 				return errJSONEqual
