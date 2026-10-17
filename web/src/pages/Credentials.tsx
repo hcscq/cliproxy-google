@@ -6,6 +6,7 @@ import {
   isSupportedProvider,
   type Credential,
   type ForbiddenCred,
+  type RequestCapUsage,
   type CredentialGroupSummary,
   type CredentialQuery,
   type CredentialSortKey,
@@ -382,6 +383,7 @@ export function CredentialsPage() {
   const [adding, setAdding] = useState(false);
   const [bulkEgress, setBulkEgress] = useState(false);
   const [purge403, setPurge403] = useState(false);
+  const [bulkCap, setBulkCap] = useState(false);
   const [selected, setSelected] = useState<CredentialSearchItem | null>(null);
   const [bulk, setBulk] = useState<
     null | "add_to_group" | "remove_from_group" | "add_tags" | "remove_tags"
@@ -591,6 +593,9 @@ export function CredentialsPage() {
               >
                 {tr("设置出口", "Set egress")}
               </button>
+              <button className="btn btn-sm" disabled={!!busy} onClick={() => setBulkCap(true)} data-testid="bulk-cap">
+                {tr("请求上限", "Request cap")}
+              </button>
               <button className="btn btn-sm" disabled={!!busy} onClick={() => void bulkTier()} data-testid="bulk-tier">
                 {busy === "bulk-tier" && <Spinner />}
                 {tr("刷新订阅", "Refresh tier")}
@@ -777,6 +782,7 @@ export function CredentialsPage() {
                       >
                         {credentialStatus(c, t, tr)}{healthBadges(c)}
                       </span>
+                      <RequestCapLine u={c.request_cap} />
                       {c.egress_ip && (() => {
                         const eg = egress.data?.items?.find((e) => e.name === c.egress_id);
                         const shown = eg ? egressIP(eg) : c.egress_ip;
@@ -862,6 +868,17 @@ export function CredentialsPage() {
           }}
         />
       )}
+      {bulkCap && (
+        <Modal title={tr(`设置 ${sel.list().length} 个凭据的请求上限`, `Request cap for ${sel.list().length} credentials`)} onClose={() => setBulkCap(false)}>
+          <RequestCapEditor
+            ids={sel.list()}
+            onDone={async () => {
+              setBulkCap(false);
+              await reloadAll();
+            }}
+          />
+        </Modal>
+      )}
       {purge403 && (
         <Purge403Modal
           onClose={() => setPurge403(false)}
@@ -907,6 +924,81 @@ export function CredentialsPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function fmtN(n: number) {
+  return n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n);
+}
+
+function RequestCapLine({ u }: { u?: RequestCapUsage }) {
+  const { tr } = useI18n();
+  if (!u || (!u.hourly_cap && !u.daily_cap)) return null;
+  const parts: string[] = [];
+  if (u.hourly_cap) parts.push(`h ${fmtN(u.hourly_used)}/${fmtN(u.hourly_cap)}`);
+  if (u.daily_cap) parts.push(`d ${fmtN(u.daily_used)}/${fmtN(u.daily_cap)}`);
+  const capped = u.capped_until && new Date(u.capped_until).getTime() > Date.now();
+  const src = u.mode === "custom" ? tr("自定义", "custom") : tr(`继承 ${u.tier}`, `tier ${u.tier}`);
+  return (
+    <div className="faint small mono nowrap" title={tr(`请求上限（${src}），按 UTC+8 整点/零点重置，每次上游调用（含重试）计 1 次`, `Request cap (${src}); resets hourly/daily (UTC+8); every upstream call counts`)} data-testid="req-cap-line">
+      {capped ? (
+        <span style={{ color: "var(--warn, #b7791f)" }}>
+          {tr("已达上限", "Capped")} · {fmtTime(u.capped_until!)}{" "}
+        </span>
+      ) : null}
+      {parts.join(" · ")}
+    </div>
+  );
+}
+
+function RequestCapEditor({ ids, current, onDone }: { ids: string[]; current?: RequestCapUsage; onDone: () => Promise<void> }) {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast } = useUi();
+  const { busy, run } = useAction();
+  const [mode, setMode] = useState<"inherit" | "custom" | "unlimited">(current?.mode ?? "inherit");
+  const [hourly, setHourly] = useState(current?.mode === "custom" ? current.hourly_cap : 0);
+  const [daily, setDaily] = useState(current?.mode === "custom" ? current.daily_cap : 0);
+  return (
+    <div className="field" data-testid="req-cap-editor">
+      <label>{tr("请求上限", "Request cap")}</label>
+      <div className="row" style={{ gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <select className="select" style={{ width: "auto" }} value={mode} onChange={(e) => setMode(e.target.value as typeof mode)} data-testid="req-cap-mode">
+          <option value="inherit">{tr("继承订阅等级", "Inherit tier")}</option>
+          <option value="custom">{tr("自定义", "Custom")}</option>
+          <option value="unlimited">{tr("不限制", "Unlimited")}</option>
+        </select>
+        {mode === "custom" && (
+          <>
+            <input className="input" style={{ width: 90 }} type="number" min={0} value={hourly} onChange={(e) => setHourly(Math.max(0, Number(e.target.value) || 0))} placeholder={tr("每小时", "/hour")} title={tr("每小时（0=不限）", "Per hour (0 = none)")} data-testid="req-cap-hourly" />
+            <span className="faint small">{tr("/时", "/h")}</span>
+            <input className="input" style={{ width: 100 }} type="number" min={0} value={daily} onChange={(e) => setDaily(Math.max(0, Number(e.target.value) || 0))} title={tr("每天（0=不限）", "Per day (0 = none)")} data-testid="req-cap-daily" />
+            <span className="faint small">{tr("/天", "/d")}</span>
+          </>
+        )}
+        <button
+          className="btn"
+          disabled={!!busy || !ids.length}
+          data-testid="req-cap-save"
+          onClick={() =>
+            void run("req-cap", async () => {
+              const r = await api.setRequestCap(ids, mode, hourly, daily);
+              toast(tr(`已更新 ${r.updated}`, `Updated ${r.updated}`), r.failed?.length ? "err" : "ok");
+              await onDone();
+            })
+          }
+        >
+          {busy === "req-cap" && <Spinner />}
+          {tr("保存", "Save")}
+        </button>
+      </div>
+      {current && (current.hourly_cap > 0 || current.daily_cap > 0) && (
+        <span className="hint">
+          {tr(`本小时 ${current.hourly_used}${current.hourly_cap ? "/" + current.hourly_cap : ""} · 今日 ${current.daily_used}${current.daily_cap ? "/" + current.daily_cap : ""}`, `hour ${current.hourly_used} · day ${current.daily_used}`)}
+        </span>
+      )}
+      <span className="hint">{tr("默认不限制；等级默认值在 设置 → 凭据请求上限。达到上限的凭据在重置前不参与调度。", "Default unlimited; tier defaults in Settings. Capped credentials are skipped until reset.")}</span>
     </div>
   );
 }
@@ -1372,6 +1464,8 @@ function CredentialDrawer({
         <CallStatsPanel credentialId={cred.id} window={statsWindow} onWindow={onStatsWindow} />
 
         <CredentialGroupsEditor cred={cred} onChanged={onChanged} />
+
+        <RequestCapEditor ids={[cred.id]} current={cred.request_cap} onDone={onChanged} />
 
         <div>
           <h3 style={{ marginBottom: 8 }}>

@@ -210,6 +210,17 @@ type AntigravityHealthConfig struct {
 	// SubscriptionPerMinute caps tier checks per minute cluster-wide (leader).
 	// Default 300 (10k credentials hourly need ~170/min, plus events/retries).
 	SubscriptionPerMinute int `yaml:"subscription-per-minute,omitempty" json:"subscription-per-minute,omitempty"`
+	// Per-credential request caps by subscription tier (Home). Every upstream
+	// attempt counts (retries included). 0 = unlimited (default). Credentials
+	// can override via metadata request_cap_mode (custom|unlimited).
+	RequestCapHourlyFree int `yaml:"request-cap-hourly-free,omitempty" json:"request-cap-hourly-free,omitempty"`
+	RequestCapHourlyPro int `yaml:"request-cap-hourly-pro,omitempty" json:"request-cap-hourly-pro,omitempty"`
+	RequestCapHourlyUltra int `yaml:"request-cap-hourly-ultra,omitempty" json:"request-cap-hourly-ultra,omitempty"`
+	RequestCapHourlyUnknown int `yaml:"request-cap-hourly-unknown,omitempty" json:"request-cap-hourly-unknown,omitempty"`
+	RequestCapDailyFree int `yaml:"request-cap-daily-free,omitempty" json:"request-cap-daily-free,omitempty"`
+	RequestCapDailyPro int `yaml:"request-cap-daily-pro,omitempty" json:"request-cap-daily-pro,omitempty"`
+	RequestCapDailyUltra int `yaml:"request-cap-daily-ultra,omitempty" json:"request-cap-daily-ultra,omitempty"`
+	RequestCapDailyUnknown int `yaml:"request-cap-daily-unknown,omitempty" json:"request-cap-daily-unknown,omitempty"`
 	// Cluster tunes Home's cluster-wide (credential, model-family) health
 	// weighting. Zero = CPA_HEALTH_* env, then built-in default.
 	Cluster AntigravityClusterHealthConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`

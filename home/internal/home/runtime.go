@@ -41,6 +41,7 @@ import (
 )
 
 type Runtime struct {
+	reqCap *requestCapGate
 	stateApplyMu sync.Mutex
 	cfgMu        sync.RWMutex
 	cfg          *config.Config
@@ -382,6 +383,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 		defer cancel()
 		agversion.RefreshNow(vctx)
 	}()
+	r.startRequestCaps(runCtx)
 	r.WarmAntigravityCatalogs(runCtx)
 
 	clusterMode := r.clusterAutoRefreshGated()

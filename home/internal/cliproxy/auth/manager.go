@@ -1364,6 +1364,14 @@ func (m *Manager) useSchedulerFastPath() bool {
 
 // Dispatch processes dispatch.
 func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedModel string, opts Options) (*DispatchDecision, error) {
+	decision, err := m.dispatchInner(ctx, providers, requestedModel, opts)
+	if err == nil && decision != nil && decision.Auth != nil {
+		notifyRequestCapDispatch(decision.Auth.ID)
+	}
+	return decision, err
+}
+
+func (m *Manager) dispatchInner(ctx context.Context, providers []string, requestedModel string, opts Options) (*DispatchDecision, error) {
 	// Build the candidate view before applying availability rules.
 	if m == nil {
 		return nil, &Error{Code: "provider_not_found", Message: "manager is nil"}
@@ -1657,7 +1665,7 @@ func (m *Manager) scanDispatchAvailability(providers []string, routeModel string
 		if routeKey != "" && (registryRef == nil || !registryRef.ClientSupportsModel(candidate.ID, routeKey)) {
 			continue
 		}
-		if !credentialPolicyAllows(credentialPolicy, candidate) {
+		if !credentialPolicyAllows(credentialPolicy, candidate) || !requestCapAllows(candidate.ID) {
 			continue
 		}
 		resolved := m.resolveDispatchModel(candidate, routeModel)

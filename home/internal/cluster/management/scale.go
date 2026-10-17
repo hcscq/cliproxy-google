@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"io"
 	"net/http"
 	"sort"
@@ -224,9 +225,16 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 	page, size := pageParams(c, 50, 500)
 	start := (page - 1) * size
 	items := make([]gin.H, 0, size)
+	var capUsage map[string]home.RequestCapUsage
+	if h.runtime != nil && start < len(matched) {
+		capUsage = h.runtime.RequestCapUsage(ctx, matched[start:min(start+size, len(matched))])
+	}
 	for i := start; i < len(matched) && i < start+size; i++ {
 		a := matched[i]
 		e := authFileEntry(a)
+		if u, ok := capUsage[a.ID]; ok {
+			e["request_cap"] = u
+		}
 		if t, ok := stats.LastUsed[a.ID]; ok {
 			e["last_used_at"] = t
 		}

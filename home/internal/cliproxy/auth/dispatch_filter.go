@@ -242,7 +242,7 @@ func schedulerPredicate(tried map[string]struct{}, allowed map[string]struct{}, 
 				return false
 			}
 		}
-		return authAllowedByID(entry.auth.ID, allowed) && credentialPolicyAllows(credentialPolicy, entry.auth)
+		return authAllowedByID(entry.auth.ID, allowed) && credentialPolicyAllows(credentialPolicy, entry.auth) && requestCapAllows(entry.auth.ID)
 	}
 }
 

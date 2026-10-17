@@ -82,6 +82,21 @@ const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] 
     ],
   },
   {
+    zh: '凭据请求上限',
+    en: 'Credential request caps',
+    compact: true,
+    fields: [
+      { path: 'oauth.providers.antigravity.health.request-cap-hourly-free', type: 'number', def: 0, zh: 'Free 每小时', en: 'Free / hour' },
+      { path: 'oauth.providers.antigravity.health.request-cap-daily-free', type: 'number', def: 0, zh: 'Free 每天', en: 'Free / day', hintZh: '0 = 不限制。', hintEn: '0 = unlimited.' },
+      { path: 'oauth.providers.antigravity.health.request-cap-hourly-pro', type: 'number', def: 0, zh: 'Pro 每小时', en: 'Pro / hour' },
+      { path: 'oauth.providers.antigravity.health.request-cap-daily-pro', type: 'number', def: 0, zh: 'Pro 每天', en: 'Pro / day', hintZh: '0 = 不限制。', hintEn: '0 = unlimited.' },
+      { path: 'oauth.providers.antigravity.health.request-cap-hourly-ultra', type: 'number', def: 0, zh: 'Ultra 每小时', en: 'Ultra / hour' },
+      { path: 'oauth.providers.antigravity.health.request-cap-daily-ultra', type: 'number', def: 0, zh: 'Ultra 每天', en: 'Ultra / day', hintZh: '0 = 不限制。', hintEn: '0 = unlimited.' },
+      { path: 'oauth.providers.antigravity.health.request-cap-hourly-unknown', type: 'number', def: 0, zh: '未知 每小时', en: '未知 / hour' },
+      { path: 'oauth.providers.antigravity.health.request-cap-daily-unknown', type: 'number', def: 0, zh: '未知 每天', en: '未知 / day', hintZh: '0 = 不限制。', hintEn: '0 = unlimited.' },
+    ],
+  },
+  {
     zh: '慢凭据与首字超时',
     en: 'Slow credentials & TTFB',
     compact: true,

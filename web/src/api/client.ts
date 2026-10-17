@@ -179,6 +179,9 @@ export class ApiClient {
   updateCredentialFields(id: string, fields: Record<string, unknown>) {
     return this.patch<{ status: string }>('/credentials/fields', { id, ...fields });
   }
+  setRequestCap(ids: string[], mode: 'inherit' | 'custom' | 'unlimited', hourly = 0, daily = 0) {
+    return this.post<{ status: string; updated: number; unchanged: number; failed: string[] }>('/credentials/request-cap', { ids, mode, hourly, daily });
+  }
   forbiddenCredentials() {
     return this.get<{ total: number; categories: ForbiddenCategory[] }>('/credentials/forbidden');
   }
@@ -1061,7 +1064,7 @@ export interface CallStats {
   /** error class -> count: 429 | 503 | 403 | 404 | 400 | 5xx | net | cancel | other */
   by_class?: Record<string, number>;
 }
-export type CredentialSearchItem = Credential & { seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
+export type CredentialSearchItem = Credential & { request_cap?: RequestCapUsage; seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
 export interface CredentialSearch {
   items: CredentialSearchItem[];
   total: number;
@@ -1362,3 +1365,4 @@ export interface EgressMove {
 
 export type ForbiddenCred = { id: string; seq?: number; label: string; category: string; message: string; source: string; last_403_at?: string; count_403_7d: number; ok_7d: number; disabled: boolean; persistent: boolean };
 export type ForbiddenCategory = { key: string; label: string; count: number; persistent: number; items: ForbiddenCred[] };
+export type RequestCapUsage = { mode: 'inherit' | 'custom' | 'unlimited'; tier: string; hourly_cap: number; daily_cap: number; hourly_used: number; daily_used: number; capped_until?: string };
