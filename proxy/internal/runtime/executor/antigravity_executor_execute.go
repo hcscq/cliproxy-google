@@ -227,6 +227,11 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	}
 	usageDetail := helps.ParseAntigravityUsage(bodyBytes)
 	maybeSampleEmptyResponse(ctx, "nonstream", baseModel, auth.ID, requestPayload, bodyBytes, usageDetail)
+	if antigravityRetryEmptyStreamEnabled() && antigravityNonStreamEmpty(bodyBytes) {
+		log.WithFields(log.Fields{"model": baseModel, "auth": auth.ID}).Info("antigravity executor: empty non-stream reply, retrying on another credential")
+		err = statusErr{code: http.StatusBadGateway, msg: antigravityEmptyStreamMessage}
+		return cliproxyexecutor.Response{}, err
+	}
 	reporter.Publish(ctx, usageDetail)
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)

@@ -20,6 +20,54 @@ func antigravityRetryEmptyStreamEnabled() bool {
 	case "0", "false", "off", "no":
 		return false
 	}
+	if live := antigravityHealthLive.Load(); live != nil && live.RetryEmptyResponse != nil {
+		return *live.RetryEmptyResponse
+	}
+	return true
+}
+
+// antigravityNonStreamEmpty reports a successful non-stream reply with no
+// visible output: every candidate finished with STOP (or unspecified) and has
+// only empty / thought parts, or there are no candidates and no block reason.
+// MAX_TOKENS, SAFETY etc. and any blockReason are not empty.
+func antigravityNonStreamEmpty(body []byte) bool {
+	root := gjson.ParseBytes(body)
+	if r := root.Get("response"); r.Exists() && r.IsObject() {
+		root = r
+	}
+	if root.Get("promptFeedback.blockReason").String() != "" {
+		return false
+	}
+	cands := root.Get("candidates").Array()
+	if len(cands) == 0 {
+		return true
+	}
+	for _, cand := range cands {
+		fr := strings.ToUpper(strings.TrimSpace(cand.Get("finishReason").String()))
+		if fr != "STOP" && fr != "" && fr != "FINISH_REASON_UNSPECIFIED" {
+			return false
+		}
+		visible := false
+		cand.Get("content.parts").ForEach(func(_, part gjson.Result) bool {
+			thought := part.Get("thought").Bool()
+			part.ForEach(func(k, v gjson.Result) bool {
+				switch k.String() {
+				case "text":
+					if !thought && strings.TrimSpace(v.String()) != "" {
+						visible = true
+					}
+				case "thought", "thoughtSignature":
+				default:
+					visible = true
+				}
+				return !visible
+			})
+			return !visible
+		})
+		if visible {
+			return false
+		}
+	}
 	return true
 }
 

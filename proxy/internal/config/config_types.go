@@ -210,6 +210,10 @@ type AntigravityHealthConfig struct {
 	// SubscriptionPerMinute caps tier checks per minute cluster-wide (leader).
 	// Default 300 (10k credentials hourly need ~170/min, plus events/retries).
 	SubscriptionPerMinute int `yaml:"subscription-per-minute,omitempty" json:"subscription-per-minute,omitempty"`
+	// RetryEmptyResponse retries a successful but content-free reply (STOP with
+	// no visible parts, or no candidates without a block reason) on another
+	// credential, for stream and non-stream. nil = on.
+	RetryEmptyResponse *bool `yaml:"retry-empty-response,omitempty" json:"retry-empty-response,omitempty"`
 	// Per-credential request caps by subscription tier (Home). Every upstream
 	// attempt counts (retries included). 0 = unlimited (default). Credentials
 	// can override via metadata request_cap_mode (custom|unlimited).
