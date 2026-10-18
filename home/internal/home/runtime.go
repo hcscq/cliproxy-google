@@ -391,6 +391,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	r.startRequestCaps(runCtx)
 	r.startQuotaSync(runCtx)
 	r.startCredentialReserve(runCtx)
+	r.startUsageRollup(runCtx)
 	r.WarmAntigravityCatalogs(runCtx)
 
 	clusterMode := r.clusterAutoRefreshGated()

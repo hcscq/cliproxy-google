@@ -819,6 +819,9 @@ func (r *Repository) UsageObservabilityOverview(ctx context.Context, query Usage
 	}
 	db = db.WithContext(contextOrBackground(ctx))
 	recordQuery := usageObservabilityOverviewRecordQuery(query)
+	if db.Dialector.Name() == "postgres" && usageRollupEligible(recordQuery, strings.ToLower(strings.TrimSpace(query.Interval))) && r.usageRollupReady(ctx) {
+		return r.usageRollupOverview(ctx, db, query)
+	}
 	totals, bounds, errTotals := usageObservabilityTotalsSQL(db, recordQuery)
 	if errTotals != nil {
 		return UsageObservabilityOverview{}, errTotals

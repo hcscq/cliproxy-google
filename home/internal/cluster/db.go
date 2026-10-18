@@ -1185,6 +1185,9 @@ func ensureExtraTablesUnlocked(ctx context.Context, db *gorm.DB) error {
 	if err := ensureCredentialReserveTables(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureUsageRollupTables(ctx, db); err != nil {
+		return err
+	}
 	if err := ensureCredentialHealthTables(ctx, db); err != nil {
 		return err
 	}

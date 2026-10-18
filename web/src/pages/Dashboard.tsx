@@ -28,7 +28,7 @@ export function DashboardPage() {
   const creds = useAsync(() => api.searchCredentials({ sort: 'last_used', order: 'desc', page: 1, page_size: DASHBOARD_TOP_N }), [], 30000);
   const topIds = (creds.data?.items ?? []).map((c) => c.id).join(',');
   const quota = useAsync(() => (topIds ? api.quotaCredentials({ ids: topIds, limit: 200 }) : Promise.resolve({ items: [] as QuotaItem[] } as unknown as Awaited<ReturnType<typeof api.quotaCredentials>>)), [topIds], 60000);
-  const usage = useAsync(() => api.usageOverview({ interval: 'hour' }), [], 60000);
+  const usage = useAsync(() => api.usageOverview({ from: new Date(Date.now() - 86400e3).toISOString(), interval: 'hour' }), [], 60000);
   const failures = useAsync(() => api.requestEvents({ status: 'failed', limit: 5 }), [], 60000);
   const reserve = useAsync(() => api.reserveStats().catch(() => null), [], 60000);
 

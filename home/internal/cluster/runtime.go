@@ -923,3 +923,11 @@ func (a *RuntimeAdapter) RecordRequestAffinity(requestID, source, outcome, authI
 	}
 	a.repo.RecordRequestAffinity(requestID, source, outcome, authID, prevAuth)
 }
+
+// MaintainUsageRollup advances the hourly usage rollup (leader-only caller).
+func (a *RuntimeAdapter) MaintainUsageRollup(ctx context.Context, now time.Time) error {
+	if !a.Enabled() {
+		return nil
+	}
+	return a.repo.MaintainUsageRollup(ctx, now)
+}
