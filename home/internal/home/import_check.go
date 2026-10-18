@@ -37,6 +37,7 @@ const (
 	HealthNoEgress    = "no_egress"
 	HealthError       = "error"
 	HealthRegion      = "region" // 地区限制 (loadCodeAssist ineligible UNSUPPORTED_LOCATION)
+	HealthRegionWarn  = "region_warn" // pass with a 地区提示 warning (region-fail off)
 )
 
 // HealthProbeResult is the raw outcome of the upstream calls of one check.
@@ -164,6 +165,11 @@ func ClassifyHealth(p HealthProbeResult, in HealthInputs, cfg config.ImportCheck
 		v.Status = "pass"
 		v.Categories = []string{}
 		v.Reasons = []string{}
+		if !cfg.RegionFail && strings.Contains(strings.ToUpper(p.IneligibleCode), "UNSUPPORTED_LOCATION") {
+			v.Categories = []string{HealthRegionWarn}
+			v.Reasons = []string{"地区提示（UNSUPPORTED_LOCATION），仅警告，不影响调用"}
+			v.Evidence = clip(p.IneligibleText, 4000)
+		}
 	} else {
 		v.Status = "fail"
 	}

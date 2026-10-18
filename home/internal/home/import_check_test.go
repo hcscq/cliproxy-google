@@ -83,7 +83,7 @@ func TestClassifyRegionRestriction(t *testing.T) {
 		t.Fatalf("region default on: %+v", v)
 	}
 	off := false
-	if v := ClassifyHealth(p, fresh, (&config.Config{ImportCheckRegionFail: &off}).ImportCheckSettings()); v.Status != "pass" {
+	if v := ClassifyHealth(p, fresh, (&config.Config{ImportCheckRegionFail: &off}).ImportCheckSettings()); v.Status != "pass" || len(v.Categories) != 1 || v.Categories[0] != HealthRegionWarn {
 		t.Fatalf("region off: %+v", v)
 	}
 }

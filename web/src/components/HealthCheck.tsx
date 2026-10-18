@@ -16,6 +16,7 @@ export const HEALTH_CATEGORY: Record<string, [string, string]> = {
   no_egress: ['无出口', 'No egress'],
   error: ['检查失败', 'Check error'],
   region: ['地区限制', 'Region restricted'],
+  region_warn: ['地区提示', 'Region notice'],
 };
 
 export function healthCategoryLabel(c: string, tr: (zh: string, en: string) => string, tier?: string): string {
@@ -27,7 +28,7 @@ export function healthCategoryLabel(c: string, tr: (zh: string, en: string) => s
 /** Compact badge text for a health result (first category + count). */
 export function healthBadgeText(h: HealthInfo | undefined, tr: (zh: string, en: string) => string): string {
   if (!h) return '';
-  if (h.status === 'pass') return tr('体检通过', 'Check passed');
+  if (h.status === 'pass') return h.categories?.includes('region_warn') ? tr('通过·地区提示', 'Passed · region notice') : tr('体检通过', 'Check passed');
   if (h.status === 'running') return tr('体检中', 'Checking');
   const cats = h.categories ?? [];
   if (!cats.length) return tr('体检失败', 'Check failed');
@@ -38,7 +39,7 @@ export function healthBadgeText(h: HealthInfo | undefined, tr: (zh: string, en: 
 export function HealthBadge({ h }: { h?: HealthInfo }) {
   const { tr } = useI18n();
   if (!h) return null;
-  const kind = h.status === 'pass' ? 'ok' : h.status === 'running' ? undefined : 'err';
+  const kind = h.status === 'pass' ? (h.categories?.includes('region_warn') ? 'warn' : 'ok') : h.status === 'running' ? undefined : 'err';
   const title = [
     `${tr('体检', 'Check')} ${h.checked_at ? new Date(h.checked_at).toLocaleString() : ''}${h.tier ? ` · ${h.tier}` : ''}`,
     ...(h.reasons ?? []),
