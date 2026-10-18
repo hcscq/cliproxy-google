@@ -472,7 +472,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 			continue
 		}
 		if pin.proxy == "" {
-			spec, ok := pickEgress(specs, status, counts, allowPrimary, maxPer)
+			spec, ok := pickEgress(assignableEgressSpecs(specs, settings), status, counts, allowPrimary, maxPer)
 			if !ok {
 				continue // no healthy egress: leave unassigned, try next round
 			}
@@ -659,7 +659,9 @@ func (r *Runtime) pickEgressForImport(ctx context.Context, allowPrimary *bool) (
 	}
 	counts := r.egressCounts()
 	allow := r.allowPrimary(ctx, allowPrimary)
-	maxPer := r.EgressSettings(ctx).MaxPerEgress
+	settings := r.EgressSettings(ctx)
+	specs = assignableEgressSpecs(specs, settings)
+	maxPer := settings.MaxPerEgress
 	if spec, ok := pickEgress(specs, status, counts, allow, maxPer); ok {
 		return spec, true, false
 	}
@@ -732,6 +734,9 @@ func (r *Runtime) ResolveEgress(ctx context.Context, choice string, allowPrimary
 			if s.Removed {
 				return EgressSpec{}, false, fmt.Errorf("egress %q: IP removed", choice)
 			}
+			if r.EgressSettings(ctx).IsDisabled(s) {
+				return EgressSpec{}, false, fmt.Errorf("出口 %s 已停用 (egress %q is disabled)", s.Name, s.Name)
+			}
 			if max := r.EgressSettings(ctx).MaxPerEgress; max > 0 && r.egressCounts()[s.ProxyURL] >= max {
 				return EgressSpec{}, false, fmt.Errorf("出口 %s 已达到 %d 个凭据上限 (egress %q is full: max %d)", s.Name, max, s.Name, max)
 			}
@@ -794,6 +799,36 @@ type EgressSettingsValue struct {
 	// MaxPerEgress caps credentials per egress IP for new assignments
 	// (auto and explicit). 0 = unlimited. Existing pins are never moved.
 	MaxPerEgress int `json:"max_per_egress"`
+	// Disabled lists egresses (id "node/ip", local IP or public IP) that new
+	// assignments must never use (auto, rebalance, import, explicit). It does
+	// not affect health checks, and credentials already pinned there are left
+	// as they are (neither paused nor moved).
+	Disabled []string `json:"disabled,omitempty"`
+}
+
+// IsDisabled reports whether spec is on the disabled list.
+func (v EgressSettingsValue) IsDisabled(spec EgressSpec) bool {
+	for _, d := range v.Disabled {
+		d = strings.TrimSpace(d)
+		if d != "" && (d == spec.Name || d == spec.IP || (spec.PublicIP != "" && d == spec.PublicIP)) {
+			return true
+		}
+	}
+	return false
+}
+
+// assignableEgressSpecs drops disabled egresses from the candidates for new assignments.
+func assignableEgressSpecs(specs []EgressSpec, settings EgressSettingsValue) []EgressSpec {
+	if len(settings.Disabled) == 0 {
+		return specs
+	}
+	out := make([]EgressSpec, 0, len(specs))
+	for _, s := range specs {
+		if !settings.IsDisabled(s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ErrEgressFull is returned when every eligible egress reached MaxPerEgress.

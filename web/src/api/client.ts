@@ -223,10 +223,10 @@ export class ApiClient {
     return out;
   }
   egressSettings() {
-    return this.get<{ allow_primary: boolean; max_per_egress?: number }>('/proxy/egress/settings');
+    return this.get<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[] }>('/proxy/egress/settings');
   }
-  saveEgressSettings(v: { allow_primary: boolean; max_per_egress?: number }) {
-    return this.request<{ allow_primary: boolean; max_per_egress?: number }>('PUT', '/proxy/egress/settings', { body: v });
+  saveEgressSettings(v: { allow_primary: boolean; max_per_egress?: number; disabled?: string[] }) {
+    return this.request<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[] }>('PUT', '/proxy/egress/settings', { body: v });
   }
   egressAck(id: string) {
     return this.post<{ status: string }>('/proxy/egress/ack', { id });

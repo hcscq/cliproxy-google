@@ -452,6 +452,33 @@ function EgressPolicy() {
           }}
         />
       </label>
+      <label
+        style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 12 }}
+        title={tr('停用的出口（id 如 node/ip，或 IP，逗号分隔）不会被任何新分配使用（导入、添加、自动均衡、手动指定）。不影响健康检查；已绑定的凭据不会被暂停或移动。', 'Disabled egresses (id like node/ip, or IP; comma-separated) are never used for new assignments (import, add, auto-balance, explicit). Health checks are unaffected; credentials already pinned are neither paused nor moved.')}
+      >
+        {tr('停用出口', 'Disabled egresses')}
+        <input
+          type="text"
+          style={{ flex: 1, minWidth: 320 }}
+          defaultValue={(st.data.disabled ?? []).join(', ')}
+          disabled={saving}
+          data-testid="settings-disabled-egresses"
+          onBlur={async (e) => {
+            const v = e.target.value.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+            if (v.join(',') === (st.data?.disabled ?? []).join(',')) return;
+            setSaving(true);
+            try {
+              await api.saveEgressSettings({ allow_primary: st.data!.allow_primary, max_per_egress: st.data?.max_per_egress ?? 0, disabled: v });
+              toast(tr('已保存', 'Saved'));
+              await st.reload();
+            } catch (err) {
+              toastError(err);
+            } finally {
+              setSaving(false);
+            }
+          }}
+        />
+      </label>
     </Card>
   );
 }

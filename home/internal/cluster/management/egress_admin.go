@@ -1,6 +1,7 @@
 package management
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -111,11 +112,12 @@ func (h *Handler) RebalanceEgress(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "auth_load_failed", err)
 		return
 	}
-	allow := h.runtime.EgressSettings(ctx).AllowPrimary
+	settings := h.runtime.EgressSettings(ctx)
+	allow := settings.AllowPrimary
 	if body.AllowPrimary != nil {
 		allow = *body.AllowPrimary
 	}
-	moves := planEgressRebalance(items, auths, allow)
+	moves := planEgressRebalance(assignableEgressStatuses(items, settings), auths, allow)
 	if seqs, err := h.repo.AuthSeqs(ctx); err == nil {
 		for i := range moves {
 			moves[i].Seq = seqs[moves[i].CredentialID]
@@ -261,10 +263,16 @@ func (h *Handler) GetEgressSettings(c *gin.Context) {
 }
 
 func (h *Handler) PutEgressSettings(c *gin.Context) {
+	raw, errRead := c.GetRawData()
 	var body home.EgressSettingsValue
-	if err := c.ShouldBindJSON(&body); err != nil || h.runtime == nil {
-		respondError(c, http.StatusBadRequest, "invalid body", err)
+	var keys map[string]json.RawMessage
+	if errRead != nil || h.runtime == nil || json.Unmarshal(raw, &body) != nil || json.Unmarshal(raw, &keys) != nil {
+		respondError(c, http.StatusBadRequest, "invalid body", errRead)
 		return
+	}
+	if _, ok := keys["disabled"]; !ok {
+		// Older clients send only allow_primary/max_per_egress: keep the list.
+		body.Disabled = h.runtime.EgressSettings(c.Request.Context()).Disabled
 	}
 	if err := h.runtime.SetEgressSettings(c.Request.Context(), body); err != nil {
 		respondError(c, http.StatusInternalServerError, "save_failed", err)

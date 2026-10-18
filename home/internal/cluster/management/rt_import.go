@@ -813,6 +813,7 @@ func (h *Handler) newEgressPicker(ctx context.Context, choice string, allowPrima
 		return p, nil
 	}
 	p.items, _ = h.runtime.EgressStatuses(ctx)
+	p.items = assignableEgressStatuses(p.items, h.runtime.EgressSettings(ctx))
 	return p, nil
 }
 
@@ -872,4 +873,18 @@ func parseAllowPrimary(v string) *bool {
 	}
 	b := v == "1" || v == "true" || v == "yes" || v == "on"
 	return &b
+}
+
+// assignableEgressStatuses drops egresses on the disabled list (Settings).
+func assignableEgressStatuses(items []home.EgressStatus, settings home.EgressSettingsValue) []home.EgressStatus {
+	if len(settings.Disabled) == 0 {
+		return items
+	}
+	out := make([]home.EgressStatus, 0, len(items))
+	for _, it := range items {
+		if !settings.IsDisabled(it.EgressSpec) {
+			out = append(out, it)
+		}
+	}
+	return out
 }
