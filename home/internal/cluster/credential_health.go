@@ -252,3 +252,68 @@ func (a *RuntimeAdapter) ListHealthSweepIDs(ctx context.Context, limit int) ([]s
 	}
 	return r.ListHealthSweepIDs(ctx, limit)
 }
+
+// CredentialRegionCheck is a read-only loadCodeAssist observation for schedulable
+// credentials (ineligible tier codes, e.g. UNSUPPORTED_LOCATION). It never affects
+// availability or scheduling; it only lets the panel/reports count flagged accounts.
+type CredentialRegionCheck struct {
+	AuthUUID   string    `gorm:"column:auth_uuid;primaryKey"`
+	Codes      string    `gorm:"column:codes"`
+	Text       string    `gorm:"column:text"`
+	Tier       string    `gorm:"column:tier"`
+	HTTPStatus int       `gorm:"column:http_status"`
+	CheckedAt  time.Time `gorm:"column:checked_at;not null"`
+}
+
+// TableName returns the database table name.
+func (CredentialRegionCheck) TableName() string { return "credential_region_check" }
+
+func ensureCredentialRegionTable(ctx context.Context, db *gorm.DB) error {
+	tx := db.WithContext(contextOrBackground(ctx))
+	if tx.Dialector.Name() == "postgres" {
+		return tx.Exec(`CREATE TABLE IF NOT EXISTS "credential_region_check" ("auth_uuid" text PRIMARY KEY, "codes" text, "text" text, "tier" text, "http_status" bigint, "checked_at" timestamptz NOT NULL DEFAULT now())`).Error
+	}
+	return tx.AutoMigrate(&CredentialRegionCheck{})
+}
+
+// SaveRegionCheck upserts a region observation.
+func (r *Repository) SaveRegionCheck(ctx context.Context, rec CredentialRegionCheck) error {
+	db, err := r.database()
+	if err != nil {
+		return err
+	}
+	rec.CheckedAt = rec.CheckedAt.UTC()
+	return db.WithContext(contextOrBackground(ctx)).Save(&rec).Error
+}
+
+// ListRegionScanIDs returns enabled, non-reserved antigravity credentials with no
+// region observation in the last 24h.
+func (r *Repository) ListRegionScanIDs(ctx context.Context, limit int) ([]string, error) {
+	db, err := r.database()
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	err = db.WithContext(contextOrBackground(ctx)).Raw(`SELECT a.uuid FROM auth a
+		WHERE a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false AND COALESCE(a.provider,'') = 'antigravity'
+		AND a.uuid NOT IN (SELECT auth_uuid FROM credential_reserve WHERE reserved)
+		AND NOT EXISTS (SELECT 1 FROM credential_region_check c WHERE c.auth_uuid = a.uuid AND c.checked_at > ?)
+		ORDER BY a.seq LIMIT ?`, time.Now().UTC().Add(-24*time.Hour), limit).Scan(&ids).Error
+	return ids, err
+}
+
+func (a *RuntimeAdapter) ListRegionScanIDs(ctx context.Context, limit int) ([]string, error) {
+	r, err := a.reserveRepo()
+	if err != nil {
+		return nil, err
+	}
+	return r.ListRegionScanIDs(ctx, limit)
+}
+
+func (a *RuntimeAdapter) SaveRegionObservation(ctx context.Context, id, codes, text, tier string, status int) error {
+	r, err := a.reserveRepo()
+	if err != nil {
+		return err
+	}
+	return r.SaveRegionCheck(ctx, CredentialRegionCheck{AuthUUID: id, Codes: codes, Text: text, Tier: tier, HTTPStatus: status, CheckedAt: time.Now()})
+}

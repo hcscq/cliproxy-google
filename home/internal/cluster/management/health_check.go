@@ -260,7 +260,7 @@ func (h *Handler) HealthCheckBatch(c *gin.Context) {
 var healthCategoryZh = map[string]string{
 	home.HealthNeedsVerify: "需验证", home.HealthTier: "订阅不符", home.HealthQuotaUsed: "额度非新", home.HealthQuotaNone: "额度未知",
 	home.HealthNoCatalog: "无模型目录", home.HealthTOS: "403停用/违反条款", home.HealthPermission: "403无权限",
-	home.HealthRateLimited: "429限流", home.HealthAuth: "令牌无效", home.HealthNoEgress: "无出口", home.HealthError: "检查失败",
+	home.HealthRateLimited: "429限流", home.HealthRegion: "地区限制", home.HealthAuth: "令牌无效", home.HealthNoEgress: "无出口", home.HealthError: "检查失败",
 }
 
 func fmtHealthTime(t *time.Time) string {

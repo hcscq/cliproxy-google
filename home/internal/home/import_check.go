@@ -36,6 +36,7 @@ const (
 	HealthAuth        = "auth" // 401 / no token
 	HealthNoEgress    = "no_egress"
 	HealthError       = "error"
+	HealthRegion      = "region" // 地区限制 (loadCodeAssist ineligible UNSUPPORTED_LOCATION)
 )
 
 // HealthProbeResult is the raw outcome of the upstream calls of one check.
@@ -105,6 +106,9 @@ func ClassifyHealth(p HealthProbeResult, in HealthInputs, cfg config.ImportCheck
 	}
 	// Tier / onboarding (loadCodeAssist).
 	low := strings.ToLower(p.IneligibleCode + " " + p.IneligibleText)
+	if cfg.RegionFail && strings.Contains(strings.ToUpper(p.IneligibleCode), "UNSUPPORTED_LOCATION") {
+		add(HealthRegion, "地区限制（UNSUPPORTED_LOCATION）", p.IneligibleText)
+	}
 	switch {
 	case p.IneligibleCode != "" && (strings.Contains(low, "validation") || strings.Contains(low, "verif")):
 		add(HealthNeedsVerify, "账号需验证（"+p.IneligibleCode+"）", p.IneligibleText)
@@ -235,15 +239,7 @@ func (r *Runtime) healthLoadCodeAssist(ctx context.Context, full *coreauth.Auth,
 		return
 	}
 	out.Tier, out.TierName, _ = parseSubscriptionTier(data)
-	for _, t := range gjson.GetBytes(data, "ineligibleTiers").Array() {
-		if c := t.Get("reasonCode").String(); c != "" {
-			out.IneligibleCode = c
-			out.IneligibleText = clip(t.Get("reasonMessage").String()+" "+t.Get("validationUrl").String(), 2000)
-			if strings.Contains(strings.ToUpper(c), "VALIDATION") {
-				break
-			}
-		}
-	}
+	out.IneligibleCode, out.IneligibleText = parseIneligibleTiers(data)
 }
 
 func (r *Runtime) recordHealthCheckUsage(a *coreauth.Auth, model string, started time.Time, code int, body []byte, callErr error) {
@@ -318,5 +314,61 @@ func (r *Runtime) healthSweep(ctx context.Context) {
 	go func() {
 		defer r.healthSweeping.Store(false)
 		fn(ctx, ids)
+	}()
+}
+
+// parseIneligibleTiers joins every ineligible tier reason code and its raw message
+// (kept verbatim as evidence).
+func parseIneligibleTiers(data []byte) (codes, text string) {
+	var cs, ts []string
+	for _, t := range gjson.GetBytes(data, "ineligibleTiers").Array() {
+		c := strings.TrimSpace(t.Get("reasonCode").String())
+		if c == "" {
+			continue
+		}
+		cs = append(cs, c)
+		msg := strings.TrimSpace(t.Get("reasonMessage").String() + " " + t.Get("validationUrl").String())
+		ts = append(ts, c+": "+msg)
+	}
+	return strings.Join(cs, ","), clip(strings.Join(ts, " | "), 2000)
+}
+
+type regionScanStore interface {
+	ListRegionScanIDs(ctx context.Context, limit int) ([]string, error)
+	SaveRegionObservation(ctx context.Context, id, codes, text, tier string, status int) error
+}
+
+// regionScan (leader, after the health sweep) records the loadCodeAssist ineligible
+// tiers of schedulable credentials, read-only, a few per cycle through each pinned egress.
+func (r *Runtime) regionScan(ctx context.Context) {
+	s, ok := r.reserveStore().(regionScanStore)
+	if !ok || !r.healthSweeping.CompareAndSwap(false, true) {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ids, err := s.ListRegionScanIDs(cctx, 10)
+	cancel()
+	if err != nil || len(ids) == 0 {
+		r.healthSweeping.Store(false)
+		return
+	}
+	go func() {
+		defer r.healthSweeping.Store(false)
+		for _, id := range ids {
+			pctx, cancel := context.WithTimeout(ctx, subscriptionCallTimeout+5*time.Second)
+			full := r.fullAuth(pctx, id)
+			if full == nil || strings.TrimSpace(full.ProxyURL) == "" || extractAccessToken(full) == "" {
+				cancel()
+				continue
+			}
+			var p HealthProbeResult
+			r.healthLoadCodeAssist(pctx, full, &p)
+			text := p.IneligibleText
+			if p.TierStatus != http.StatusOK {
+				text = clip(p.TierError, 2000)
+			}
+			_ = s.SaveRegionObservation(pctx, id, p.IneligibleCode, text, p.Tier, p.TierStatus)
+			cancel()
+		}
 	}()
 }

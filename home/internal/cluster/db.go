@@ -1188,5 +1188,8 @@ func ensureExtraTablesUnlocked(ctx context.Context, db *gorm.DB) error {
 	if err := ensureCredentialHealthTables(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureCredentialRegionTable(ctx, db); err != nil {
+		return err
+	}
 	return ensureAffinityTables(ctx, db)
 }

@@ -57,3 +57,20 @@ func TestHealthSweepIDs(t *testing.T) {
 		t.Fatalf("stale running must be re-picked: %v", ids)
 	}
 }
+
+func TestRegionScanIDs(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	db, _ := repo.database()
+	for i, id := range []string{"act", "res"} {
+		_ = db.Exec(`INSERT INTO auth (uuid, auth_json, id, provider, status, disabled, seq, created_at) VALUES (?, '{}', ?, 'antigravity', 'active', false, ?, ?)`, id, id, i+1, time.Now()).Error
+	}
+	_, _ = repo.SetCredentialsReserved(ctx, []string{"res"}, true, "reserve", "")
+	ids, _ := repo.ListRegionScanIDs(ctx, 10)
+	if len(ids) != 1 || ids[0] != "act" {
+		t.Fatalf("scan = %v (active only)", ids)
+	}
+	_ = repo.SaveRegionCheck(ctx, CredentialRegionCheck{AuthUUID: "act", Codes: "UNSUPPORTED_LOCATION", CheckedAt: time.Now()})
+	if ids, _ := repo.ListRegionScanIDs(ctx, 10); len(ids) != 0 {
+		t.Fatalf("recently scanned must be skipped: %v", ids)
+	}
+}

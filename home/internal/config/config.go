@@ -273,6 +273,7 @@ type Config struct {
 	ImportCheckConcurrency  int    `yaml:"import-check-concurrency,omitempty" json:"import-check-concurrency,omitempty"`
 	ImportCheckPromote      string `yaml:"import-check-promote,omitempty" json:"import-check-promote,omitempty"`
 	ImportCheckBlockFailed  bool   `yaml:"import-check-block-failed,omitempty" json:"import-check-block-failed,omitempty"`
+	ImportCheckRegionFail   *bool  `yaml:"import-check-region-fail,omitempty" json:"import-check-region-fail,omitempty"`
 	// QuotaBucketReprobeSeconds: when the active quota probe reports a bucket (e.g.
 	// Antigravity "Gemini models") at 0%, every model of that bucket on that credential is
 	// skipped and the credential's quota is re-probed at this interval; the block is released
@@ -1800,13 +1801,14 @@ type ImportCheckSettings struct {
 	Concurrency  int
 	Promote      string // pass | not-failed | any
 	BlockFailed  bool
+	RegionFail   bool // UNSUPPORTED_LOCATION ineligible tier fails the check (default true)
 }
 
 // ImportCheckSettings returns the import health check settings with defaults:
 // on import, expect pro, quota windows >= 95%, gemini-2.5-flash-lite, 3 at a time,
 // promote only passed reserves, failed credentials still scheduled.
 func (c *Config) ImportCheckSettings() ImportCheckSettings {
-	out := ImportCheckSettings{OnImport: true, ExpectedTier: "pro", QuotaMin: 0.95, Model: "gemini-2.5-flash-lite", Concurrency: 3, Promote: "pass"}
+	out := ImportCheckSettings{OnImport: true, ExpectedTier: "pro", QuotaMin: 0.95, Model: "gemini-2.5-flash-lite", Concurrency: 3, Promote: "pass", RegionFail: true}
 	if c == nil {
 		return out
 	}
@@ -1833,6 +1835,9 @@ func (c *Config) ImportCheckSettings() ImportCheckSettings {
 		out.Promote = p
 	}
 	out.BlockFailed = c.ImportCheckBlockFailed
+	if c.ImportCheckRegionFail != nil {
+		out.RegionFail = *c.ImportCheckRegionFail
+	}
 	return out
 }
 

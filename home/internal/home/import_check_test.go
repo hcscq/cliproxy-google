@@ -1,6 +1,7 @@
 package home
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
@@ -67,5 +68,22 @@ func TestImportCheckSettingsDefaults(t *testing.T) {
 	s = (&config.Config{ImportCheckOnImport: &off, ImportCheckConcurrency: 99, ImportCheckPromote: "bogus", ImportCheckQuotaMinPct: 80}).ImportCheckSettings()
 	if s.OnImport || s.Concurrency != 16 || s.Promote != "pass" || s.QuotaMin != 0.8 {
 		t.Fatalf("parsed = %+v", s)
+	}
+}
+
+func TestClassifyRegionRestriction(t *testing.T) {
+	fresh := HealthInputs{QuotaWindows: 4, QuotaMin: 1, CatalogOK: true, CatalogCount: 22}
+	codes, text := parseIneligibleTiers([]byte(`{"paidTier":{"id":"g1-pro-tier"},"ineligibleTiers":[{"reasonCode":"INELIGIBLE_ACCOUNT","reasonMessage":"x"},{"reasonCode":"UNSUPPORTED_LOCATION","reasonMessage":"Your current account is not eligible for Antigravity, because it is not currently available in your location."}]}`))
+	if codes != "INELIGIBLE_ACCOUNT,UNSUPPORTED_LOCATION" || !strings.Contains(text, "not currently available in your location") {
+		t.Fatalf("parse = %q / %q", codes, text)
+	}
+	p := HealthProbeResult{TierStatus: 200, Tier: "g1-pro-tier", IneligibleCode: codes, IneligibleText: text, GenStatus: 200}
+	v := ClassifyHealth(p, fresh, (&config.Config{}).ImportCheckSettings())
+	if v.Status != "fail" || len(v.Categories) != 1 || v.Categories[0] != HealthRegion || !strings.Contains(v.Evidence, "location") {
+		t.Fatalf("region default on: %+v", v)
+	}
+	off := false
+	if v := ClassifyHealth(p, fresh, (&config.Config{ImportCheckRegionFail: &off}).ImportCheckSettings()); v.Status != "pass" {
+		t.Fatalf("region off: %+v", v)
 	}
 }

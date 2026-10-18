@@ -15,6 +15,7 @@ export const HEALTH_CATEGORY: Record<string, [string, string]> = {
   auth: ['令牌无效', 'Bad token'],
   no_egress: ['无出口', 'No egress'],
   error: ['检查失败', 'Check error'],
+  region: ['地区限制', 'Region restricted'],
 };
 
 export function healthCategoryLabel(c: string, tr: (zh: string, en: string) => string, tier?: string): string {
