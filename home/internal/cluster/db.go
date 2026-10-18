@@ -548,6 +548,9 @@ func migrateUsageObservabilityIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_event_type_time ON "usage" ("event_type", "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_cpa_node_time ON "usage" ("cpa_node_id", "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_home_port_time ON "usage" ("home_ip", "home_port", "timestamp" DESC)`,
+		// Token-accounting backfill polls "version <> current ORDER BY id"; a partial
+		// index stays empty once backfilled, so the poll is instant instead of a scan.
+		`CREATE INDEX IF NOT EXISTS idx_usage_token_accounting_pending ON "usage" ("id") WHERE "token_accounting_version" <> ` + strconv.Itoa(UsageTokenAccountingSchemaVersion),
 		`CREATE INDEX IF NOT EXISTS idx_usage_quota_activity ON "usage" ("quota_credential_id", "quota_identity_version", "quota_identity_key", "created_at" DESC) WHERE "quota_credential_id" <> '' AND "quota_identity_version" > 0 AND "quota_identity_key" <> ''`,
 	}
 	// Redundant (duplicate or leftmost prefix of a composite index) or
