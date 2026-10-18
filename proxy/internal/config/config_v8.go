@@ -76,7 +76,7 @@ func buildV8Paths() []configPath {
 		{"remote-management", "management"}, {"api-keys", "access.api-keys"},
 		{"credential-concurrency", "credentials.concurrency"}, {"credential-in-flight", "credentials.in-flight"},
 		{"force-model-prefix", "routing.force-model-prefix"},
-		{"request-retry", "routing.retry.request-retry"}, {"max-retry-credentials", "routing.retry.max-retry-credentials"}, {"max-retry-duration", "routing.retry.max-retry-duration"}, {"max-request-credentials", "routing.retry.max-request-credentials"},
+		{"request-retry", "routing.retry.request-retry"}, {"max-retry-credentials", "routing.retry.max-retry-credentials"}, {"max-retry-duration", "routing.retry.max-retry-duration"}, {"first-byte-deadline", "routing.retry.first-byte-deadline"}, {"first-byte-deadline-nonstream", "routing.retry.first-byte-deadline-nonstream"}, {"home-kv-timeout-ms", "routing.retry.home-kv-timeout-ms"}, {"max-request-credentials", "routing.retry.max-request-credentials"},
 		{"max-retry-interval", "routing.retry.max-retry-interval"},
 		{"capacity-retry", "routing.retry.capacity-retry"},
 		{"honor-max-tokens", "routing.honor-max-tokens"},

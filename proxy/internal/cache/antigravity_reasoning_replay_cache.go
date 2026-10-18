@@ -116,7 +116,9 @@ func CacheAntigravityReasoningReplayItemsBestEffort(ctx context.Context, modelNa
 			log.Errorf("home kv best-effort antigravity reasoning replay set failed prefix=cpa:antigravity:*: %v", errMarshal)
 			return false
 		}
-		written, errSet := client.KVSet(ctx, antigravityReasoningReplayKVKey(modelName, sessionKey), raw, homekv.KVSetOptions{EX: AntigravityReasoningReplayCacheTTL})
+		kvCtx, kvCancel := homeKVContext(ctx)
+		defer kvCancel()
+		written, errSet := client.KVSet(kvCtx, antigravityReasoningReplayKVKey(modelName, sessionKey), raw, homekv.KVSetOptions{EX: AntigravityReasoningReplayCacheTTL})
 		if errSet != nil {
 			log.Errorf("home kv best-effort antigravity reasoning replay set failed prefix=cpa:antigravity:*: %v", errSet)
 			return false
@@ -177,6 +179,9 @@ func GetAntigravityReasoningReplayItemsWithSnapshotRequired(ctx context.Context,
 		if errClient != nil {
 			return nil, AntigravityReasoningReplaySnapshot{}, false, errClient
 		}
+		var kvCancel context.CancelFunc
+		ctx, kvCancel = homeKVContext(ctx)
+		defer kvCancel()
 		kvKey := antigravityReasoningReplayKVKey(modelName, sessionKey)
 		var raw []byte
 		found := false

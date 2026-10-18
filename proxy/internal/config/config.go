@@ -105,6 +105,17 @@ type Config struct {
 	// is returned (keeps streaming clients under ~100s to first byte).
 	// 0 = default (90); negative = unlimited.
 	MaxRetryDuration int `yaml:"max-retry-duration" json:"max-retry-duration"`
+	// FirstByteDeadline bounds, in seconds, how long a model request may run
+	// before the client gets a first byte; past it the proxy answers a
+	// retryable 503 so the gateway fails over. 0 = default (120); <0 = off.
+	FirstByteDeadline int `yaml:"first-byte-deadline,omitempty" json:"first-byte-deadline,omitempty"`
+	// FirstByteDeadlineNonStream is the same for non-streaming requests
+	// (first byte only after full generation). 0 = default (240); <0 = off.
+	FirstByteDeadlineNonStream int `yaml:"first-byte-deadline-nonstream,omitempty" json:"first-byte-deadline-nonstream,omitempty"`
+	// HomeKVTimeoutMs bounds best-effort Home KV calls on the request path
+	// (reasoning replay read/write); slow or failing calls are skipped.
+	// 0 = default (500); <0 = use the connection timeout.
+	HomeKVTimeoutMs int `yaml:"home-kv-timeout-ms,omitempty" json:"home-kv-timeout-ms,omitempty"`
 	// MaxRetryInterval defines the maximum positive cooldown wait, in seconds,
 	// allowed before starting another credential retry round. A non-positive value
 	// forbids positive cooldown waits; it does not disable same-round credential

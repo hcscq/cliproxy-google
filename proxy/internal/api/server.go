@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
 	"net"
 	"net/http"
 	"os"
@@ -206,6 +207,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if authManager != nil {
 		authManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
 		authManager.SetMaxRetryDuration(time.Duration(cfg.MaxRetryDuration) * time.Second)
+		middleware.SetFirstByteDeadlineSeconds(cfg.FirstByteDeadline)
+		middleware.SetFirstByteDeadlineNonStreamSeconds(cfg.FirstByteDeadlineNonStream)
+		cache.SetHomeKVTimeoutMillis(cfg.HomeKVTimeoutMs)
 		authManager.SetMaxRequestCredentials(cfg.MaxRequestCredentials)
 		authManager.SetCapacityRetry(auth.NewCapacityRetrySettings(cfg.CapacityRetry.Enabled, cfg.CapacityRetry.MaxAttempts, cfg.CapacityRetry.BaseDelay, cfg.CapacityRetry.MaxDelay))
 	}
@@ -235,6 +239,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// subscribe-config heartbeat connection is healthy.
 	engine.Use(s.homeHeartbeatMiddleware())
 	engine.Use(s.exampleAPIKeySafeModeMiddleware())
+	engine.Use(middleware.FirstByteDeadlineMiddleware())
 
 	// Setup routes
 	s.setupRoutes()
