@@ -214,6 +214,17 @@ type AntigravityHealthConfig struct {
 	// no visible parts, or no candidates without a block reason) on another
 	// credential, for stream and non-stream. nil = on.
 	RetryEmptyResponse *bool `yaml:"retry-empty-response,omitempty" json:"retry-empty-response,omitempty"`
+	// TrailingModelTurnText is the user turn appended when a Gemini request
+	// ends with a model turn (assistant prefill), which upstream rejects with
+	// 400 "Requests ending with a model turn". An empty-text turn is dropped
+	// upstream and still fails, so a short instruction is used. nil = "Continue.";
+	// "off" = do not append (pass the request through unchanged).
+	TrailingModelTurnText *string `yaml:"trailing-model-turn-text,omitempty" json:"trailing-model-turn-text,omitempty"`
+	// DropEmptyParts removes request parts carrying no data field (e.g. {},
+	// {"thought":true} or a lone thoughtSignature), which upstream rejects with
+	// 400 "required oneof field 'data'" / "Unsupported input part type", and
+	// removes contents left with no parts. nil = on.
+	DropEmptyParts *bool `yaml:"drop-empty-parts,omitempty" json:"drop-empty-parts,omitempty"`
 	// Per-credential request caps by subscription tier (Home). Every upstream
 	// attempt counts (retries included). 0 = unlimited (default). Credentials
 	// can override via metadata request_cap_mode (custom|unlimited).

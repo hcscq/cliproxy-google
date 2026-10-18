@@ -550,8 +550,10 @@ func TestAntigravityStreamAppendsTrailingUserForGeminiTrailingModelTurn(t *testi
 	if got := lastContent.Get("role").String(); got != "user" {
 		t.Fatalf("trailing turn role = %q, want user; body=%s", got, body)
 	}
-	if got := lastContent.Get("parts.0.text").String(); got != "" {
-		t.Fatalf("trailing turn text = %q, want empty string; body=%s", got, body)
+	// Upstream drops an empty-text user turn and still rejects the request
+	// ("Requests ending with a model turn"), so the turn must carry text.
+	if got := lastContent.Get("parts.0.text").String(); got != antigravityDefaultTrailingModelTurnText {
+		t.Fatalf("trailing turn text = %q, want %q; body=%s", got, antigravityDefaultTrailingModelTurnText, body)
 	}
 }
 

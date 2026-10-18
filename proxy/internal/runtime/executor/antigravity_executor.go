@@ -522,7 +522,11 @@ func ensureAntigravityGeminiBoundaryUserContent(modelName string, payload []byte
 	if strings.Contains(strings.ToLower(modelName), "claude") {
 		return payload
 	}
-	return helps.EnsureGeminiBoundaryUserContent(payload, "request.contents")
+	if antigravityDropEmptyPartsEnabled() {
+		payload = dropGeminiEmptyParts(payload, "request.contents")
+	}
+	payload = helps.EnsureGeminiBoundaryUserContent(payload, "request.contents")
+	return fixGeminiTrailingModelTurn(payload, "request.contents", antigravityTrailingModelTurnText())
 }
 
 type antigravityContentEdit struct {
