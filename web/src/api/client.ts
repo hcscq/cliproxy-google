@@ -1082,7 +1082,7 @@ export interface CallStats {
   /** error class -> count: 429 | 503 | 403 | 404 | 400 | 5xx | net | cancel | other */
   by_class?: Record<string, number>;
 }
-export type CredentialSearchItem = Credential & { health?: HealthInfo; reserved?: boolean; reserved_since?: string; request_cap?: RequestCapUsage; seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
+export type CredentialSearchItem = Credential & { health_check?: HealthInfo; reserved?: boolean; reserved_since?: string; request_cap?: RequestCapUsage; seq?: number; tags?: string[]; group_ids?: number[]; state?: CredentialState; created_at?: string; last_used_at?: string; call_stats?: CallStats };
 export interface CredentialSearch {
   items: CredentialSearchItem[];
   total: number;

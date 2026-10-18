@@ -55,7 +55,7 @@ import { AllowPrimaryToggle, EgressSelect, useEgressSettings, egressIP, egressNo
 import { GroupChecklist, useGroupLookup } from "./Groups";
 
 export function healthBadges(c: Credential) {
-  if (!c.health || c.health.length === 0) return null;
+  if (!Array.isArray(c.health) || c.health.length === 0) return null;
   return (
     <>
       {c.health.map((h) => (
@@ -835,7 +835,7 @@ export function CredentialsPage() {
                         className="cell-status"
                         title={statusTooltip(c, tr)}
                       >
-                        {credentialStatus(c, t, tr)}{healthBadges(c)}<HealthBadge h={(c as CredentialSearchItem).health} />
+                        {credentialStatus(c, t, tr)}{healthBadges(c)}<HealthBadge h={(c as CredentialSearchItem).health_check} />
                       </span>
                       <RequestCapLine u={c.request_cap} />
                       {c.egress_ip && (() => {
@@ -1470,7 +1470,7 @@ function CredentialDrawer({
       <div className="stack">
         <div className="row">
           <Badge kind="primary">{cred.provider}</Badge>
-          {credentialStatus(cred, t, tr)}{healthBadges(cred)}<HealthBadge h={cred.health} />
+          {credentialStatus(cred, t, tr)}{healthBadges(cred)}<HealthBadge h={(cred as CredentialSearchItem).health_check} />
           <QuotaStatusBadge item={quota} />
         </div>
         {cred.credential_scope_error && cred.status_message && (

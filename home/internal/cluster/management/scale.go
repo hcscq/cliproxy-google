@@ -260,7 +260,7 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		e["group_ids"] = nonNilUints(groupsOf[a.ID])
 		e["state"] = statusOf[a.ID]
 		if hx, ok := health[a.ID]; ok {
-			e["health"] = hx
+			e["health_check"] = hx
 		}
 		if t, ok := reservedSince[a.ID]; ok {
 			e["reserved"] = true
