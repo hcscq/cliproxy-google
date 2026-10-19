@@ -410,3 +410,13 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .quota-inline .qbar > span { display: block; height: 100%; }
 .cred-table .quota-cell { display: flex; align-items: center; }
 .row-menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+
+/* 清理无效凭据: compact single-line rows, sticky group header, capped list */
+.purge-group { padding: 0; }
+.purge-group-head { display: flex; gap: 8px; align-items: center; padding: 8px 10px; position: sticky; top: 0; z-index: 2; background: var(--bg-elev); border-radius: var(--radius); }
+.purge-list { max-height: 320px; overflow-y: auto; border-top: 1px solid var(--border); }
+.purge-row { display: grid; grid-template-columns: 16px 44px minmax(0, 1fr) 128px 76px 124px 40px; gap: 8px; align-items: center; height: 36px; padding: 0 10px; white-space: nowrap; font-size: 12.5px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.purge-row:last-child { border-bottom: 0; }
+.purge-row:hover { background: var(--bg-sunken); }
+.purge-row > * { min-width: 0; }
+.purge-row .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -30,3 +30,27 @@ describe("purge invalid credentials selection", () => {
     expect(isAuthInvalidCategory("tos_violation")).toBe(false);
   });
 });
+
+import { compactCount, purgeStats, shortDate, shortReason } from "./purgeInvalid";
+describe("purge row formatting", () => {
+  it("short reason keeps the code only", () => {
+    expect(shortReason("account_suspended: This service has been disabled in this account")).toBe("account_suspended");
+    expect(shortReason("authentication_error credential unauthorized")).toBe("authentication_error");
+    expect(shortReason("")).toBe("—");
+  });
+  it("compact counts", () => {
+    expect(compactCount(20818, true)).toBe("2.1万");
+    expect(compactCount(20000, true)).toBe("2万");
+    expect(compactCount(950, true)).toBe("950");
+    expect(compactCount(20818, false)).toBe("20.8k");
+  });
+  it("stats cell", () => {
+    expect(purgeStats({ kind: "403", count_403_7d: 1, ok_7d: 20818 }, true)).toBe("7天1次 · 成功2.1万");
+    expect(purgeStats({ kind: "401", count_403_7d: 0, ok_7d: 3 }, true)).toBe("7天成功3");
+  });
+  it("short date", () => {
+    const d = new Date(2026, 9, 15, 19, 27, 26);
+    expect(shortDate(d.toISOString())).toBe("10/15 19:27");
+    expect(shortDate(undefined)).toBe("—");
+  });
+});

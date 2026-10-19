@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { PURGE_DEFAULT_CATS, isAuthInvalidCategory, purgeSelection } from "./purgeInvalid";
+import { PURGE_DEFAULT_CATS, isAuthInvalidCategory, purgeSelection, purgeStats, shortDate, shortReason } from "./purgeInvalid";
 import { HealthBadge } from '../components/HealthCheck';
 import { downloadBlob as saveHealthCsv } from '../format';
 import { ReserveChip } from '../components/ReserveAlert';
@@ -1041,7 +1041,7 @@ function RequestCapEditor({ ids, current, onDone }: { ids: string[]; current?: R
 
 function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () => Promise<void> }) {
   const api = useApi();
-  const { tr } = useI18n();
+  const { tr, lang } = useI18n();
   const { toast, confirm } = useUi();
   const { busy, run } = useAction();
   const data = useAsync(() => api.forbiddenCredentials(), []);
@@ -1104,8 +1104,8 @@ function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () =>
             {tr("403 仅持续性（自动停用，或 7 天内 ≥3 次且无成功）；401 类均为已停用", "403: persistent only (auto-disabled, or ≥3 in 7d, no success); 401 kinds are already disabled")}
           </label>
           {categories.map((c) => (
-            <div key={c.key} className="card" style={{ padding: 8 }} data-testid={`purge-403-cat-${c.key}`}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div key={c.key} className="card purge-group" data-testid={`purge-403-cat-${c.key}`}>
+              <div className="purge-group-head">
                 <input type="checkbox" checked={!!cats[c.key]} onChange={(e) => setCats({ ...cats, [c.key]: e.target.checked })} data-testid={`purge-cat-check-${c.key}`} />
                 <b>{is401(c) ? c.label : `403 · ${c.label.replace(/\s*403$/, "")}`}</b>
                 <span className="hint">
@@ -1116,30 +1116,24 @@ function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () =>
                 </button>
               </div>
               {open[c.key] && (
-                <table className="table small" style={{ marginTop: 6 }}>
-                  <tbody>
-                    {c.items.map((it) => (
-                      <tr key={it.id} style={{ opacity: eligible(it) ? 1 : 0.5 }}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            disabled={!cats[c.key] || !eligible(it)}
-                            checked={!!cats[c.key] && eligible(it) && !excluded[it.id]}
-                            onChange={(e) => setExcluded({ ...excluded, [it.id]: !e.target.checked })}
-                          />
-                        </td>
-                        <td>#{it.seq ?? "?"}</td>
-                        <td>{it.label}</td>
-                        <td title={it.message} style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {it.message}
-                        </td>
-                        <td>{it.last_403_at ? fmtTime(it.last_403_at) : "-"}</td>
-                        <td>{it.kind === "401" ? tr(`7天成功 ${it.ok_7d}`, `7d ok ${it.ok_7d}`) : tr(`7天 ${it.count_403_7d} 次 / 成功 ${it.ok_7d}`, `7d ${it.count_403_7d} / ok ${it.ok_7d}`)}</td>
-                        <td>{it.kind === "401" ? tr("已停用", "disabled") : it.persistent ? tr("持续", "persistent") : tr("偶发", "transient")}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="purge-list" data-testid={`purge-list-${c.key}`}>
+                  {c.items.map((it) => (
+                    <label key={it.id} className="purge-row" style={{ opacity: eligible(it) ? 1 : 0.5 }} title={it.message}>
+                      <input
+                        type="checkbox"
+                        disabled={!cats[c.key] || !eligible(it)}
+                        checked={!!cats[c.key] && eligible(it) && !excluded[it.id]}
+                        onChange={(e) => setExcluded({ ...excluded, [it.id]: !e.target.checked })}
+                      />
+                      <span className="mono hint">#{it.seq ?? "?"}</span>
+                      <span className="ell">{it.label}</span>
+                      <span className="ell hint">{shortReason(it.message)}</span>
+                      <span className="hint">{shortDate(it.last_403_at)}</span>
+                      <span className="hint">{purgeStats(it, lang === "zh")}</span>
+                      <span>{it.kind !== "401" && !it.persistent ? <Badge>{tr("偶发", "transient")}</Badge> : null}</span>
+                    </label>
+                  ))}
+                </div>
               )}
             </div>
           ))}
