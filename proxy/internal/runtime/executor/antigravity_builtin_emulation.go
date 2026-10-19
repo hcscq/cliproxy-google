@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -246,6 +247,25 @@ type antigravityBuiltinEmulation struct {
 	urlContext string // raw urlContextMetadata
 	usage      gjson.Result
 	attached   bool
+	// claude: render pass-1 grounding as Anthropic server_tool_use +
+	// web_search_tool_result blocks (marker on the first frame) instead of
+	// attaching groundingMetadata to the terminal frame.
+	claude     bool
+	markerSent bool
+}
+
+const antigravityPresearchMarkerField = "cpaPresearchGrounding"
+
+func (m *antigravityBuiltinEmulation) setMarker(body []byte, root string) []byte {
+	if m == nil || m.markerSent || m.grounding == "" {
+		return body
+	}
+	m.markerSent = true
+	out, err := sjson.SetRawBytes(body, root+antigravityPresearchMarkerField, []byte(m.grounding))
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func (m *antigravityBuiltinEmulation) headerValue() string {
@@ -319,6 +339,9 @@ func (m *antigravityBuiltinEmulation) adjustResponse(body []byte) []byte {
 	}
 	root := antigravityResponseRoot(body)
 	body = m.addUsage(body, root, true)
+	if m.claude {
+		return m.setMarker(body, root)
+	}
 	return m.attachGrounding(body, root)
 }
 
@@ -339,7 +362,9 @@ func (m *antigravityBuiltinEmulation) adjustSSELine(line []byte) []byte {
 	root := antigravityResponseRoot(payload)
 	terminal := strings.TrimSpace(gjson.GetBytes(payload, root+"candidates.0.finishReason").String()) != ""
 	payload = m.addUsage(payload, root, false)
-	if terminal {
+	if m.claude {
+		payload = m.setMarker(payload, root)
+	} else if terminal {
 		payload = m.attachGrounding(payload, root)
 	}
 	return append([]byte("data: "), payload...)
@@ -427,7 +452,7 @@ func planBuiltinToolsEmulation(modelName string, payload []byte) (pass2, pass1 [
 // prepareBuiltinToolsEmulation returns the payload to send, the payload for
 // reasoning-replay bookkeeping (without injected search text) and the pass-1
 // state (nil when emulation does not apply). It never fails the request.
-func (e *AntigravityExecutor) prepareBuiltinToolsEmulation(ctx context.Context, auth *cliproxyauth.Auth, token, modelName, baseURL string, httpClient *http.Client, payload []byte, attemptLimit time.Duration, sessionID string) (send, replay []byte, emu *antigravityBuiltinEmulation) {
+func (e *AntigravityExecutor) prepareBuiltinToolsEmulation(ctx context.Context, auth *cliproxyauth.Auth, token, modelName, baseURL string, httpClient *http.Client, payload []byte, attemptLimit time.Duration, sessionID string, from sdktranslator.Format) (send, replay []byte, emu *antigravityBuiltinEmulation) {
 	pass2, pass1, idx := planBuiltinToolsEmulation(modelName, payload)
 	if pass2 == nil {
 		return payload, payload, nil
@@ -457,6 +482,11 @@ func (e *AntigravityExecutor) prepareBuiltinToolsEmulation(ctx context.Context, 
 		log.WithFields(fields).Warnf("antigravity: builtin-tools pre-search status %d (%v), continuing without search: %s", resp.StatusCode, errRead, helps.SummarizeErrorBody(resp.Header.Get("Content-Type"), body))
 		return pass2, pass2, emu
 	}
+	claude := from == sdktranslator.FormatClaude
+	if claude {
+		// Anthropic web_search results carry real URLs, not Vertex redirects.
+		body = helps.ResolveAntigravityGroundingURLs(ctx, e.cfg, auth, body)
+	}
 	root := antigravityResponseRoot(body)
 	emu.usage = gjson.GetBytes(body, root+"usageMetadata")
 	cand := gjson.GetBytes(body, root+"candidates.0")
@@ -482,6 +512,7 @@ func (e *AntigravityExecutor) prepareBuiltinToolsEmulation(ctx context.Context, 
 		emu.urlContext = compactJSON(uc.Raw)
 	}
 	emu.status = "searched"
+	emu.claude = claude && emu.grounding != ""
 	log.WithFields(fields).Infof("antigravity: builtin-tools pre-search ok in %s (%d sources)", time.Since(started).Round(time.Millisecond), len(gm.Get("groundingChunks").Array()))
 	return injectBuiltinPresearchContext(pass2, idx, formatBuiltinPresearchContext(text.String(), gm, time.Now())), pass2, emu
 }
@@ -492,4 +523,49 @@ func compactJSON(raw string) string {
 		return strings.NewReplacer("\r", "", "\n", "").Replace(raw)
 	}
 	return buf.String()
+}
+
+// applyClaudeWebSearchWithFunctions turns an Anthropic web_search server tool
+// that came together with function tools into a googleSearch tool, so it goes
+// through builtin-tools-with-functions handling (emulate: two passes; keep:
+// upstream 400). The Claude translator drops it otherwise; "drop-builtin"
+// keeps that old behaviour. Search-only requests use the translator's native
+// web_search path and are untouched (no function declarations there).
+func applyClaudeWebSearchWithFunctions(modelName string, from sdktranslator.Format, original, payload []byte) []byte {
+	if from != sdktranslator.FormatClaude || strings.Contains(strings.ToLower(modelName), "claude") || antigravityBuiltinToolsMode() == builtinToolsModeDrop {
+		return payload
+	}
+	if !hasAntigravityClaudeTypedWebSearchTool(original) {
+		return payload
+	}
+	tools := util.GetGJSONBytesNoCopy(payload, "request.tools")
+	if !tools.IsArray() {
+		return payload
+	}
+	hasFn := false
+	for _, t := range tools.Array() {
+		if t.Get("googleSearch").Exists() || t.Get("google_search").Exists() {
+			return payload
+		}
+		if d := t.Get("functionDeclarations"); d.IsArray() && len(d.Array()) > 0 {
+			hasFn = true
+		}
+	}
+	if !hasFn {
+		return payload
+	}
+	gs := []byte(`{"googleSearch":{}}`)
+	for _, t := range util.GetGJSONBytesNoCopy(original, "tools").Array() {
+		switch t.Get("type").String() {
+		case "web_search_20250305", "web_search_20260209":
+			if d := t.Get("allowed_domains"); d.IsArray() && len(d.Array()) > 0 {
+				gs, _ = sjson.SetRawBytes(gs, "googleSearch.includedDomains", []byte(d.Raw))
+			}
+		}
+	}
+	out, err := sjson.SetRawBytes(payload, "request.tools.-1", gs)
+	if err != nil {
+		return payload
+	}
+	return out
 }

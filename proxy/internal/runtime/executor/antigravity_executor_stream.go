@@ -129,6 +129,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			return nil, err
 		}
 	}
+	requestPayload = applyClaudeWebSearchWithFunctions(baseModel, from, originalPayload, requestPayload)
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 	emulateStream := streamThinkingEmulationApplies(e.cfg, baseModel, requestPayload)
 	streamAlt := opts.Alt
@@ -142,7 +143,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		ttfbLimit = health.nonStream
 	}
 	// The pre-search pass (if any) runs before the first-byte timer starts.
-	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, ttfbLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, ttfbLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata), from)
 	attemptCtx, cancelAttempt := context.WithCancel(ctx)
 	attemptStarted := time.Now()
 	var ttfbTimedOut atomic.Bool

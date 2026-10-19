@@ -80,6 +80,7 @@ type Params struct {
 	LastSemanticKind     string
 	HasWebSearchTool     bool
 	WebSearchRequests    int64
+	PresearchRendered    bool
 	WebSearchTextBuffer  strings.Builder
 
 	// Signature caching support
@@ -238,6 +239,14 @@ func ConvertAntigravityResponseToClaude(ctx context.Context, _ string, originalR
 		appendEvent("message_start", string(messageStartTemplate))
 
 		params.HasFirstResponse = true
+	}
+
+	if !params.PresearchRendered && !webSearchStreamMode && params.ResponseType == 0 {
+		if groundingMetadata := antigravityPresearchGrounding(gjson.ParseBytes(rawJSON)); groundingMetadata.Exists() {
+			params.ResponseIndex = appendClaudePresearchStreamBlocks(appendEvent, params.ResponseIndex, newClaudeWebSearchToolUseID(), groundingMetadata)
+			params.PresearchRendered = true
+			params.WebSearchRequests = 1
+		}
 	}
 
 	handledWebSearchGrounding := false
@@ -721,6 +730,11 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 
 	flushThinking()
 	flushText()
+
+	if groundingMetadata := antigravityPresearchGrounding(root); groundingMetadata.Exists() {
+		blocks = append(buildClaudePresearchBlocks(newClaudeWebSearchToolUseID(), groundingMetadata), blocks...)
+		responseJSON, _ = sjson.SetBytes(responseJSON, "usage.server_tool_use.web_search_requests", 1)
+	}
 
 	if len(blocks) > 0 {
 		responseJSON, _ = sjson.SetRawBytes(responseJSON, "content", translatorcommon.JoinRawArray(blocks))

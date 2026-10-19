@@ -535,3 +535,46 @@ func splitRunesForWebSearch(text string, chunkSize int) []string {
 func newClaudeWebSearchToolUseID() string {
 	return fmt.Sprintf("srvtoolu_%d", time.Now().UnixNano())
 }
+
+// Builtin-tools emulation (executor "emulate" mode) runs a googleSearch pass
+// before the functions pass of a mixed web_search + function-tools request and
+// tags the response with the pass-1 groundingMetadata under this field. The
+// Claude translators render it as server_tool_use + web_search_tool_result
+// blocks ahead of the pass-2 content.
+func antigravityPresearchGrounding(root gjson.Result) gjson.Result {
+	if r := root.Get("response.cpaPresearchGrounding"); r.Exists() {
+		return r
+	}
+	return root.Get("cpaPresearchGrounding")
+}
+
+func buildClaudePresearchBlocks(toolUseID string, groundingMetadata gjson.Result) [][]byte {
+	serverToolUse := []byte(`{"type":"server_tool_use","id":"","name":"web_search","input":{}}`)
+	serverToolUse, _ = sjson.SetBytes(serverToolUse, "id", toolUseID)
+	if query := webSearchQueryFromGrounding(groundingMetadata); query != "" {
+		serverToolUse, _ = sjson.SetBytes(serverToolUse, "input.query", query)
+	}
+	result := []byte(`{"type":"web_search_tool_result","tool_use_id":"","content":[]}`)
+	result, _ = sjson.SetBytes(result, "tool_use_id", toolUseID)
+	result, _ = sjson.SetRawBytes(result, "content", webSearchResultsFromGrounding(groundingMetadata))
+	return [][]byte{serverToolUse, result}
+}
+
+func appendClaudePresearchStreamBlocks(appendEvent func(string, string), startIndex int, toolUseID string, groundingMetadata gjson.Result) int {
+	contentIndex := startIndex
+	serverToolUseStart := fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"server_tool_use","id":"%s","name":"web_search","input":{}}}`, contentIndex, toolUseID)
+	appendEvent("content_block_start", serverToolUseStart)
+	if query := webSearchQueryFromGrounding(groundingMetadata); query != "" {
+		queryJSON, _ := sjson.Set(`{}`, "query", query)
+		inputDelta := fmt.Sprintf(`{"type":"content_block_delta","index":%d,"delta":{"type":"input_json_delta","partial_json":""}}`, contentIndex)
+		inputDelta, _ = sjson.Set(inputDelta, "delta.partial_json", queryJSON)
+		appendEvent("content_block_delta", inputDelta)
+	}
+	appendEvent("content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, contentIndex))
+	contentIndex++
+	resultStart := fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"web_search_tool_result","tool_use_id":"%s","content":[]}}`, contentIndex, toolUseID)
+	resultStart, _ = sjson.SetRaw(resultStart, "content_block.content", string(webSearchResultsFromGrounding(groundingMetadata)))
+	appendEvent("content_block_start", resultStart)
+	appendEvent("content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, contentIndex))
+	return contentIndex + 1
+}

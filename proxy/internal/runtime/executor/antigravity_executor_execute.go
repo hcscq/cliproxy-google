@@ -126,11 +126,12 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			return resp, err
 		}
 	}
+	requestPayload = applyClaudeWebSearchWithFunctions(baseModel, from, originalPayload, requestPayload)
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 
 	health := antigravityHealthSettingsFrom(e.cfg)
 	attemptLimit := health.nonStreamLimit(ctx, baseModel)
-	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, attemptLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, attemptLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata), from)
 	attemptTimer := newAntigravityAttemptTimer(ctx, attemptLimit)
 	defer attemptTimer.cancel()
 	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, sendPayload, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
@@ -377,10 +378,11 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			return resp, err
 		}
 	}
+	requestPayload = applyClaudeWebSearchWithFunctions(baseModel, from, originalPayload, requestPayload)
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 	health := antigravityHealthSettingsFrom(e.cfg)
 	attemptLimit := health.streamTTFB(ctx, baseModel)
-	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, attemptLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, attemptLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata), from)
 	attemptTimer := newAntigravityAttemptTimer(ctx, attemptLimit)
 	defer attemptTimer.cancel()
 	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, sendPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))

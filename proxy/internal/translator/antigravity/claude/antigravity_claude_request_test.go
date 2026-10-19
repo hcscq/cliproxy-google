@@ -351,6 +351,11 @@ func TestConvertClaudeRequestToAntigravity_UsesDefaultWebSearchMaxResultCountWit
 	}
 }
 
+// The translator leaves a mixed web_search + custom-tools request as a plain
+// functions request; the mode-dependent handling (emulate/keep: googleSearch is
+// added and handled by builtin-tools-with-functions; drop-builtin: dropped) is
+// done by the Antigravity executor, see
+// TestClaudeWebSearchWithFunctionsByMode in internal/runtime/executor.
 func TestConvertClaudeRequestToAntigravity_DoesNotMapTypedWebSearchWhenMixedWithCustomTools(t *testing.T) {
 	registry.GetGlobalRegistry().RegisterClient("test-antigravity-claude-websearch-mixed", "antigravity", []*registry.ModelInfo{
 		{ID: "gemini-3.1-flash-lite", SupportsWebSearch: true},
