@@ -1407,6 +1407,6 @@ export interface ReserveStats {
 }
 export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at: string; was_reserved: boolean; reserved_since?: string; detail?: string }
 
-export interface HealthInfo { status: 'pass' | 'fail' | 'running' | string; categories: string[]; reasons?: string[]; checked_at?: string; tier?: string; evidence?: string }
+export interface HealthInfo { status: 'pass' | 'fail' | 'running' | string; categories: string[]; reasons?: string[]; checked_at?: string; tier?: string; evidence?: string; verify_url?: string }
 export interface HealthSummary { total: number; pass: number; fail: number; running: number; by_category: Record<string, number> }
 export interface HealthItem extends HealthInfo { auth_id: string; seq?: number; email?: string; batch_id?: string; imported_at?: string; model?: string }

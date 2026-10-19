@@ -856,7 +856,7 @@ export function CredentialsPage() {
                         className="cell-status"
                         title={statusTooltip(c, tr)}
                       >
-                        {credentialStatus(c, t, tr)}{healthBadges(c)}<HealthBadge h={(c as CredentialSearchItem).health_check} />
+                        {credentialStatus(c, t, tr)}{healthBadges(c)}<HealthBadge h={(c as CredentialSearchItem).health_check} id={c.id} onRechecked={() => setTimeout(() => void creds.reload(), 30000)} />
                       </span>
                       <RequestCapLine u={c.request_cap} />
                       {c.egress_ip && (() => {
@@ -1491,7 +1491,7 @@ function CredentialDrawer({
       <div className="stack">
         <div className="row">
           <Badge kind="primary">{cred.provider}</Badge>
-          {credentialStatus(cred, t, tr)}{healthBadges(cred)}<HealthBadge h={(cred as CredentialSearchItem).health_check} />
+          {credentialStatus(cred, t, tr)}{healthBadges(cred)}<HealthBadge h={(cred as CredentialSearchItem).health_check} id={cred.id} onRechecked={() => setTimeout(() => void onChanged?.(), 30000)} />
           <QuotaStatusBadge item={quota} />
         </div>
         {cred.credential_scope_error && cred.status_message && (

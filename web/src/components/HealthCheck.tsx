@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { HealthInfo, HealthSummary } from '../api/client';
+import { useApi, useUi } from '../app-context';
 import { useI18n } from '../i18n';
 import { Badge } from './ui';
 
@@ -36,22 +38,67 @@ export function healthBadgeText(h: HealthInfo | undefined, tr: (zh: string, en: 
   return cats.length > 1 ? `${first} +${cats.length - 1}` : first;
 }
 
-export function HealthBadge({ h }: { h?: HealthInfo }) {
+/** Verification link from upstream, only when it points at Google's account pages. */
+export function safeVerifyURL(h: HealthInfo | undefined): string | null {
+  const u = h?.verify_url?.trim();
+  if (!u || !h?.categories?.includes('needs_verify')) return null;
+  try {
+    const p = new URL(u);
+    if (p.protocol === 'https:' && (p.hostname === 'accounts.google.com' || p.hostname.endsWith('.google.com'))) return u;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function HealthBadge({ h, id, onRechecked }: { h?: HealthInfo; id?: string; onRechecked?: () => void }) {
   const { tr } = useI18n();
-  if (!h) return null;
-  const kind = h.status === 'pass' ? (h.categories?.includes('region_warn') ? 'warn' : 'ok') : h.status === 'running' ? undefined : 'err';
-  const title = [
-    `${tr('体检', 'Check')} ${h.checked_at ? new Date(h.checked_at).toLocaleString() : ''}${h.tier ? ` · ${h.tier}` : ''}`,
-    ...(h.reasons ?? []),
-    h.evidence ? `${tr('上游原文', 'Upstream')}: ${h.evidence}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const { toast } = useUi();
+  const api = useApi();
+  const [busy, setBusy] = useState(false);
+  const verify = safeVerifyURL(h);
+  const recheck = id
+    ? async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setBusy(true);
+        try {
+          await api.startHealthCheck([id]);
+          toast(tr('已开始重新体检，约 30 秒后刷新查看', 'Re-check started; refresh in ~30s'));
+          onRechecked?.();
+        } catch (err) {
+          toast(String((err as Error)?.message ?? err), 'err');
+        } finally {
+          setBusy(false);
+        }
+      }
+    : undefined;
+  if (!h && !recheck) return null;
+  const kind = !h ? undefined : h.status === 'pass' ? (h.categories?.includes('region_warn') ? 'warn' : 'ok') : h.status === 'running' ? undefined : 'err';
+  const title = h
+    ? [
+        `${tr('体检', 'Check')} ${h.checked_at ? new Date(h.checked_at).toLocaleString() : ''}${h.tier ? ` · ${h.tier}` : ''}`,
+        ...(h.reasons ?? []),
+        h.evidence ? `${tr('上游原文', 'Upstream')}: ${h.evidence}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : tr('尚未体检', 'Not checked yet');
   return (
-    <span title={title} data-testid="health-badge">
+    <span title={title} data-testid="health-badge" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
       <Badge kind={kind} dot>
-        {healthBadgeText(h, tr)}
+        {h ? healthBadgeText(h, tr) : tr('未体检', 'Unchecked')}
       </Badge>
+      {verify && (
+        <a href={verify} target="_blank" rel="noopener noreferrer" className="small" data-testid="health-verify-link" onClick={(e) => e.stopPropagation()}
+          title={tr('在浏览器中用该账号登录并完成验证，然后点「重新体检」', 'Sign in with this account in a browser to verify, then click Re-check')}>
+          {tr('去验证', 'Verify')}
+        </a>
+      )}
+      {recheck && h?.status !== 'running' && (
+        <button className="btn btn-sm btn-link" disabled={busy} onClick={recheck} data-testid="health-recheck">
+          {tr('重新体检', 'Re-check')}
+        </button>
+      )}
     </span>
   );
 }

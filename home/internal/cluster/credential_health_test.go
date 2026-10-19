@@ -36,7 +36,11 @@ func TestHealthSweepIDs(t *testing.T) {
 	repo, ctx := newTestKVRepository(t)
 	db, _ := repo.database()
 	for i, id := range []string{"r1", "r2", "n1", "old"} {
-		if err := db.Exec(`INSERT INTO auth (uuid, auth_json, id, provider, status, disabled, seq, created_at) VALUES (?, '{}', ?, 'antigravity', 'active', false, ?, ?)`, id, id, i+1, time.Now()).Error; err != nil {
+		created := time.Now()
+		if id == "old" {
+			created = created.Add(-72 * time.Hour) // new credentials (any path) are swept for 24h
+		}
+		if err := db.Exec(`INSERT INTO auth (uuid, auth_json, id, provider, status, disabled, seq, created_at) VALUES (?, '{}', ?, 'antigravity', 'active', false, ?, ?)`, id, id, i+1, created).Error; err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -54,6 +54,56 @@ type HealthProbeResult struct {
 	GenBody         string `json:"gen_body,omitempty"`
 	GenError        string `json:"gen_error,omitempty"`
 	GenLatencyMilli int64  `json:"gen_latency_ms,omitempty"`
+	// VerifyURL is the account-verification link upstream returned with a
+	// VALIDATION_REQUIRED error (loadCodeAssist or the live request), if any.
+	VerifyURL string `json:"verify_url,omitempty"`
+}
+
+// ExtractValidationURL finds the account-verification link in an upstream body:
+// ErrorInfo metadata.validation_url, a validationUrl field anywhere (e.g.
+// loadCodeAssist ineligibleTiers), or a google.rpc.Help link to the Google
+// account verification flow. Returns "" when there is none.
+func ExtractValidationURL(body []byte) string {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return ""
+	}
+	var found string
+	var walk func(v gjson.Result)
+	walk = func(v gjson.Result) {
+		if found != "" {
+			return
+		}
+		switch {
+		case v.IsObject():
+			v.ForEach(func(k, val gjson.Result) bool {
+				key := strings.ToLower(k.String())
+				if (key == "validation_url" || key == "validationurl") && val.Type == gjson.String && strings.HasPrefix(val.String(), "https://") {
+					found = val.String()
+					return false
+				}
+				walk(val)
+				return found == ""
+			})
+		case v.IsArray():
+			v.ForEach(func(_, val gjson.Result) bool { walk(val); return found == "" })
+		}
+	}
+	root := gjson.ParseBytes(body)
+	walk(root)
+	if found == "" {
+		root.Get("error.details").ForEach(func(_, d gjson.Result) bool {
+			d.Get("links").ForEach(func(_, l gjson.Result) bool {
+				u := l.Get("url").String()
+				if strings.HasPrefix(u, "https://accounts.google.com/") {
+					found = u
+					return false
+				}
+				return true
+			})
+			return found == ""
+		})
+	}
+	return found
 }
 
 // HealthInputs are the non-upstream facts of a check (from the store).
@@ -214,6 +264,9 @@ func (r *Runtime) HealthProbe(ctx context.Context, id, model string) HealthProbe
 		out.GenError = err.Error()
 	} else if code < 200 || code >= 300 {
 		out.GenBody = clip(string(body), 8000)
+		if out.VerifyURL == "" {
+			out.VerifyURL = ExtractValidationURL(body)
+		}
 	}
 	r.recordHealthCheckUsage(full, model, started, code, body, err)
 	return out
@@ -240,6 +293,7 @@ func (r *Runtime) healthLoadCodeAssist(ctx context.Context, full *coreauth.Auth,
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	_ = resp.Body.Close()
 	out.TierStatus = resp.StatusCode
+	out.VerifyURL = ExtractValidationURL(data)
 	if resp.StatusCode != http.StatusOK {
 		out.TierError = clip(string(data), 8000)
 		return

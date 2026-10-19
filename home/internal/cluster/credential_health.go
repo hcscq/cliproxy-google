@@ -26,6 +26,7 @@ type CredentialHealthCheck struct {
 	CheckedAt  time.Time  `gorm:"column:checked_at;not null" json:"checked_at"`
 	BatchID    string     `gorm:"column:batch_id" json:"batch_id,omitempty"`
 	ImportedAt *time.Time `gorm:"column:imported_at" json:"imported_at,omitempty"`
+	VerifyURL  string     `gorm:"column:verify_url" json:"verify_url,omitempty"`
 }
 
 // TableName returns the database table name.
@@ -68,6 +69,7 @@ func ensureCredentialHealthTables(ctx context.Context, db *gorm.DB) error {
 			`CREATE TABLE IF NOT EXISTS "credential_health_check" ("auth_uuid" text PRIMARY KEY, "status" text NOT NULL, "categories" text, "reasons" text, "evidence" text, "probe" text, "tier" text, "model" text, "checked_at" timestamptz NOT NULL DEFAULT now(), "batch_id" text, "imported_at" timestamptz)`,
 			`CREATE TABLE IF NOT EXISTS "credential_import" ("auth_uuid" text PRIMARY KEY, "batch_id" text NOT NULL, "imported_at" timestamptz NOT NULL DEFAULT now(), "source" text)`,
 			`CREATE INDEX IF NOT EXISTS "idx_credential_import_batch" ON "credential_import" ("batch_id")`,
+			`ALTER TABLE "credential_health_check" ADD COLUMN IF NOT EXISTS "verify_url" text`,
 		} {
 			if err := tx.Exec(stmt).Error; err != nil {
 				return err
@@ -238,9 +240,10 @@ func (r *Repository) ListHealthSweepIDs(ctx context.Context, limit int) ([]strin
 	err = db.WithContext(contextOrBackground(ctx)).Raw(`SELECT a.uuid FROM auth a
 		WHERE a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false AND COALESCE(a.provider,'') = 'antigravity'
 		AND (a.uuid IN (SELECT auth_uuid FROM credential_reserve WHERE reserved)
-		     OR a.uuid IN (SELECT auth_uuid FROM credential_import WHERE imported_at > ?))
+		     OR a.uuid IN (SELECT auth_uuid FROM credential_import WHERE imported_at > ?)
+		     OR a.created_at > ?) -- every new credential (OAuth login, API upload, import)
 		AND NOT EXISTS (SELECT 1 FROM credential_health_check h WHERE h.auth_uuid = a.uuid AND (h.status <> 'running' OR h.checked_at > ?))
-		ORDER BY a.seq LIMIT ?`, now.Add(-24*time.Hour), now.Add(-15*time.Minute), limit).Scan(&ids).Error
+		ORDER BY a.seq LIMIT ?`, now.Add(-24*time.Hour), now.Add(-24*time.Hour), now.Add(-15*time.Minute), limit).Scan(&ids).Error
 	return ids, err
 }
 

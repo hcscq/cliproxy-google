@@ -130,6 +130,12 @@ func (h *Handler) checkOne(parent context.Context, rec cluster.CredentialHealthC
 	rec.Probe = string(raw)
 	rec.Tier = probe.Tier
 	rec.Model = cfg.Model
+	rec.VerifyURL = ""
+	for _, c := range v.Categories {
+		if c == home.HealthNeedsVerify {
+			rec.VerifyURL = probe.VerifyURL
+		}
+	}
 	rec.CheckedAt = time.Now().UTC()
 	if err := h.repo.SaveHealthCheck(context.WithoutCancel(ctx), rec); err != nil {
 		log.Warnf("health check %s: save: %v", id, err)
@@ -146,6 +152,9 @@ func healthItem(rec cluster.CredentialHealthCheck, email string, seq int64) gin.
 		"checked_at": rec.CheckedAt, "tier": rec.Tier, "model": rec.Model}
 	if rec.Evidence != "" {
 		item["evidence"] = rec.Evidence
+	}
+	if rec.VerifyURL != "" {
+		item["verify_url"] = rec.VerifyURL
 	}
 	if rec.BatchID != "" {
 		item["batch_id"] = rec.BatchID
@@ -339,7 +348,11 @@ func (h *Handler) healthAnnotations(ctx context.Context) map[string]gin.H {
 	}
 	out := make(map[string]gin.H, len(all))
 	for id, r := range all {
-		out[id] = gin.H{"status": r.Status, "categories": r.CategoryList(), "reasons": r.ReasonList(), "checked_at": r.CheckedAt, "tier": r.Tier, "evidence": clipString(r.Evidence, 600)}
+		item := gin.H{"status": r.Status, "categories": r.CategoryList(), "reasons": r.ReasonList(), "checked_at": r.CheckedAt, "tier": r.Tier, "evidence": clipString(r.Evidence, 600)}
+		if r.VerifyURL != "" {
+			item["verify_url"] = r.VerifyURL
+		}
+		out[id] = item
 	}
 	return out
 }
