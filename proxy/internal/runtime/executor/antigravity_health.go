@@ -3,6 +3,7 @@ package executor
 import (
 	"container/list"
 	"context"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	"regexp"
 	"strconv"
 	"sync/atomic"
@@ -48,6 +49,7 @@ var antigravityHealthLive atomic.Pointer[config.AntigravityHealthConfig]
 // SetAntigravityHealthConfig installs the live health config (on load/reload).
 func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 	antigravityHealthLive.Store(&h)
+	thinking.SetClampUnsupportedLevels(h.ClampThinkingLevel == nil || *h.ClampThinkingLevel)
 }
 
 const defaultAntigravityTTFBByFamily = "3.8=22"

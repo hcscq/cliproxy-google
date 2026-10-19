@@ -4,6 +4,7 @@ package thinking
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	log "github.com/sirupsen/logrus"
@@ -80,7 +81,7 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 	if !modelFamilyMismatch && isGeminiFamily(fromFormat) && strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude") {
 		modelFamilyMismatch = true
 	}
-	allowClampUnsupported := toHasLevelSupport && (!isSameProviderFamily(fromFormat, toFormat) || modelFamilyMismatch)
+	allowClampUnsupported := toHasLevelSupport && (!isSameProviderFamily(fromFormat, toFormat) || modelFamilyMismatch || (clampUnsupportedLevels.Load() && isGeminiTargetFormat(toFormat)))
 
 	// strictBudget determines whether to enforce strict budget range validation.
 	// This applies when: (1) config comes from request body (not suffix), (2) source format is known,
@@ -430,4 +431,21 @@ func logClamp(provider, model string, original, clampedTo, min, max int) {
 		"max":            max,
 		"clamped_to":     clampedTo,
 	}).Debug("thinking: budget clamped |")
+}
+
+// clampUnsupportedLevels makes ValidateConfig clamp an unsupported level to the
+// nearest supported one for same-family requests too (panel setting
+// clamp-thinking-level, default on). Only the thinking level changes; the model
+// is never changed.
+var clampUnsupportedLevels atomic.Bool
+
+func init() { clampUnsupportedLevels.Store(true) }
+
+// SetClampUnsupportedLevels toggles same-family level clamping.
+func SetClampUnsupportedLevels(on bool) { clampUnsupportedLevels.Store(on) }
+
+// isGeminiTargetFormat limits clamp-thinking-level to Gemini-protocol targets
+// (Gemini API, Gemini CLI, Antigravity); other providers stay strict.
+func isGeminiTargetFormat(f string) bool {
+	return strings.HasPrefix(f, "gemini") || f == "antigravity"
 }

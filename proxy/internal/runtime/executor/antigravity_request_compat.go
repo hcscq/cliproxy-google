@@ -6,6 +6,7 @@ import (
 
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -158,4 +159,148 @@ func geminiContentIsBlankText(content gjson.Result) bool {
 		}
 	}
 	return true
+}
+
+func antigravityRepairFunctionResponseNamesEnabled() bool {
+	if live := antigravityHealthLive.Load(); live != nil && live.RepairFunctionResponseNames != nil {
+		return *live.RepairFunctionResponseNames
+	}
+	return true
+}
+
+func antigravityDropBuiltinToolsWithFunctions() bool {
+	if live := antigravityHealthLive.Load(); live != nil && live.BuiltinToolsWithFunctions != nil {
+		return !strings.EqualFold(strings.TrimSpace(*live.BuiltinToolsWithFunctions), "keep")
+	}
+	return true
+}
+
+type geminiPendingCall struct{ id, name string }
+
+// repairGeminiFunctionResponseNames fills functionResponse.name from the
+// functionCall it answers when the client sent an empty name or one that
+// matches none of the pending calls (OpenAI-style tool results carry only the
+// call id; some clients then emit "unknown_function"). The call is found by id,
+// else by position when the counts match. Valid names are never touched.
+func repairGeminiFunctionResponseNames(payload []byte, path string) []byte {
+	contents := util.GetGJSONBytesNoCopy(payload, path)
+	if !contents.IsArray() {
+		return payload
+	}
+	out := payload
+	var pending []geminiPendingCall
+	for ci, content := range contents.Array() {
+		parts := content.Get("parts")
+		if !parts.IsArray() {
+			continue
+		}
+		var calls []geminiPendingCall
+		type respRef struct {
+			idx     int
+			key, id string
+			name    string
+		}
+		var resps []respRef
+		for pi, part := range parts.Array() {
+			for _, k := range []string{"functionCall", "function_call"} {
+				if c := part.Get(k); c.Exists() {
+					calls = append(calls, geminiPendingCall{id: c.Get("id").String(), name: c.Get("name").String()})
+				}
+			}
+			for _, k := range []string{"functionResponse", "function_response"} {
+				if r := part.Get(k); r.Exists() {
+					resps = append(resps, respRef{idx: pi, key: k, id: r.Get("id").String(), name: r.Get("name").String()})
+				}
+			}
+		}
+		if len(calls) > 0 {
+			pending = calls
+			continue
+		}
+		if len(resps) == 0 || len(pending) == 0 {
+			continue
+		}
+		names := map[string]bool{}
+		for _, c := range pending {
+			names[c.name] = true
+		}
+		for ri, r := range resps {
+			if r.name != "" && names[r.name] {
+				continue
+			}
+			target := ""
+			if r.id != "" {
+				for _, c := range pending {
+					if c.id == r.id {
+						target = c.name
+						break
+					}
+				}
+			}
+			if target == "" && len(resps) == len(pending) {
+				target = pending[ri].name
+			}
+			if target == "" {
+				continue
+			}
+			p := path + "." + strconv.Itoa(ci) + ".parts." + strconv.Itoa(r.idx) + "." + r.key + ".name"
+			if updated, err := sjson.SetBytes(out, p, target); err == nil {
+				out = updated
+			}
+		}
+		pending = nil
+	}
+	return out
+}
+
+var geminiBuiltinToolKeys = []string{"googleSearch", "google_search", "googleSearchRetrieval", "google_search_retrieval", "codeExecution", "code_execution", "urlContext", "url_context"}
+
+// dropGeminiBuiltinToolsWhenFunctions removes built-in tool entries when the
+// request also declares functions; Antigravity rejects the mix (400 "Please
+// enable tool_config.include_server_side_tool_invocations") and ignores
+// toolConfig, so the function tools are kept. Requests with only built-in
+// tools, or only functions, are unchanged.
+func dropGeminiBuiltinToolsWhenFunctions(payload []byte, path string) []byte {
+	tools := util.GetGJSONBytesNoCopy(payload, path)
+	if !tools.IsArray() {
+		return payload
+	}
+	hasFn, hasBuiltin := false, false
+	for _, t := range tools.Array() {
+		if d := t.Get("functionDeclarations"); d.IsArray() && len(d.Array()) > 0 {
+			hasFn = true
+		}
+		if d := t.Get("function_declarations"); d.IsArray() && len(d.Array()) > 0 {
+			hasFn = true
+		}
+		for _, k := range geminiBuiltinToolKeys {
+			if t.Get(k).Exists() {
+				hasBuiltin = true
+			}
+		}
+	}
+	if !hasFn || !hasBuiltin {
+		return payload
+	}
+	kept := make([]string, 0, len(tools.Array()))
+	dropped := 0
+	for _, t := range tools.Array() {
+		raw := []byte(t.Raw)
+		for _, k := range geminiBuiltinToolKeys {
+			if t.Get(k).Exists() {
+				raw, _ = sjson.DeleteBytes(raw, k)
+				dropped++
+			}
+		}
+		if len(gjson.ParseBytes(raw).Map()) == 0 {
+			continue
+		}
+		kept = append(kept, string(raw))
+	}
+	updated, err := sjson.SetRawBytes(payload, path, []byte("["+strings.Join(kept, ",")+"]"))
+	if err != nil {
+		return payload
+	}
+	log.Warnf("antigravity: dropped %d built-in tool(s) sent together with function declarations (upstream rejects the mix; setting builtin-tools-with-functions=keep to pass through)", dropped)
+	return updated
 }

@@ -525,6 +525,12 @@ func ensureAntigravityGeminiBoundaryUserContent(modelName string, payload []byte
 	if antigravityDropEmptyPartsEnabled() {
 		payload = dropGeminiEmptyParts(payload, "request.contents")
 	}
+	if antigravityRepairFunctionResponseNamesEnabled() {
+		payload = repairGeminiFunctionResponseNames(payload, "request.contents")
+	}
+	if antigravityDropBuiltinToolsWithFunctions() {
+		payload = dropGeminiBuiltinToolsWhenFunctions(payload, "request.tools")
+	}
 	payload = helps.EnsureGeminiBoundaryUserContent(payload, "request.contents")
 	return fixGeminiTrailingModelTurn(payload, "request.contents", antigravityTrailingModelTurnText())
 }

@@ -258,6 +258,10 @@ func prepareAntigravityGeminiReasoningReplayPayload(ctx context.Context, modelNa
 	if !antigravityUsesReasoningReplayCache(modelName) {
 		return payload, antigravityReasoningReplayScope{}, nil
 	}
+	// Repair placeholder functionResponse names before the pairing check below.
+	if antigravityRepairFunctionResponseNamesEnabled() {
+		payload = repairGeminiFunctionResponseNames(payload, "request.contents")
+	}
 	updated, scope, replayApplied, errReplay := applyAntigravityReasoningReplayCache(ctx, modelName, req, opts, payload)
 	if errReplay != nil {
 		// Replay state is an optimization, not a correctness requirement: a ledger

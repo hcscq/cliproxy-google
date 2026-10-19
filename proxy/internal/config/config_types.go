@@ -225,6 +225,22 @@ type AntigravityHealthConfig struct {
 	// 400 "required oneof field 'data'" / "Unsupported input part type", and
 	// removes contents left with no parts. nil = on.
 	DropEmptyParts *bool `yaml:"drop-empty-parts,omitempty" json:"drop-empty-parts,omitempty"`
+	// RepairFunctionResponseNames sets functionResponse.name from the matching
+	// functionCall (by id, else by position) when the client sent an empty or
+	// placeholder name such as "unknown_function", which otherwise fails with
+	// 400 "functionResponse.name ... does not match functionCall.name". nil = on.
+	RepairFunctionResponseNames *bool `yaml:"repair-function-response-names,omitempty" json:"repair-function-response-names,omitempty"`
+	// BuiltinToolsWithFunctions handles requests that declare built-in tools
+	// (googleSearch / codeExecution / urlContext) together with function
+	// declarations. Antigravity rejects that mix with 400 "Please enable
+	// tool_config.include_server_side_tool_invocations" and ignores toolConfig.
+	// "drop-builtin" (nil/default) keeps the functions and drops the built-in
+	// tools; "keep" passes the request through unchanged.
+	BuiltinToolsWithFunctions *string `yaml:"builtin-tools-with-functions,omitempty" json:"builtin-tools-with-functions,omitempty"`
+	// ClampThinkingLevel maps a thinking level the model does not support to
+	// the nearest supported one (e.g. "minimal" -> "low") instead of failing
+	// with 400 "level ... not supported". The model is never changed. nil = on.
+	ClampThinkingLevel *bool `yaml:"clamp-thinking-level,omitempty" json:"clamp-thinking-level,omitempty"`
 	// Per-credential request caps by subscription tier (Home). Every upstream
 	// attempt counts (retries included). 0 = unlimited (default). Credentials
 	// can override via metadata request_cap_mode (custom|unlimited).
