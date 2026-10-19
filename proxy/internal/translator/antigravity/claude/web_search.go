@@ -27,7 +27,42 @@ type webSearchCitedTextBlock struct {
 const antigravityWebSearchSystemInstruction = "You are a search engine bot. You will be given a query from a user. Your task is to search the web for relevant information that will help the user. You MUST perform a web search. Do not respond or interact with the user, please respond as if they typed the query into a search bar."
 
 func antigravitySupportsNativeGoogleSearch(model string) bool {
-	return registry.AntigravityWebSearchModelFor(model) != ""
+	if registry.AntigravityWebSearchModelFor(model) != "" {
+		return true
+	}
+	return antigravityGeminiTextModelHasGoogleSearch(model)
+}
+
+// antigravityGeminiTextModelHasGoogleSearch covers Gemini text models only
+// when the per-credential webSearchModelIds hints are absent altogether (no
+// antigravity model flagged SupportsWebSearch — seen in production). When any
+// model is flagged the hints are authoritative and this returns false.
+// googleSearch works on these models upstream; without this the Claude
+// web_search tool was dropped and the model answered with a hallucinated
+// web_search call or MALFORMED_FUNCTION_CALL. An explicit catalog veto
+// (NativeCapabilities.WebSearch=false) is still honoured.
+func antigravityGeminiTextModelHasGoogleSearch(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "("); i >= 0 && strings.HasSuffix(m, ")") {
+		m = strings.TrimSpace(m[:i])
+	}
+	if !strings.HasPrefix(m, "gemini-") || strings.Contains(m, "image") {
+		return false
+	}
+	for _, info := range registry.GetGlobalRegistry().GetAvailableModelsByProvider("antigravity") {
+		if info == nil {
+			continue
+		}
+		if info.SupportsWebSearch {
+			return false // hints present: authoritative
+		}
+		if strings.EqualFold(strings.TrimSpace(info.ID), m) {
+			if c := info.NativeCapabilities; c != nil && c.WebSearch != nil && !*c.WebSearch {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func isClaudeTypedWebSearchToolType(toolType string) bool {
