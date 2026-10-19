@@ -369,7 +369,10 @@ func (r *Repository) ListHealthRecheckIDs(ctx context.Context, backoff []time.Du
 				continue
 			}
 		}
-		if recoverN > 0 && x.Idx != "" {
+		// Success-triggered re-check fires once per failure (first failed result only);
+		// after that the backoff governs, so a credential serving traffic is not re-probed
+		// on every sweep.
+		if recoverN > 0 && x.Idx != "" && x.RecheckCount == 0 && now.Sub(x.CheckedAt) >= time.Minute {
 			var n int64
 			if err := tx.Raw(`SELECT count(*) FROM (SELECT 1 FROM usage WHERE auth_index = ? AND "timestamp" > ? AND NOT failed
 				AND COALESCE(event_type,'') <> 'probe' LIMIT ?) s`, x.Idx, x.CheckedAt, recoverN).Scan(&n).Error; err == nil && n >= int64(recoverN) {
