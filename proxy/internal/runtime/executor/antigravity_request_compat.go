@@ -170,9 +170,9 @@ func antigravityRepairFunctionResponseNamesEnabled() bool {
 
 func antigravityDropBuiltinToolsWithFunctions() bool {
 	if live := antigravityHealthLive.Load(); live != nil && live.BuiltinToolsWithFunctions != nil {
-		return !strings.EqualFold(strings.TrimSpace(*live.BuiltinToolsWithFunctions), "keep")
+		return strings.EqualFold(strings.TrimSpace(*live.BuiltinToolsWithFunctions), "drop-builtin")
 	}
-	return true
+	return false // default keep: never drop tools silently
 }
 
 type geminiPendingCall struct{ id, name string }

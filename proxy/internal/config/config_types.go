@@ -234,8 +234,8 @@ type AntigravityHealthConfig struct {
 	// (googleSearch / codeExecution / urlContext) together with function
 	// declarations. Antigravity rejects that mix with 400 "Please enable
 	// tool_config.include_server_side_tool_invocations" and ignores toolConfig.
-	// "drop-builtin" (nil/default) keeps the functions and drops the built-in
-	// tools; "keep" passes the request through unchanged.
+	// "keep" (nil/default) passes the request through unchanged; "drop-builtin"
+	// keeps the functions and drops the built-in tools (loses web search).
 	BuiltinToolsWithFunctions *string `yaml:"builtin-tools-with-functions,omitempty" json:"builtin-tools-with-functions,omitempty"`
 	// ClampThinkingLevel maps a thinking level the model does not support to
 	// the nearest supported one (e.g. "minimal" -> "low") instead of failing

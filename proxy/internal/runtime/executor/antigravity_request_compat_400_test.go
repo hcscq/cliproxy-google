@@ -67,15 +67,21 @@ func TestAntigravity400CompatSettingsOff(t *testing.T) {
 		t.Fatal("settings off must disable the repairs")
 	}
 	antigravityHealthLive.Store(&config.AntigravityHealthConfig{})
-	if !antigravityRepairFunctionResponseNamesEnabled() || !antigravityDropBuiltinToolsWithFunctions() {
-		t.Fatal("defaults must be on")
+	if !antigravityRepairFunctionResponseNamesEnabled() || antigravityDropBuiltinToolsWithFunctions() {
+		t.Fatal("defaults: repair on, built-in tools kept")
+	}
+	drop := "drop-builtin"
+	antigravityHealthLive.Store(&config.AntigravityHealthConfig{BuiltinToolsWithFunctions: &drop})
+	if !antigravityDropBuiltinToolsWithFunctions() {
+		t.Fatal("drop-builtin must drop")
 	}
 }
 
 func TestEnsureBoundaryAppliesFunctionNameRepair(t *testing.T) {
 	prev := antigravityHealthLive.Load()
 	defer antigravityHealthLive.Store(prev)
-	antigravityHealthLive.Store(&config.AntigravityHealthConfig{})
+	drop := "drop-builtin"
+	antigravityHealthLive.Store(&config.AntigravityHealthConfig{BuiltinToolsWithFunctions: &drop})
 	in := []byte(`{"model":"gemini-3.8-flash-tiered","request":{"contents":[{"role":"user","parts":[{"text":"q"}]},{"role":"model","parts":[{"functionCall":{"name":"list_artifacts","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"name":"unknown_function","response":{}}}]}],"tools":[{"googleSearch":{}},{"functionDeclarations":[{"name":"list_artifacts"}]}]}}`)
 	out := ensureAntigravityGeminiBoundaryUserContent("gemini-3.8-flash-tiered", in)
 	if got := gjson.GetBytes(out, "request.contents.2.parts.0.functionResponse.name").String(); got != "list_artifacts" {
