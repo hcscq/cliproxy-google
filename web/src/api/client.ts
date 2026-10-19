@@ -286,7 +286,7 @@ export class ApiClient {
     return this.get<CatalogResponse>('/models/catalog');
   }
   refreshSubscriptionTiers(ids: string[]) {
-    return this.post<{ results: { id: string; ok: boolean; tier?: string; tier_name?: string }[] }>('/auth-files/subscription/refresh', { ids });
+    return this.post<{ results: { id: string; ok: boolean; tier?: string; tier_name?: string }[] }>('/credentials/subscription/refresh', { ids });
   }
   refreshAntigravityCatalog(authId?: string) {
     return this.post<CatalogResponse>('/models/catalog/refresh', authId ? { auth_id: authId } : {});
