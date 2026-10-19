@@ -50,3 +50,14 @@ func TestReconcileHealthTierDowngradeAndNoops(t *testing.T) {
 		t.Fatal("empty tier ignored")
 	}
 }
+
+func TestReconcileHealthTierUltraMeetsPro(t *testing.T) {
+	rec := cluster.CredentialHealthCheck{Status: "fail", Categories: "tier", Reasons: "订阅为 g1-ultra-tier，期望 pro", Tier: "g1-ultra-tier"}
+	if !reconcileHealthTier(&rec, "g1-ultra-tier", "pro") || rec.Status != "pass" || rec.Categories != "" {
+		t.Fatalf("ultra must pass expected pro: %+v", rec)
+	}
+	ok := cluster.CredentialHealthCheck{Status: "pass", Tier: "g1-ultra-tier"}
+	if reconcileHealthTier(&ok, "g1-ultra-tier", "pro") {
+		t.Fatal("no change expected")
+	}
+}

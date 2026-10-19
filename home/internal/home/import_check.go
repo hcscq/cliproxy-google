@@ -133,11 +133,29 @@ func clip(s string, n int) string {
 	return s
 }
 
+// tierMatches reports whether tier meets or exceeds the expected class
+// (free < pro < ultra), so an Ultra account passes an expected "pro".
 func tierMatches(tier, expected string) bool {
 	if expected == "" {
 		return true
 	}
-	return reserveTierClass(tier) == expected
+	want := tierClassRank(expected)
+	if want == 0 {
+		return reserveTierClass(tier) == expected // unrecognised setting: exact match as before
+	}
+	return tierClassRank(reserveTierClass(tier)) >= want
+}
+
+func tierClassRank(class string) int {
+	switch class {
+	case "ultra":
+		return 3
+	case "pro":
+		return 2
+	case "free":
+		return 1
+	}
+	return 0
 }
 
 // ClassifyHealth turns probe + inputs into a verdict (pure, tested).
