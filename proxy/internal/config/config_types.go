@@ -231,12 +231,18 @@ type AntigravityHealthConfig struct {
 	// 400 "functionResponse.name ... does not match functionCall.name". nil = on.
 	RepairFunctionResponseNames *bool `yaml:"repair-function-response-names,omitempty" json:"repair-function-response-names,omitempty"`
 	// BuiltinToolsWithFunctions handles requests that declare built-in tools
-	// (googleSearch / codeExecution / urlContext) together with function
+	// (googleSearch / urlContext / codeExecution) together with function
 	// declarations. Antigravity rejects that mix with 400 "Please enable
 	// tool_config.include_server_side_tool_invocations" and ignores toolConfig.
-	// "keep" (nil/default) passes the request through unchanged; "drop-builtin"
-	// keeps the functions and drops the built-in tools (loses web search).
+	// "emulate" (nil/default) runs a googleSearch/urlContext pre-pass on the
+	// same model and then the functions-only request with the findings and
+	// sources injected (two upstream calls; codeExecution is passed through);
+	// "keep" passes the request through unchanged; "drop-builtin" keeps the
+	// functions and drops the built-in tools (loses web search).
 	BuiltinToolsWithFunctions *string `yaml:"builtin-tools-with-functions,omitempty" json:"builtin-tools-with-functions,omitempty"`
+	// BuiltinPresearchTimeoutSeconds bounds the emulate pre-search pass; it is
+	// also capped at half the attempt's first-byte limit. 0 = 20.
+	BuiltinPresearchTimeoutSeconds int `yaml:"builtin-presearch-timeout-seconds,omitempty" json:"builtin-presearch-timeout-seconds,omitempty"`
 	// ClampThinkingLevel maps a thinking level the model does not support to
 	// the nearest supported one (e.g. "minimal" -> "low") instead of failing
 	// with 400 "level ... not supported". The model is never changed. nil = on.

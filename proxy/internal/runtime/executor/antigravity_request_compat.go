@@ -169,10 +169,7 @@ func antigravityRepairFunctionResponseNamesEnabled() bool {
 }
 
 func antigravityDropBuiltinToolsWithFunctions() bool {
-	if live := antigravityHealthLive.Load(); live != nil && live.BuiltinToolsWithFunctions != nil {
-		return strings.EqualFold(strings.TrimSpace(*live.BuiltinToolsWithFunctions), "drop-builtin")
-	}
-	return false // default keep: never drop tools silently
+	return antigravityBuiltinToolsMode() == builtinToolsModeDrop
 }
 
 type geminiPendingCall struct{ id, name string }

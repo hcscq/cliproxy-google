@@ -129,9 +129,11 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 
 	health := antigravityHealthSettingsFrom(e.cfg)
-	attemptTimer := newAntigravityAttemptTimer(ctx, health.nonStreamLimit(ctx, baseModel))
+	attemptLimit := health.nonStreamLimit(ctx, baseModel)
+	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, attemptLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	attemptTimer := newAntigravityAttemptTimer(ctx, attemptLimit)
 	defer attemptTimer.cancel()
-	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, requestPayload, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, sendPayload, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
 		err = errReq
 		return resp, err
@@ -218,6 +220,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 		clearAntigravityCreditsFailureState(auth)
 	}
 	cacheAntigravityReasoningReplayFromResponse(ctx, replayScope, requestPayload, bodyBytes)
+	bodyBytes = builtinEmu.adjustResponse(bodyBytes)
 	bodyBytes = e.resolveWebSearchGroundingURLs(ctx, auth, from, originalPayload, translated, bodyBytes)
 	reporter.ObserveResponseModel(bodyBytes)
 	var param any
@@ -236,7 +239,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)
 	}
-	resp = cliproxyexecutor.Response{Payload: converted, Headers: withThinkingNote(httpResp.Header.Clone(), reporter)}
+	resp = cliproxyexecutor.Response{Payload: converted, Headers: builtinEmu.setHeader(withThinkingNote(httpResp.Header.Clone(), reporter))}
 	reporter.EnsurePublished(ctx)
 	return resp, nil
 }
@@ -376,9 +379,11 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	}
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 	health := antigravityHealthSettingsFrom(e.cfg)
-	attemptTimer := newAntigravityAttemptTimer(ctx, health.streamTTFB(ctx, baseModel))
+	attemptLimit := health.streamTTFB(ctx, baseModel)
+	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, attemptLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	attemptTimer := newAntigravityAttemptTimer(ctx, attemptLimit)
 	defer attemptTimer.cancel()
-	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	httpReq, errReq := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, sendPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
 		err = errReq
 		return resp, err
@@ -525,7 +530,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			_, _ = buffer.Write([]byte("\n"))
 		}
 	}
-	resp = cliproxyexecutor.Response{Payload: e.convertStreamToNonStream(buffer.Bytes())}
+	resp = cliproxyexecutor.Response{Payload: builtinEmu.adjustResponse(e.convertStreamToNonStream(buffer.Bytes()))}
 
 	resp.Payload = e.resolveWebSearchGroundingURLs(ctx, auth, from, originalPayload, translated, resp.Payload)
 	reporter.ObserveResponseModel(resp.Payload)
@@ -538,7 +543,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)
 	}
-	resp = cliproxyexecutor.Response{Payload: converted, Headers: withThinkingNote(httpResp.Header.Clone(), reporter)}
+	resp = cliproxyexecutor.Response{Payload: converted, Headers: builtinEmu.setHeader(withThinkingNote(httpResp.Header.Clone(), reporter))}
 	reporter.EnsurePublished(ctx)
 
 	return resp, nil

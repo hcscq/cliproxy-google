@@ -141,6 +141,8 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	if emulateStream {
 		ttfbLimit = health.nonStream
 	}
+	// The pre-search pass (if any) runs before the first-byte timer starts.
+	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, ttfbLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	attemptCtx, cancelAttempt := context.WithCancel(ctx)
 	attemptStarted := time.Now()
 	var ttfbTimedOut atomic.Bool
@@ -180,7 +182,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		}
 		return nil
 	}
-	httpReq, errReq := e.buildRequest(attemptCtx, auth, token, baseModel, requestPayload, !emulateStream, streamAlt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+	httpReq, errReq := e.buildRequest(attemptCtx, auth, token, baseModel, sendPayload, !emulateStream, streamAlt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 	if errReq != nil {
 		err = errReq
 		return nil, err
@@ -381,6 +383,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 				replayAccumulator.ObserveSSELine(line)
 			}
 
+			line = builtinEmu.adjustSSELine(line)
 			// Capture accounting before the client-facing filter renames usage.
 			streamUsage.Observe(helps.ParseAntigravityStreamUsage(line))
 
@@ -567,7 +570,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			terminalDelivered = true
 		}
 	}(httpResp)
-	return &cliproxyexecutor.StreamResult{Headers: withThinkingNote(httpResp.Header.Clone(), reporter), Chunks: out}, nil
+	return &cliproxyexecutor.StreamResult{Headers: builtinEmu.setHeader(withThinkingNote(httpResp.Header.Clone(), reporter)), Chunks: out}, nil
 }
 
 func (e *AntigravityExecutor) executeCompactionStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
