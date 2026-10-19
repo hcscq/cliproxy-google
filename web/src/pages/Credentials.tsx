@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { HealthBadge } from '../components/HealthCheck';
 import { downloadBlob as saveHealthCsv } from '../format';
 import { ReserveChip } from '../components/ReserveAlert';
-import { ColumnToggle, ProviderIcon, RowMenu, StatusPill, useHiddenColumns, type MenuItem } from '../components/CredRow';
+import { ColumnToggle, ProviderIcon, RowMenu, StatusPill, useHiddenColumns, useStoredFlag, type MenuItem } from '../components/CredRow';
 import { safeVerifyURL } from '../components/HealthCheck';
 import { useAction, useApi, useAsync, useUi } from "../app-context";
 import {
@@ -44,7 +44,7 @@ import {
 } from "../components/ui";
 import { useFlexColumns, type FlexCol } from "../components/flexCols";
 import { CallStatsCell, CallStatsPanel, StatsWindowSelect } from "../components/CallStats";
-import { QuotaStatusBadge, QuotaWindows, fmtRecover, fmtResetShort } from "../components/quota";
+import { QuotaInline, QuotaStatusBadge, QuotaWindows, fmtRecover, fmtResetShort } from "../components/quota";
 import {
   IconDownload,
   IconPlus,
@@ -403,7 +403,11 @@ export function CredentialsPage() {
   const groups = useGroupLookup();
   const colVis = useHiddenColumns("cred-cols-hidden-v2", ["priority", "created", "cap"]);
   const narrow = useNarrow();
-  const flexSpec = useMemo(() => CRED_COL_SPEC.filter((x) => !colVis.hidden.has(x.key) && !(narrow && SM_COLS.has(x.key))), [colVis.hidden, narrow]);
+  const [showClaude, toggleClaude] = useStoredFlag("cred-show-claude-quota", true);
+  const flexSpec = useMemo(
+    () => CRED_COL_SPEC.filter((x) => !colVis.hidden.has(x.key) && !(narrow && SM_COLS.has(x.key))).map((x) => (x.key === "quota" ? { ...x, min: showClaude ? 230 : 130 } : x)),
+    [colVis.hidden, narrow, showClaude],
+  );
   const credCols = useFlexColumns<HTMLDivElement>(flexSpec);
   const quota = useAsync(() => api.quotaCredentialsAll(), [], 60000);
   const egress = useAsync(() => api.egressStatus(), [], 30000);
@@ -574,7 +578,7 @@ export function CredentialsPage() {
         );
       } },
     { key: "quota", min: 140, weight: 1, sm: true, hideable: t("quota"), th: <SortTh k="quota" cur={sort} onSort={onSort}>{t("quota")}</SortTh>,
-      td: (c) => <div className="quota-cell"><QuotaWindows item={quotaById.get(c.id)} compact error={quota.error} loading={!quota.data && !quota.error} /></div> },
+      td: (c) => <div className="quota-cell"><QuotaInline item={quotaById.get(c.id)} showClaude={showClaude} error={quota.error} loading={!quota.data && !quota.error} /><ModelQuotaLine c={c} inline /></div> },
     { key: "success", min: 100, sm: true, hideable: tr("成功率", "OK %"),
       th: <span className="nowrap"><SortTh k="success" cur={sort} onSort={onSort}>{tr("成功率", "OK %")}</SortTh><StatsWindowSelect value={statsWindow} onChange={setStatsWindow} /></span>,
       td: (c) => <CallStatsCell s={c.call_stats} window={statsWindow} /> },
@@ -600,7 +604,7 @@ export function CredentialsPage() {
       } },
   ];
   const toggleable = allCols.filter((x) => x.hideable).map((x) => ({ key: x.key, label: x.hideable! }));
-  allCols[allCols.length - 1].th = <ColumnToggle cols={toggleable} hidden={colVis.hidden} onToggle={colVis.toggle} tr={tr} />;
+  allCols[allCols.length - 1].th = <ColumnToggle cols={toggleable} hidden={colVis.hidden} onToggle={colVis.toggle} tr={tr} extras={[{ label: tr("显示 Claude 额度", "Show Claude quota"), checked: showClaude, onToggle: toggleClaude, testId: "toggle-claude-quota" }]} />;
   const visibleCols = allCols.filter((x) => !colVis.hidden.has(x.key) && !(narrow && SM_COLS.has(x.key)));
 
   return (
@@ -938,7 +942,7 @@ function fmtN(n: number) {
 
 /** Hidden per-model quota windows (explicit upstream QUOTA_EXHAUSTED for one model while
  * the bucket may still show quota): model + upstream reset, compact. */
-function ModelQuotaLine({ c }: { c: Credential }) {
+function ModelQuotaLine({ c, inline }: { c: Credential; inline?: boolean }) {
   const list = coolingModels(c).filter((m) => m.model_quota || m.error_code === "model_quota_exhausted");
   if (!list.length) return null;
   const short = (m: string) => m.replace(/^gemini-/, "");
@@ -948,6 +952,8 @@ function ModelQuotaLine({ c }: { c: Credential }) {
       return `${m.model} 重置 ${m.next_retry_after ? new Date(m.next_retry_after).toLocaleString() : "?"}${probe}`;
     })
     .join("\n");
+  if (inline)
+    return <span className="small" title={`模型额度耗尽\n${title}`} style={{ color: "var(--warn, #b7791f)", marginLeft: 6 }} data-testid="model-quota-flag">⚠{list.length}</span>;
   return (
     <div className="faint small nowrap" title={title} style={{ marginTop: 2 }}>
       <span style={{ color: "var(--warn, #b7791f)" }}>模型额度</span>{" "}

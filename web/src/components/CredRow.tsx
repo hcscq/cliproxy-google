@@ -155,7 +155,8 @@ export function useHiddenColumns(key: string, defaults: string[]) {
   return { hidden, toggle };
 }
 
-export function ColumnToggle({ cols, hidden, onToggle, tr }: { cols: { key: string; label: string }[]; hidden: Set<string>; onToggle: (k: string) => void; tr: Tr }) {
+export interface ToggleExtra { label: string; checked: boolean; onToggle: () => void; testId?: string }
+export function ColumnToggle({ cols, hidden, onToggle, tr, extras = [] }: { cols: { key: string; label: string }[]; hidden: Set<string>; onToggle: (k: string) => void; tr: Tr; extras?: ToggleExtra[] }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -174,8 +175,23 @@ export function ColumnToggle({ cols, hidden, onToggle, tr }: { cols: { key: stri
               <input type="checkbox" checked={!hidden.has(c.key)} onChange={() => onToggle(c.key)} /> {c.label}
             </label>
           ))}
+          {extras.length > 0 && <div className="row-menu-sep" />}
+          {extras.map((x) => (
+            <label key={x.label} className="row-menu-item">
+              <input type="checkbox" checked={x.checked} onChange={x.onToggle} data-testid={x.testId} /> {x.label}
+            </label>
+          ))}
         </div>
       )}
     </div>
   );
+}
+
+/** Boolean view preference persisted per browser. */
+export function useStoredFlag(key: string, def: boolean): [boolean, () => void] {
+  const [v, setV] = useState<boolean>(() => {
+    const s = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+    return s === null ? def : s === '1';
+  });
+  return [v, () => setV((p) => { localStorage.setItem(key, p ? '0' : '1'); return !p; })];
 }

@@ -726,6 +726,7 @@ export interface Credential {
 export interface QuotaWindow {
   id: string;
   label?: string;
+  scope_id?: string | null;
   status?: string;
   unit?: string;
   used?: number;

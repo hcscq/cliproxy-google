@@ -1,4 +1,4 @@
-import type { QuotaItem } from '../api/client';
+import type { QuotaItem, QuotaWindow } from '../api/client';
 import { fmtNum, fmtRelative } from '../format';
 import { useI18n } from '../i18n';
 import { Badge, Progress } from './ui';
@@ -106,5 +106,46 @@ export function QuotaWindows({ item, compact, error, loading }: { item?: QuotaIt
         );
       })}
     </div>
+  );
+}
+
+/** True for the Claude / GPT ("third-party") bucket of an Antigravity credential, or a Claude account window. */
+export function isClaudeWindow(w: QuotaWindow): boolean {
+  const s = `${w.scope_id ?? ''} ${w.id} ${w.label ?? ''}`.toLowerCase();
+  return s.includes('third-party') || s.includes('claude') || /(^|-)3p(-|$)/.test(w.id.toLowerCase());
+}
+
+function windowShortLabel(w: QuotaWindow): string {
+  if (isClaudeWindow(w)) return 'Claude';
+  const s = `${w.scope_id ?? ''} ${w.id} ${w.label ?? ''}`.toLowerCase();
+  if (s.includes('gemini')) return 'Gemini';
+  return (w.label ?? w.id).replace(/ models?$/i, '').slice(0, 10);
+}
+
+/** One-line quota for the list: "Gemini ▬ 94% · Claude ▬ 100%"; details in each segment's tooltip. */
+export function QuotaInline({ item, showClaude, error, loading }: { item?: QuotaItem; showClaude: boolean; error?: unknown; loading?: boolean }) {
+  const { tr, lang } = useI18n();
+  if (!item || !item.primary_windows?.length) return <QuotaWindows item={item} compact error={error} loading={loading} />;
+  const all = item.primary_windows;
+  const shown = showClaude ? all : all.filter((w) => !isClaudeWindow(w));
+  const hidden = all.length - shown.length;
+  return (
+    <span className="quota-inline" data-testid="quota-inline">
+      {shown.map((w) => {
+        const ratio = w.is_unlimited ? 1 : w.remaining_ratio ?? (w.limit ? (w.remaining ?? 0) / w.limit : undefined);
+        const value = w.is_unlimited ? '∞' : w.unit === 'percentage' ? `${fmtNum(w.remaining, 0)}%` : `${fmtNum(w.remaining)}/${fmtNum(w.limit)}`;
+        const low = ratio !== undefined && ratio < LOW_QUOTA_RATIO;
+        const title = [w.label ?? w.id, `${tr('剩余', 'remaining')} ${value}`, w.reset_at ? `${tr('重置', 'resets')} ${new Date(w.reset_at).toLocaleString()} (${fmtRelative(w.reset_at, lang)})` : ''].filter(Boolean).join('\n');
+        const pct = ratio === undefined ? 0 : Math.max(0, Math.min(1, ratio)) * 100;
+        return (
+          <span key={w.id} className="qseg" title={title} data-testid={isClaudeWindow(w) ? 'quota-claude' : 'quota-window'}>
+            <span className="qlabel">{windowShortLabel(w)}</span>
+            <span className="qbar"><span style={{ width: `${pct}%`, background: low ? 'var(--err)' : pct < 30 ? 'var(--warn)' : 'var(--ok)' }} /></span>
+            <b className={low ? 'err-text' : undefined}>{value}</b>
+          </span>
+        );
+      })}
+      {hidden > 0 && <span className="faint" title={tr('Claude 额度已隐藏（列 ▾ →「显示 Claude 额度」）', 'Claude quota hidden (Columns ▾ → Show Claude quota)')}>+{hidden}</span>}
+    </span>
   );
 }
