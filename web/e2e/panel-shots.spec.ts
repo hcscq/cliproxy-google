@@ -1,5 +1,7 @@
 import { test } from '@playwright/test';
-test.use({ launchOptions: { executablePath: '/usr/bin/google-chrome' } });
+// Manual screenshot run against the local mock Home (PANEL_SHOTS=1); skipped in CI.
+test.skip(!process.env.PANEL_SHOTS, 'set PANEL_SHOTS=1 to capture panel screenshots');
+if (process.env.CHROME_PATH) test.use({ launchOptions: { executablePath: process.env.CHROME_PATH } });
 const PREFIX = process.env.SHOT_PREFIX || 'panel-before';
 for (const w of [1440, 1280, 390]) {
   test(`credentials ${w}`, async ({ page }) => {
