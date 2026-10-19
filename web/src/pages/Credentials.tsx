@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { HealthBadge } from '../components/HealthCheck';
 import { downloadBlob as saveHealthCsv } from '../format';
-import { ReserveShortAlert } from '../components/ReserveAlert';
+import { ReserveShortAlert, ReserveSummary } from '../components/ReserveAlert';
 import { useAction, useApi, useAsync, useUi } from "../app-context";
 import {
   coolingModels,
@@ -94,6 +94,12 @@ export function credentialStatus(
             ? tr("已暂停 · IP 已移除", "Paused · IP removed")
             : tr("已暂停 · 出口离线", "Paused · egress down")}
         </Badge>
+      </span>
+    );
+  if (c.disabled && (c.status_message ?? "").toLowerCase() === "unauthorized")
+    return (
+      <span title={tr("刷新令牌失效（401），需重新授权；启用无效", "Refresh token rejected (401); re-authorise. Enabling will not help")}>
+        <Badge kind="err" dot>{tr("已停用 · 授权失效(401)", "Off · unauthorized (401)")}</Badge>
       </span>
     );
   if (c.disabled) return <Badge>{t("disabled")}</Badge>;
@@ -422,8 +428,22 @@ export function CredentialsPage() {
 
   const toggle = (c: Credential, enabled: boolean) =>
     run(`toggle-${c.id}`, async () => {
-      await api.setCredentialDisabled(c.id, !enabled);
-      toast(enabled ? tr("已启用", "Enabled") : tr("已禁用", "Disabled"));
+      const r = await api.setCredentialDisabled(c.id, !enabled);
+      // Show the stored state right away (the server reads it back after the
+      // write), then reload; a background poll started earlier cannot undo it.
+      if (creds.data)
+        creds.setData({
+          ...creds.data,
+          items: creds.data.items.map((x) =>
+            x.id === c.id ? { ...x, disabled: r.disabled, status: r.state ?? x.status, status_message: r.status_message ?? x.status_message, reserved: r.reserved ?? (x as { reserved?: boolean }).reserved } : x,
+          ),
+        });
+      if (r.applied === false)
+        toast(tr(`启用后立即被停用：${r.status_message || r.state || "未知原因"}`, `Re-disabled right after enabling: ${r.status_message || r.state || "unknown"}`), "err");
+      else if (enabled && r.reserved)
+        toast(tr("已启用（仍在储备中，不参与调度）", "Enabled (still in reserve, not scheduled)"));
+      else toast(enabled ? tr("已启用", "Enabled") : tr("已禁用", "Disabled"));
+      void reserveInfo.reload();
       await creds.reload();
     });
   const bulkTier = () =>
@@ -481,6 +501,7 @@ export function CredentialsPage() {
 
   return (
     <div className="stack">
+      <ReserveSummary stats={reserveInfo.data?.stats} />
       <ReserveShortAlert stats={reserveInfo.data?.stats} />
       <div className="page-head">
         <div>

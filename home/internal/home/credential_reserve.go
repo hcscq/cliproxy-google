@@ -44,16 +44,23 @@ type ReserveCandidate struct {
 
 // ReserveStats is the panel summary.
 type ReserveStats struct {
-	Reserved           int   `json:"reserved"`
-	EverReserved       int   `json:"ever_reserved"`
-	BansReserved       int   `json:"bans_reserved"`        // banned while in reserve
-	BansActive         int   `json:"bans_active"`          // banned while schedulable
-	BansAfterPromotion int   `json:"bans_after_promotion"` // subset of bans_active: had been reserved before
-	Promotions24h      int   `json:"promotions_24h"`
-	MinActive          int   `json:"min_active"`
-	Active             int   `json:"active"`
-	Eligible           int   `json:"eligible"` // reserves matching the tier filter (-1 = not checked)
-	Short              bool  `json:"short"`    // active < min and no eligible reserve
+	Reserved           int  `json:"reserved"`
+	EverReserved       int  `json:"ever_reserved"`
+	BansReserved       int  `json:"bans_reserved"`        // banned while in reserve
+	BansActive         int  `json:"bans_active"`          // banned while schedulable
+	BansAfterPromotion int  `json:"bans_after_promotion"` // subset of bans_active: had been reserved before
+	Promotions24h      int  `json:"promotions_24h"`
+	MinActive          int  `json:"min_active"`
+	Active             int  `json:"active"`
+	Eligible           int  `json:"eligible"` // reserves matching the tier filter (-1 = not checked)
+	Short              bool `json:"short"`    // active < min and no eligible reserve
+	// Enabled / Usable exclude Free-tier credentials (as the promoter counts):
+	// enabled = schedulable and not in reserve; usable = enabled and not cooling.
+	// Active is whichever of the two the promoter compares with MinActive.
+	Enabled            int   `json:"enabled"`
+	Usable             int   `json:"usable"`
+	CountCooled        bool  `json:"count_cooled"`
+	LastPromotionUnix  int64 `json:"last_promotion,omitempty"`
 	ShortfallSinceUnix int64 `json:"shortfall_since,omitempty"`
 }
 
@@ -153,10 +160,19 @@ func (r *Runtime) SetCredentialsReserved(ctx context.Context, ids []string, rese
 func (r *Runtime) ReserveStatus(ctx context.Context, st *ReserveStats) {
 	cfg := r.reserveSettings()
 	st.MinActive = cfg.MinActive
-	st.Active, st.Eligible = -1, -1
+	st.Active, st.Eligible, st.Enabled, st.Usable = -1, -1, -1, -1
+	st.CountCooled = cfg.CountCooled
 	if s := r.reserveStore(); s != nil {
-		if n, err := s.CountActiveCredentials(ctx, cfg.CountCooled); err == nil {
-			st.Active = n
+		if n, err := s.CountActiveCredentials(ctx, true); err == nil {
+			st.Enabled = n
+		}
+		if n, err := s.CountActiveCredentials(ctx, false); err == nil {
+			st.Usable = n
+		}
+		if cfg.CountCooled {
+			st.Active = st.Enabled
+		} else {
+			st.Active = st.Usable
 		}
 		if c, err := s.ListReserveCandidates(ctx); err == nil {
 			st.Eligible = len(orderReserveCandidates(c, cfg.Tiers, r.ImportCheckSettings().Promote))
@@ -315,13 +331,13 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	}
 	if len(cands) == 0 {
 		r.logReserveState("empty", func() {
-			log.Warnf("credential reserve: 储备不足 — active %d < minimum %d and no eligible reserve credential (tier filter %v)", active, cfg.MinActive, cfg.Tiers)
+			log.Warnf("credential reserve: 储备不足 — active %d (excl. Free tier) < minimum %d and no eligible reserve credential (tier filter %v)", active, cfg.MinActive, cfg.Tiers)
 		})
 		return
 	}
 	if now.Sub(r.reserve.shortfallSince) < cfg.ActivationDelay {
 		r.logReserveState("waiting", func() {
-			log.Infof("credential reserve: active %d < minimum %d; promoting after %s if it persists (%d eligible)", active, cfg.MinActive, cfg.ActivationDelay, len(cands))
+			log.Infof("credential reserve: active %d (excl. Free tier) < minimum %d; promoting after %s if it persists (%d eligible)", active, cfg.MinActive, cfg.ActivationDelay, len(cands))
 		})
 		return
 	}

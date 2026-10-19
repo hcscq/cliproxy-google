@@ -365,7 +365,25 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errRefresh)})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": disabled})
+	c.JSON(http.StatusOK, h.authStatusReadback(ctx, auth.ID, disabled))
+}
+
+// authStatusReadback reports the credential's state as stored after a toggle,
+// so the panel shows what actually happened (e.g. an enable immediately undone
+// by a 401 refresh failure, or an enabled credential that is still in reserve).
+func (h *Handler) authStatusReadback(ctx context.Context, id string, requested bool) gin.H {
+	out := gin.H{"status": "ok", "disabled": requested, "requested_disabled": requested}
+	if a, _, err := h.repo.GetAuth(ctx, id); err == nil && a != nil {
+		out["disabled"] = a.Disabled
+		out["state"] = string(a.Status)
+		out["status_message"] = a.StatusMessage
+		out["applied"] = a.Disabled == requested
+	}
+	if h.runtime != nil {
+		_, reserved := h.runtime.ReservedSince()[id]
+		out["reserved"] = reserved
+	}
+	return out
 }
 
 // PatchAuthFileFields applies a partial update to an auth file fields.

@@ -206,11 +206,15 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], pollMs?:
   const fnRef = useRef(fn);
   fnRef.current = fn;
   const alive = useRef(true);
+  // Bumped by reload/setData: an older in-flight fetch (poll or reload) must not
+  // overwrite newer data with a response that predates a mutation.
+  const gen = useRef(0);
   const reload = useCallback(async () => {
+    const mine = ++gen.current;
     setLoading(true);
     try {
       const d = await fnRef.current();
-      if (alive.current) {
+      if (alive.current && mine === gen.current) {
         setData(d);
         setError(undefined);
       }
@@ -227,8 +231,9 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], pollMs?:
     if (pollMs) {
       timer = window.setInterval(() => {
         if (document.visibilityState === 'visible') {
+          const mine = gen.current;
           fnRef.current().then(
-            (d) => alive.current && (setData(d), setError(undefined)),
+            (d) => alive.current && mine === gen.current && (setData(d), setError(undefined)),
             () => undefined,
           );
         }
@@ -240,7 +245,11 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], pollMs?:
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
-  return { data, error, loading, reload, setData };
+  const setDataNow = useCallback((d: T | undefined) => {
+    gen.current++;
+    setData(d);
+  }, []);
+  return { data, error, loading, reload, setData: setDataNow };
 }
 
 /** Wraps an async action with busy state + error toast. */

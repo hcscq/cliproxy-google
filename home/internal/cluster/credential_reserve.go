@@ -174,6 +174,8 @@ func (r *Repository) CountActiveCredentials(ctx context.Context, countCooled boo
 		AND a.uuid NOT IN (SELECT auth_uuid FROM credential_health_check WHERE status = 'fail')`
 	if db.Dialector.Name() == "postgres" {
 		q += ` AND COALESCE(a.auth_json->'metadata'->>'refresh_token','') <> ''`
+		// Free-tier credentials do not count towards the reserve minimum.
+		q += ` AND COALESCE(a.auth_json->'metadata'->>'subscription_tier','') NOT ILIKE 'free%'`
 	}
 	if !countCooled {
 		q += ` AND NOT (COALESCE(a.unavailable,false) AND a.next_retry_after IS NOT NULL AND a.next_retry_after > CURRENT_TIMESTAMP)`
@@ -233,6 +235,12 @@ func (r *Repository) ReserveStats(ctx context.Context) (home.ReserveStats, error
 		(SELECT COUNT(*) FROM credential_reserve_event WHERE kind = 'promote' AND at >= ?) AS promotions24h`, time.Now().UTC().Add(-24*time.Hour)).Scan(&x).Error
 	st = home.ReserveStats{Reserved: int(x.Reserved), EverReserved: int(x.EverReserved), BansReserved: int(x.BansReserved),
 		BansActive: int(x.BansActive), BansAfterPromotion: int(x.BansActiveEverReserved), Promotions24h: int(x.Promotions24h)}
+	if err == nil {
+		var last struct{ At *time.Time }
+		if errLast := tx.Raw(`SELECT MAX(at) AS at FROM credential_reserve_event WHERE kind = 'promote'`).Scan(&last).Error; errLast == nil && last.At != nil {
+			st.LastPromotionUnix = last.At.Unix()
+		}
+	}
 	return st, err
 }
 

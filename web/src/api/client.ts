@@ -174,7 +174,7 @@ export class ApiClient {
     return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
   }
   setCredentialDisabled(name: string, disabled: boolean) {
-    return this.patch<{ status: string; disabled: boolean }>('/credentials/status', { name, disabled });
+    return this.patch<{ status: string; disabled: boolean; requested_disabled?: boolean; applied?: boolean; state?: string; status_message?: string; reserved?: boolean }>('/credentials/status', { name, disabled });
   }
   updateCredentialFields(id: string, fields: Record<string, unknown>) {
     return this.patch<{ status: string }>('/credentials/fields', { id, ...fields });
@@ -1397,6 +1397,13 @@ export interface ReserveStats {
   eligible: number;
   short: boolean;
   shortfall_since?: number;
+  /** Excluding Free tier: schedulable and not in reserve. */
+  enabled?: number;
+  /** Excluding Free tier: enabled and not cooling. */
+  usable?: number;
+  /** Promoter compares `enabled` (true) or `usable` (false) with min_active. */
+  count_cooled?: boolean;
+  last_promotion?: number;
 }
 export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at: string; was_reserved: boolean; reserved_since?: string; detail?: string }
 

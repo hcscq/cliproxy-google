@@ -20,6 +20,7 @@ type fakeReserveStore struct {
 	bans     int
 
 	lastCountCooled bool
+	cooled          int // extra credentials counted only when countCooled
 }
 
 func (f *fakeReserveStore) ListReservedCredentials(context.Context) (map[string]time.Time, error) {
@@ -60,6 +61,9 @@ func (f *fakeReserveStore) ListReserveCandidates(context.Context) ([]ReserveCand
 }
 func (f *fakeReserveStore) CountActiveCredentials(_ context.Context, countCooled bool) (int, error) {
 	f.lastCountCooled = countCooled
+	if countCooled {
+		return f.active + f.cooled, nil
+	}
 	return f.active, nil
 }
 func (f *fakeReserveStore) CountReserveEvents(_ context.Context, _ string, since time.Time) (int, error) {
@@ -226,5 +230,22 @@ func TestReserveCountCooledSetting(t *testing.T) {
 	r.reserveControl(context.Background(), time.Now())
 	if store.lastCountCooled {
 		t.Fatal("setting off must exclude quota-cooled")
+	}
+}
+
+func TestReserveStatusReportsEnabledAndUsable(t *testing.T) {
+	store := &fakeReserveStore{active: 3, cooled: 2}
+	r := &Runtime{}
+	r.reserveStoreOverride = store
+	r.reserveCfgOverride = &config.Config{ReserveMinActive: 6}
+	var st ReserveStats
+	r.ReserveStatus(context.Background(), &st)
+	// Default counts cooling credentials: the promoter compares "enabled".
+	want := st.Usable
+	if st.CountCooled {
+		want = st.Enabled
+	}
+	if st.Enabled != 5 || st.Usable != 3 || st.Active != want || st.MinActive != 6 || !st.Short {
+		t.Fatalf("stats = %+v", st)
 	}
 }
