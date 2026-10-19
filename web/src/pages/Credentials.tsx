@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { HealthBadge } from '../components/HealthCheck';
 import { downloadBlob as saveHealthCsv } from '../format';
-import { ReserveShortAlert, ReserveSummary } from '../components/ReserveAlert';
+import { ReserveChip } from '../components/ReserveAlert';
+import { ColumnToggle, ProviderIcon, RowMenu, StatusPill, useHiddenColumns, type MenuItem } from '../components/CredRow';
+import { safeVerifyURL } from '../components/HealthCheck';
 import { useAction, useApi, useAsync, useUi } from "../app-context";
 import {
   coolingModels,
@@ -39,7 +41,6 @@ import {
   Loading,
   Modal,
   Spinner,
-  Switch,
 } from "../components/ui";
 import { useFlexColumns, type FlexCol } from "../components/flexCols";
 import { CallStatsCell, CallStatsPanel, StatsWindowSelect } from "../components/CallStats";
@@ -226,20 +227,27 @@ export function probeLine(m: ModelCooldown, tr: ReturnType<typeof useI18n>["tr"]
   return parts.join(" · ");
 }
 
-// checkbox, ID, account, groups, provider, status, quota, priority, created, last used, enabled
-const CRED_COLUMNS: FlexCol[] = [
-  { min: 36 },
-  { min: 60, max: 72 },
-  { min: 140, max: 280, weight: 2 },
-  { min: 80, max: 140, weight: 0.6 },
-  { min: 112, max: 130, weight: 0.3 },
-  { min: 172, max: 210, weight: 0.8 },
-  { min: 150, weight: 3 },
-  { min: 96 },
-  { min: 64 },
-  { min: 92 },
-  { min: 80 },
-  { min: 64 },
+// Columns dropped on phones (same breakpoint as .hide-sm).
+const SM_COLS = new Set(["id", "egress", "groups", "quota", "success", "cap", "priority", "created", "last_used"]);
+function useNarrow() {
+  const q = "(max-width: 860px)";
+  const [n, setN] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia?.(q);
+    if (!m) return;
+    const on = () => setN(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return n;
+}
+type CredCol = FlexCol & { key: string; th: React.ReactNode; td: (c: CredentialSearchItem) => React.ReactNode; sm?: boolean; stop?: boolean; hideable?: string };
+// Widths per column key (kept in sync with allCols in CredentialsPage).
+const CRED_COL_SPEC: (FlexCol & { key: string })[] = [
+  { key: "sel", min: 32 }, { key: "id", min: 58 }, { key: "account", min: 150, max: 360, weight: 3 },
+  { key: "status", min: 108, max: 136, weight: 0.3 }, { key: "egress", min: 124 }, { key: "groups", min: 84, max: 140, weight: 0.5 },
+  { key: "quota", min: 140, weight: 1 }, { key: "success", min: 100 }, { key: "cap", min: 120 }, { key: "priority", min: 56 },
+  { key: "created", min: 88 }, { key: "last_used", min: 76 }, { key: "menu", min: 40 },
 ];
 
 type CredSort = { sort: CredentialSortKey; order: "asc" | "desc" };
@@ -393,7 +401,10 @@ export function CredentialsPage() {
     20000,
   );
   const groups = useGroupLookup();
-  const credCols = useFlexColumns<HTMLDivElement>(CRED_COLUMNS);
+  const colVis = useHiddenColumns("cred-cols-hidden-v2", ["priority", "created", "cap"]);
+  const narrow = useNarrow();
+  const flexSpec = useMemo(() => CRED_COL_SPEC.filter((x) => !colVis.hidden.has(x.key) && !(narrow && SM_COLS.has(x.key))), [colVis.hidden, narrow]);
+  const credCols = useFlexColumns<HTMLDivElement>(flexSpec);
   const quota = useAsync(() => api.quotaCredentialsAll(), [], 60000);
   const egress = useAsync(() => api.egressStatus(), [], 30000);
   const sel = useSelection<string>();
@@ -499,10 +510,102 @@ export function CredentialsPage() {
       await reloadAll();
     });
 
+  const rowRecheck = (c: Credential) =>
+    run(`recheck-${c.id}`, async () => {
+      await api.startHealthCheck([c.id]);
+      toast(tr("已开始重新体检，约 30 秒后刷新查看", "Re-check started; refresh in ~30s"));
+      setTimeout(() => void creds.reload(), 30000);
+    });
+  const rowReserve = (c: Credential, action: "reserve" | "unreserve") =>
+    run(`reserve-${c.id}`, async () => {
+      await api.bulkCredentials({ ids: [c.id], action });
+      toast(action === "reserve" ? tr("已设为储备", "Reserved") : tr("已取消储备", "Unreserved"));
+      void reserveInfo.reload();
+      await creds.reload();
+    });
+  const egressCell = (c: CredentialSearchItem) => {
+    if (!c.egress_ip) return <span className="faint small">—</span>;
+    const eg = egress.data?.items?.find((e) => e.name === c.egress_id);
+    return (
+      <span className="faint small mono" title={tr(`固定出口 ${c.egress_id ?? ""}`, `Pinned egress ${c.egress_id ?? ""}`) + (eg ? ` · ${egressRole(eg)}` : "") + (eg?.public_changed ? tr(` · 公网 IP 由 ${eg.expected_public_ip} 变为 ${eg.public_ip}`, ` · public IP ${eg.expected_public_ip} → ${eg.public_ip}`) : "")}>
+        {eg ? egressIP(eg) : c.egress_ip}
+        {eg?.public_changed && <span style={{ color: "var(--warn, #b7791f)" }}> ⚠</span>}
+      </span>
+    );
+  };
+  const allCols: CredCol[] = [
+    { key: "sel", min: 32, stop: true, th: null, td: (c) => <input type="checkbox" checked={sel.has(c.id)} onChange={() => sel.toggle(c.id)} aria-label="select" /> },
+    { key: "id", min: 58, stop: true, th: <SortTh k="seq" cur={sort} onSort={onSort}>#</SortTh>,
+      td: (c) => <CopyText value={c.id} title={`${c.id}\n${tr("点击复制完整 ID", "Click to copy full ID")}`} done={tr("已复制 ID", "ID copied")} className="mono">{c.seq ? `#${c.seq}` : c.id.slice(0, 6)}</CopyText> },
+    { key: "account", min: 150, max: 360, weight: 3, th: <SortTh k="name" cur={sort} onSort={onSort}>{tr("账号", "Account")}</SortTh>,
+      td: (c) => {
+        const who = c.label || c.email || c.name;
+        const hover = [who, c.provider, c.note && `${tr("备注", "Note")}: ${c.note}`].filter(Boolean).join("\n");
+        return (
+          <span className="acct-cell">
+            <ProviderIcon provider={c.provider} abbr={providerAbbr(c.provider)} />
+            <span className="ellipsis acct-name" title={hover}>
+              <CopyText value={c.email || c.label || c.name} done={tr("已复制账号", "Account copied")} title={hover} testId="copy-account">{who}</CopyText>
+            </span>
+            {c.note && <span className="faint small" title={c.note}>📝</span>}
+            {tierBadge(c, tr)}
+          </span>
+        );
+      } },
+    { key: "status", min: 108, max: 136, weight: 0.3, th: <SortTh k="status" cur={sort} onSort={onSort}>{t("status")}</SortTh>,
+      td: (c) => {
+        const cap = c.request_cap;
+        const extra = [statusTooltip(c, tr) ?? "", cap && (cap.hourly_cap || cap.daily_cap) ? tr(`请求上限 每小时 ${cap.hourly_used}/${cap.hourly_cap || "∞"} · 每天 ${cap.daily_used}/${cap.daily_cap || "∞"}${cap.capped_until && new Date(cap.capped_until).getTime() > Date.now() ? ` · 已达上限至 ${fmtTime(cap.capped_until)}` : ""}`, `Cap h ${cap.hourly_used}/${cap.hourly_cap || "∞"} · d ${cap.daily_used}/${cap.daily_cap || "∞"}`) : ""].filter(Boolean);
+        return <StatusPill c={c} tr={tr} extra={extra} />;
+      } },
+    { key: "egress", min: 124, hideable: tr("出口", "Egress"), th: <SortTh k="egress" cur={sort} onSort={onSort}>{tr("出口", "Egress")}</SortTh>, td: egressCell },
+    { key: "groups", min: 84, max: 140, weight: 0.5, hideable: tr("分组/标签", "Groups / tags"), th: tr("分组", "Groups"),
+      td: (c) => {
+        const gs = (c.group_ids ?? []).map((id) => groups.cgNames.get(id) ?? `#${id}`);
+        const tags = (c.tags ?? []).map((tg) => `#${tg}`);
+        const all = [...gs, ...tags];
+        if (!all.length) return <span className="faint small">—</span>;
+        const hover = [gs.length ? `${tr("分组", "Groups")}: ${gs.join(", ")}` : "", tags.length ? `${tr("标签", "Tags")}: ${tags.join(", ")}` : ""].filter(Boolean).join("\n");
+        return (
+          <span className="pill-row nowrap-row" style={{ marginTop: 0 }} title={hover}>
+            <span className={`pill ${gs.length ? "pill-group" : "pill-tag"}`}>{all[0]}</span>
+            {all.length > 1 && <span className="pill pill-tag">+{all.length - 1}</span>}
+          </span>
+        );
+      } },
+    { key: "quota", min: 140, weight: 1, sm: true, hideable: t("quota"), th: <SortTh k="quota" cur={sort} onSort={onSort}>{t("quota")}</SortTh>,
+      td: (c) => <div className="quota-cell"><QuotaWindows item={quotaById.get(c.id)} compact error={quota.error} loading={!quota.data && !quota.error} /></div> },
+    { key: "success", min: 100, sm: true, hideable: tr("成功率", "OK %"),
+      th: <span className="nowrap"><SortTh k="success" cur={sort} onSort={onSort}>{tr("成功率", "OK %")}</SortTh><StatsWindowSelect value={statsWindow} onChange={setStatsWindow} /></span>,
+      td: (c) => <CallStatsCell s={c.call_stats} window={statsWindow} /> },
+    { key: "cap", min: 120, sm: true, hideable: tr("请求上限", "Request cap"), th: tr("上限", "Cap"), td: (c) => <RequestCapLine u={c.request_cap} /> },
+    { key: "priority", min: 56, sm: true, hideable: t("priority"), th: t("priority"), td: (c) => c.priority ?? <span className="faint">0</span> },
+    { key: "created", min: 88, sm: true, hideable: tr("创建时间", "Created"), th: <SortTh k="created" cur={sort} onSort={onSort}>{tr("创建", "Created")}</SortTh>,
+      td: (c) => <span className="small" title={c.created_at ? new Date(c.created_at).toLocaleString() : ""}>{c.created_at ? fmtResetShort(c.created_at) : "—"}</span> },
+    { key: "last_used", min: 76, sm: true, hideable: tr("最近使用", "Last used"), th: <SortTh k="last_used" cur={sort} onSort={onSort}>{tr("最近", "Last")}</SortTh>,
+      td: (c) => <span className="faint small" title={c.last_used_at ? new Date(c.last_used_at).toLocaleString() : tr("3 天内未使用", "unused in 3 days")}>{c.last_used_at ? fmtRelative(c.last_used_at, lang) : "—"}</span> },
+    { key: "menu", min: 40, stop: true, th: <ColumnToggle cols={[]} hidden={colVis.hidden} onToggle={colVis.toggle} tr={tr} />,
+      td: (c) => {
+        const h = c.health_check;
+        const verify = safeVerifyURL(h);
+        const reserved = !!(c as { reserved?: boolean }).reserved;
+        const its: MenuItem[] = [
+          { label: c.disabled ? tr("启用", "Enable") : tr("禁用", "Disable"), onClick: () => void toggle(c, !!c.disabled), danger: !c.disabled, disabled: busy === `toggle-${c.id}`, testId: "row-toggle" },
+          { label: tr("重新体检", "Re-check"), onClick: () => void rowRecheck(c), disabled: h?.status === "running", testId: "health-recheck" },
+          ...(verify ? [{ label: tr("去验证 ↗", "Verify ↗"), href: verify, testId: "health-verify-link" }] : []),
+          { label: reserved ? tr("取消储备", "Unreserve") : tr("设为储备", "Reserve"), onClick: () => void rowReserve(c, reserved ? "unreserve" : "reserve") },
+          { label: tr("详情", "Details"), onClick: () => setSelected(c) },
+        ];
+        return <RowMenu items={its} />;
+      } },
+  ];
+  const toggleable = allCols.filter((x) => x.hideable).map((x) => ({ key: x.key, label: x.hideable! }));
+  allCols[allCols.length - 1].th = <ColumnToggle cols={toggleable} hidden={colVis.hidden} onToggle={colVis.toggle} tr={tr} />;
+  const visibleCols = allCols.filter((x) => !colVis.hidden.has(x.key) && !(narrow && SM_COLS.has(x.key)));
+
   return (
     <div className="stack">
-      <ReserveSummary stats={reserveInfo.data?.stats} />
-      <ReserveShortAlert stats={reserveInfo.data?.stats} />
+      <ReserveChip stats={reserveInfo.data?.stats} />
       <div className="page-head">
         <div>
           <h1>{t("credentials")}</h1>
@@ -718,49 +821,15 @@ export function CredentialsPage() {
               style={{ minWidth: credCols.minTotal }}
             >
               <colgroup>
-                {credCols.widths.map((w, i) => (
-                  <col
-                    key={i}
-                    className={i >= 6 && i <= 10 ? "hide-sm" : undefined}
-                    style={{ width: w }}
-                  />
+                {visibleCols.map((col, i) => (
+                  <col key={col.key} className={col.sm ? "hide-sm" : undefined} style={{ width: credCols.widths[i] }} />
                 ))}
               </colgroup>
               <thead>
                 <tr>
-                  <th style={{ width: 28 }} />
-                  <th>
-                    <SortTh k="seq" cur={sort} onSort={onSort}>ID</SortTh>
-                  </th>
-                  <th>
-                    <SortTh k="name" cur={sort} onSort={onSort}>{tr("账号", "Account")}</SortTh>
-                  </th>
-                  <th>{tr("分组", "Groups")}</th>
-                  <th className="nowrap">
-                    {t("provider")}
-                    <span className="faint"> / </span>
-                    <SortTh k="tier" cur={sort} onSort={onSort}>{tr("订阅", "Tier")}</SortTh>
-                  </th>
-                  <th>
-                    <SortTh k="status" cur={sort} onSort={onSort}>{t("status")}</SortTh>
-                    <span className="faint"> / </span>
-                    <SortTh k="egress" cur={sort} onSort={onSort}>{tr("出口", "Egress")}</SortTh>
-                  </th>
-                  <th className="hide-sm">
-                    <SortTh k="quota" cur={sort} onSort={onSort}>{t("quota")}</SortTh>
-                  </th>
-                  <th className="hide-sm nowrap">
-                    <SortTh k="success" cur={sort} onSort={onSort}>{tr("成功率", "OK %")}</SortTh>
-                    <StatsWindowSelect value={statsWindow} onChange={setStatsWindow} />
-                  </th>
-                  <th className="hide-sm">{t("priority")}</th>
-                  <th className="hide-sm">
-                    <SortTh k="created" cur={sort} onSort={onSort}>{tr("创建时间", "Created")}</SortTh>
-                  </th>
-                  <th className="hide-sm">
-                    <SortTh k="last_used" cur={sort} onSort={onSort}>{tr("最近使用", "Last used")}</SortTh>
-                  </th>
-                  <th style={{ textAlign: "right" }}>{t("enabled")}</th>
+                  {visibleCols.map((col) => (
+                    <th key={col.key} className={col.sm ? "hide-sm" : undefined}>{col.th}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -770,153 +839,11 @@ export function CredentialsPage() {
                     className={`clickable ${sel.has(c.id) ? "row-selected" : ""}`}
                     onClick={() => setSelected(c)}
                   >
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={sel.has(c.id)}
-                        onChange={() => sel.toggle(c.id)}
-                        aria-label="select"
-                      />
-                    </td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <CopyText value={c.id} title={c.id} done={tr("已复制 ID", "ID copied")} className="mono">
-                        {c.seq ? `#${c.seq}` : c.id.slice(0, 8)}
-                      </CopyText>
-                    </td>
-                    <td>
-                      <div
-                        className="cell-title ellipsis"
-                        title={[
-                          c.label || c.email || c.name,
-                          c.note && `${tr("备注", "Note")}: ${c.note}`,
-                        ]
-                          .filter(Boolean)
-                          .join("\n")}
-                      >
-                        <CopyText
-                          value={c.email || c.label || c.name}
-                          done={tr("已复制账号", "Account copied")}
-                          title={[c.email || c.label || c.name, c.note && `${tr("备注", "Note")}: ${c.note}`].filter(Boolean).join("\n")}
-                          testId="copy-account"
-                        >
-                          {c.label || c.email || c.name}
-                        </CopyText>
-                        {c.note && <span className="faint small"> · 📝</span>}
-                      </div>
-                    </td>
-                    <td>
-                      {(() => {
-                        const gs = (c.group_ids ?? []).map(
-                          (id) => groups.cgNames.get(id) ?? `#${id}`,
-                        );
-                        const tags = (c.tags ?? []).map((tg) => `#${tg}`);
-                        if (!gs.length && !tags.length)
-                          return <span className="faint small">—</span>;
-                        const hover = [
-                          gs.length
-                            ? `${tr("分组", "Groups")}: ${gs.join(", ")}`
-                            : "",
-                          tags.length
-                            ? `${tr("标签", "Tags")}: ${tags.join(", ")}`
-                            : "",
-                        ]
-                          .filter(Boolean)
-                          .join("\n");
-                        const extra = Math.max(gs.length - 1, 0) + tags.length;
-                        return (
-                          <span
-                            className="pill-row nowrap-row"
-                            style={{ marginTop: 0 }}
-                            title={hover}
-                          >
-                            {gs.length ? (
-                              <span className="pill pill-group">{gs[0]}</span>
-                            ) : (
-                              <span className="pill pill-tag">{tags[0]}</span>
-                            )}
-                            {(gs.length ? extra : extra - 1) > 0 && (
-                              <span className="pill pill-tag">
-                                +{gs.length ? extra : extra - 1}
-                              </span>
-                            )}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                        <span title={c.provider}>
-                          <Badge kind="primary">{providerAbbr(c.provider)}</Badge>
-                        </span>
-                        {tierBadge(c, tr)}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        className="cell-status"
-                        title={statusTooltip(c, tr)}
-                      >
-                        {credentialStatus(c, t, tr)}{healthBadges(c)}<HealthBadge h={(c as CredentialSearchItem).health_check} id={c.id} onRechecked={() => setTimeout(() => void creds.reload(), 30000)} />
-                      </span>
-                      <RequestCapLine u={c.request_cap} />
-                      {c.egress_ip && (() => {
-                        const eg = egress.data?.items?.find((e) => e.name === c.egress_id);
-                        const shown = eg ? egressIP(eg) : c.egress_ip;
-                        return (
-                          <div
-                            className="faint small mono nowrap"
-                            title={
-                              tr(`固定出口 ${c.egress_id ?? ""}`, `Pinned egress ${c.egress_id ?? ""}`) +
-                              (eg?.public_changed ? tr(` · 公网 IP 由 ${eg.expected_public_ip} 变为 ${eg.public_ip}`, ` · public IP ${eg.expected_public_ip} → ${eg.public_ip}`) : "")
-                            }
-                          >
-                            {shown}
-                            {eg && <span className="faint"> {egressRole(eg)}</span>}
-                            {eg?.public_changed && <span style={{ color: "var(--warn, #b7791f)" }}> ⚠</span>}
-                          </div>
-                        );
-                      })()}
-                    </td>
-                    <td className="hide-sm wrap-ok">
-                      <QuotaWindows
-                        item={quotaById.get(c.id)}
-                        compact
-                        error={quota.error}
-                        loading={!quota.data && !quota.error}
-                      />
-                      <ModelQuotaLine c={c} />
-                    </td>
-                    <td className="hide-sm">
-                      <CallStatsCell s={c.call_stats} window={statsWindow} />
-                    </td>
-                    <td className="hide-sm">
-                      {c.priority ?? <span className="faint">0</span>}
-                    </td>
-                    <td
-                      className="hide-sm small nowrap"
-                      title={c.created_at ? new Date(c.created_at).toLocaleString() : ""}
-                    >
-                      {c.created_at ? fmtResetShort(c.created_at) : <span className="faint">—</span>}
-                    </td>
-                    <td
-                      className="hide-sm faint small nowrap"
-                      title={
-                        (c.last_used_at ? new Date(c.last_used_at).toLocaleString() : tr("3 天内未使用", "unused in 3 days")) +
-                        (c.updated_at ? ` · ${tr("更新", "updated")} ${new Date(c.updated_at).toLocaleString()}` : "")
-                      }
-                    >
-                      {c.last_used_at ? fmtRelative(c.last_used_at, lang) : "—"}
-                    </td>
-                    <td
-                      className="actions"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Switch
-                        checked={!c.disabled}
-                        disabled={busy === `toggle-${c.id}`}
-                        onChange={(v) => toggle(c, v)}
-                      />
-                    </td>
+                    {visibleCols.map((col) => (
+                      <td key={col.key} className={col.sm ? "hide-sm" : undefined} onClick={col.stop ? (e) => e.stopPropagation() : undefined}>
+                        {col.td(c)}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>

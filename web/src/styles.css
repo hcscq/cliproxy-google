@@ -382,3 +382,24 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 
 .id-cell { font-size: 12px; color: var(--text-2); cursor: copy; }
 .id-cell:hover { color: var(--primary); }
+
+/* credential list: compact layout */
+.cred-table td, .cred-table th { padding-top: 7px; padding-bottom: 7px; }
+.cred-table .acct-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cred-table .acct-name { flex: 1 1 auto; min-width: 0; }
+.cred-table .quota-cell { overflow: hidden; white-space: nowrap; max-height: 22px; }
+.prov-icon { flex: 0 0 auto; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: -.02em; }
+.row-menu-btn { padding: 0 8px; font-size: 16px; line-height: 20px; }
+.row-menu { position: fixed; z-index: 1000; min-width: 132px; padding: 4px; background: var(--bg-elev, var(--bg, #fff)); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.14); display: flex; flex-direction: column; }
+.row-menu-item { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 0; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; border-radius: 5px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.row-menu-item:hover:not(:disabled) { background: var(--bg-sunken); }
+.row-menu-item:disabled { opacity: .5; cursor: default; }
+.row-menu-item.danger { color: var(--err); }
+.col-toggle { position: relative; display: inline-block; }
+.col-toggle .btn { padding: 0 6px; font-size: 12px; }
+.col-toggle-menu { position: absolute; right: 0; top: 100%; margin-top: 4px; }
+.cred-table th:last-child, .cred-table td:last-child { overflow: visible; text-align: right; }
+.reserve-chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reserve-chip { border: 1px solid var(--border); background: var(--bg-sunken); color: var(--text-2); border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.reserve-chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.filter-bar .select { width: auto; max-width: 112px; }

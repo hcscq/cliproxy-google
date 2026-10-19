@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ReserveStats } from '../api/client';
 import { useI18n } from '../i18n';
 
@@ -46,6 +47,30 @@ export function ReserveSummary({ stats }: { stats?: ReserveStats | null }) {
   return (
     <div className="small muted" data-testid="reserve-summary" style={{ margin: '4px 0' }}>
       {text}
+    </div>
+  );
+}
+
+/** Slim reserve chip: one short line; click to expand the full summary. Turns amber when short. */
+export function ReserveChip({ stats }: { stats?: ReserveStats | null }) {
+  const { tr } = useI18n();
+  const [open, setOpen] = useState(false);
+  const full = reserveSummaryText(stats, tr);
+  if (!stats || !full) return null;
+  const short = reserveShortText(stats, tr);
+  const n = (v?: number) => (v === undefined || v < 0 ? '—' : String(v));
+  const usable = stats.count_cooled === false ? stats.usable : stats.enabled;
+  const chip = tr(
+    `储备 ${stats.reserved} · 可提升 ${stats.eligible >= 0 ? stats.eligible : '—'} · 可用 ${n(usable)}/${stats.min_active > 0 ? stats.min_active : '—'}`,
+    `Reserve ${stats.reserved} · ready ${stats.eligible >= 0 ? stats.eligible : '—'} · usable ${n(usable)}/${stats.min_active > 0 ? stats.min_active : '—'}`,
+  );
+  return (
+    <div className="reserve-chip-row small">
+      <button type="button" className={`reserve-chip${short ? ' warn' : ''}`} onClick={() => setOpen(!open)} title={[full, short].filter(Boolean).join('\n')} data-testid="reserve-summary" aria-expanded={open}>
+        {short && <span data-testid="reserve-short">⚠ {tr('储备不足', 'Reserve short')} · </span>}
+        {chip} <span className="faint">{open ? '▴' : '▾'}</span>
+      </button>
+      {open && <span className="muted reserve-chip-detail">{full}{short ? ` — ${short}` : ''}</span>}
     </div>
   );
 }
