@@ -38,3 +38,39 @@ func TestForbiddenEvidence(t *testing.T) {
 		t.Fatalf("catalog: %+v", cr)
 	}
 }
+
+func TestUnauthorizedEvidence(t *testing.T) {
+	// Real prod shape (6c704b00): disabled, status_message unauthorized, 401 authentication_error.
+	a := &coreauth.Auth{ID: "u", Disabled: true, StatusMessage: "unauthorized",
+		LastError: &coreauth.Error{Code: "authentication_error", Message: "credential unauthorized", HTTPStatus: 401}}
+	cr, ok := unauthorizedEvidence(a)
+	if !ok || cr.Category != invalidUnauthorized || cr.Kind != "401" || !cr.Persistent {
+		t.Fatalf("401: %+v ok=%v", cr, ok)
+	}
+	rt := &coreauth.Auth{ID: "r", Disabled: true, StatusMessage: "unauthorized",
+		LastError: &coreauth.Error{Code: "invalid_grant", Message: "Token has been expired or revoked.", HTTPStatus: 400}}
+	if cr, ok := unauthorizedEvidence(rt); !ok || cr.Category != invalidRefreshToken {
+		t.Fatalf("refresh token: %+v ok=%v", cr, ok)
+	}
+	// Temporary / transient states never qualify.
+	for name, x := range map[string]*coreauth.Auth{
+		"enabled stray 401": {ID: "e", LastError: &coreauth.Error{HTTPStatus: 401}},
+		"disabled by hand":  {ID: "d", Disabled: true},
+		"quota 429":         {ID: "q", Disabled: true, LastError: &coreauth.Error{HTTPStatus: 429, Code: "quota_bucket_exhausted"}},
+		"cooling":           {ID: "c", Unavailable: true, StatusMessage: "quota exhausted"},
+	} {
+		if _, ok := unauthorizedEvidence(x); ok {
+			t.Errorf("%s must not qualify", name)
+		}
+	}
+}
+
+func TestInvalidCategoryPrecedence(t *testing.T) {
+	// A TOS ban that is also flagged unauthorized stays in the 403 TOS category
+	// (pre-existing classification unchanged; it is only listed once).
+	a := &coreauth.Auth{ID: "a", Disabled: true, StatusMessage: "unauthorized", Metadata: map[string]any{"auto_disabled_reason": "account_suspended"},
+		LastError: &coreauth.Error{HTTPStatus: 403, Message: "violation of Terms of Service"}}
+	if cr, ok := forbiddenEvidence(a, nil); !ok || cr.Category != forbiddenTOS {
+		t.Fatalf("got %+v", cr)
+	}
+}

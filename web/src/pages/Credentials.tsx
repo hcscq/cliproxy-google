@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { PURGE_DEFAULT_CATS, isAuthInvalidCategory, purgeSelection } from "./purgeInvalid";
 import { HealthBadge } from '../components/HealthCheck';
 import { downloadBlob as saveHealthCsv } from '../format';
 import { ReserveChip } from '../components/ReserveAlert';
@@ -669,7 +670,7 @@ export function CredentialsPage() {
             {tr("刷新额度", "Refresh quota")}
           </button>
           <button className="btn" onClick={() => setPurge403(true)} data-testid="purge-403">
-            {tr("清理 403 凭据", "Remove 403 creds")}
+            {tr("清理无效凭据", "Remove invalid creds")}
           </button>
           <button
             className="btn btn-primary"
@@ -1050,16 +1051,18 @@ function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const categories = data.data?.categories ?? [];
   useEffect(() => {
-    if (data.data) setCats({ tos_violation: true });
+    if (data.data) setCats({ ...PURGE_DEFAULT_CATS });
   }, [data.data]);
   const eligible = (it: ForbiddenCred) => !onlyPersistent || it.persistent;
-  const chosen = categories.filter((c) => cats[c.key]).flatMap((c) => c.items.filter((it) => eligible(it) && !excluded[it.id]));
+  const chosen = purgeSelection(categories, cats, onlyPersistent, excluded);
+  const is401 = (c: { key: string }) => isAuthInvalidCategory(c.key);
+  const PREVIEW = 8;
   const apply = () =>
     run("purge403", async () => {
       const ok = await confirm({
         title: tr("确认删除", "Confirm removal"),
         body: tr(
-          `将删除 ${chosen.length} 个凭据（软删除，删除前备份到 kv_store，可恢复）。`,
+          `将删除 ${chosen.length} 个无效凭据（软删除，删除前备份到 kv_store，可恢复）。`,
           `Remove ${chosen.length} credentials (soft delete, backed up first).`,
         ),
         confirmText: tr(`删除 ${chosen.length} 个`, `Remove ${chosen.length}`),
@@ -1076,7 +1079,7 @@ function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   return (
     <Modal
       wide
-      title={tr("清理 403 凭据", "Remove 403 credentials")}
+      title={tr("清理无效凭据", "Remove invalid credentials")}
       onClose={onClose}
       footer={
         <>
@@ -1093,20 +1096,20 @@ function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () =>
       {data.loading && !data.data ? (
         <Spinner />
       ) : !categories.length ? (
-        <p className="hint">{tr("当前没有 403 凭据。", "No 403 credentials.")}</p>
+        <p className="hint">{tr("当前没有无效凭据。", "No invalid credentials.")}</p>
       ) : (
         <div className="stack">
           <label className="small">
             <input type="checkbox" checked={onlyPersistent} onChange={(e) => setOnlyPersistent(e.target.checked)} data-testid="purge-403-persistent" />{" "}
-            {tr("仅持续性 403（自动停用，或 7 天内 ≥3 次且无成功）", "Persistent 403 only (auto-disabled, or ≥3 in 7d with no success)")}
+            {tr("403 仅持续性（自动停用，或 7 天内 ≥3 次且无成功）；401 类均为已停用", "403: persistent only (auto-disabled, or ≥3 in 7d, no success); 401 kinds are already disabled")}
           </label>
           {categories.map((c) => (
             <div key={c.key} className="card" style={{ padding: 8 }} data-testid={`purge-403-cat-${c.key}`}>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="checkbox" checked={!!cats[c.key]} onChange={(e) => setCats({ ...cats, [c.key]: e.target.checked })} />
-                <b>{c.label}</b>
+                <input type="checkbox" checked={!!cats[c.key]} onChange={(e) => setCats({ ...cats, [c.key]: e.target.checked })} data-testid={`purge-cat-check-${c.key}`} />
+                <b>{is401(c) ? c.label : `403 · ${c.label.replace(/\s*403$/, "")}`}</b>
                 <span className="hint">
-                  {tr(`${c.count} 个 · 持续 ${c.persistent}`, `${c.count} · persistent ${c.persistent}`)}
+                  {is401(c) ? tr(`${c.count} 个`, `${c.count}`) : tr(`${c.count} 个 · 持续 ${c.persistent}`, `${c.count} · persistent ${c.persistent}`)}
                 </span>
                 <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => setOpen({ ...open, [c.key]: !open[c.key] })}>
                   {open[c.key] ? tr("收起", "Hide") : tr("展开", "Show")}
@@ -1131,8 +1134,8 @@ function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () =>
                           {it.message}
                         </td>
                         <td>{it.last_403_at ? fmtTime(it.last_403_at) : "-"}</td>
-                        <td>{tr(`7天 ${it.count_403_7d} 次 / 成功 ${it.ok_7d}`, `7d ${it.count_403_7d} / ok ${it.ok_7d}`)}</td>
-                        <td>{it.persistent ? tr("持续", "persistent") : tr("偶发", "transient")}</td>
+                        <td>{it.kind === "401" ? tr(`7天成功 ${it.ok_7d}`, `7d ok ${it.ok_7d}`) : tr(`7天 ${it.count_403_7d} 次 / 成功 ${it.ok_7d}`, `7d ${it.count_403_7d} / ok ${it.ok_7d}`)}</td>
+                        <td>{it.kind === "401" ? tr("已停用", "disabled") : it.persistent ? tr("持续", "persistent") : tr("偶发", "transient")}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1140,6 +1143,13 @@ function Purge403Modal({ onClose, onDone }: { onClose: () => void; onDone: () =>
               )}
             </div>
           ))}
+          <div className="hint" data-testid="purge-preview">
+            {chosen.length
+              ? tr(`将删除 ${chosen.length} 个：`, `Will remove ${chosen.length}: `) +
+                chosen.slice(0, PREVIEW).map((it) => `#${it.seq ?? "?"} ${it.label}`).join("、") +
+                (chosen.length > PREVIEW ? tr(` 等 ${chosen.length} 个`, ` +${chosen.length - PREVIEW} more`) : "")
+              : tr("未选择任何凭据", "Nothing selected")}
+          </div>
         </div>
       )}
     </Modal>

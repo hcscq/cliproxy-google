@@ -173,3 +173,19 @@ func credentialTierRank(a *coreauth.Auth) int {
 		return 2
 	}
 }
+
+// credentialTierBucket is the filter/facet value for a credential's
+// subscription tier: ultra | pro | free | other | unknown (never checked).
+func credentialTierBucket(a *coreauth.Auth) string {
+	switch credentialTierRank(a) {
+	case 4:
+		return "ultra"
+	case 3:
+		return "pro"
+	case 2:
+		return "other"
+	case 1:
+		return "free"
+	}
+	return "unknown"
+}

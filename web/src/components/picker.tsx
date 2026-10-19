@@ -70,6 +70,9 @@ function facetOptions(f?: Record<string, number>) {
 }
 
 /** Search + provider / status / domain / tag / group filters (server-side). */
+// Subscription tier buckets (Home credentialTierBucket), best first.
+const TIER_FILTER = [['ultra', 'Ultra', 'Ultra'], ['pro', 'Pro', 'Pro'], ['free', 'Free', 'Free'], ['other', '其他', 'Other'], ['unknown', '未检测', 'Unknown']] as const;
+
 export function CredentialFilterBar({
   value,
   onChange,
@@ -91,7 +94,7 @@ export function CredentialFilterBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debounced]);
   const set = (k: keyof CredentialQuery, v: string) => onChange({ ...value, [k]: v || undefined });
-  const active = ['provider', 'status', 'domain', 'tag', 'group'].filter((k) => value[k as keyof CredentialQuery]).length + (value.q ? 1 : 0);
+  const active = ['provider', 'status', 'health', 'tier', 'domain', 'tag', 'group'].filter((k) => value[k as keyof CredentialQuery]).length + (value.q ? 1 : 0);
   return (
     <div className="filter-bar" data-testid="cred-filter-bar">
       <input className="input input-sm" style={{ width: 200 }} placeholder={tr('搜索邮箱 / 名称 / ID / 备注', 'Search email / name / id / note')} value={text} onChange={(e) => setText(e.target.value)} data-testid="cred-filter-q" />
@@ -111,6 +114,16 @@ export function CredentialFilterBar({
           </option>
         ))}
       </select>
+      {(value.tier || TIER_FILTER.filter(([k]) => facets?.tier?.[k]).length > 1) && (
+        <select className="select input-sm" value={value.tier ?? ''} onChange={(e) => set('tier', e.target.value)} data-testid="cred-filter-tier">
+          <option value="">{tr('全部订阅', 'All tiers')}</option>
+          {TIER_FILTER.filter(([k]) => facets?.tier?.[k] || value.tier === k).map(([k, zh, en]) => (
+            <option key={k} value={k}>
+              {tr(zh, en)} ({facets?.tier?.[k] ?? 0})
+            </option>
+          ))}
+        </select>
+      )}
       <select className="select input-sm" value={value.health ?? ''} onChange={(e) => set('health', e.target.value)} data-testid="cred-filter-health">
         <option value="">{tr('全部体检', 'All checks')}</option>
         {([['pass', '体检通过', 'Passed'], ['fail', '体检失败', 'Failed'], ['running', '体检中', 'Checking'], ['unchecked', '未体检', 'Unchecked']] as const).map(([k, zh, en]) => (

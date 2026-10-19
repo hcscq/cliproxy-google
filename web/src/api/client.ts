@@ -1060,6 +1060,8 @@ export interface CredentialQuery {
   status?: string;
   /** import health check: pass | fail | running | unchecked */
   health?: string;
+  /** subscription tier bucket: ultra | pro | free | other | unknown */
+  tier?: string;
   domain?: string;
   tag?: string;
   /** group id, or "none" for credentials in no group */
@@ -1090,7 +1092,7 @@ export interface CredentialSearch {
   all: number;
   page: number;
   page_size: number;
-  facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>> & { health?: Record<string, number> };
+  facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>> & { health?: Record<string, number>; tier?: Record<string, number> };
 }
 export type BulkCredentialAction = 'enable' | 'disable' | 'reserve' | 'unreserve' | 'add_tags' | 'remove_tags' | 'set_tags' | 'add_to_group' | 'remove_from_group';
 export interface BulkResult {
@@ -1382,7 +1384,7 @@ export interface EgressMove {
   to_ip: string;
 }
 
-export type ForbiddenCred = { id: string; seq?: number; label: string; category: string; message: string; source: string; last_403_at?: string; count_403_7d: number; ok_7d: number; disabled: boolean; persistent: boolean };
+export type ForbiddenCred = { id: string; seq?: number; label: string; category: string; /** "403" | "401" (older Home: absent = 403) */ kind?: string; message: string; source: string; last_403_at?: string; count_403_7d: number; ok_7d: number; disabled: boolean; persistent: boolean };
 export type ForbiddenCategory = { key: string; label: string; count: number; persistent: number; items: ForbiddenCred[] };
 export type RequestCapUsage = { mode: 'inherit' | 'custom' | 'unlimited'; tier: string; hourly_cap: number; daily_cap: number; hourly_used: number; daily_used: number; capped_until?: string };
 

@@ -14,10 +14,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// 403 cleanup: GET /credentials/forbidden groups credentials with 403 evidence by
-// normalized reason; POST /credentials/forbidden/purge backs each one up to kv_store
-// (no TTL) and soft-deletes it. Transient one-off 403s are flagged non-persistent so
-// the panel does not sweep them by default.
+// Invalid-credential cleanup (panel 清理无效凭据): GET /credentials/forbidden groups
+// credentials with 403 evidence by normalized reason, plus credentials Home already
+// disabled for a terminal 401 (unauthorized / dead refresh token); POST
+// /credentials/forbidden/purge backs each one up to kv_store (no TTL) and soft-deletes
+// it. Transient one-off 403s are flagged non-persistent so the panel does not sweep
+// them by default; temporary states (429, egress pause, cooling) never qualify.
 
 const (
 	forbiddenTOS        = "tos_violation"
@@ -25,6 +27,8 @@ const (
 	forbiddenPermission = "permission_denied"
 	forbiddenCatalog    = "catalog_403"
 	forbiddenOther      = "other_403"
+	invalidUnauthorized = "unauthorized_401"
+	invalidRefreshToken = "refresh_invalid"
 
 	forbiddenBackupPrefix = "backup:purge403:"
 	forbiddenAuditPrefix  = "audit:purge403:"
@@ -36,6 +40,8 @@ var forbiddenLabels = map[string]string{
 	forbiddenPermission: "无权限 (caller does not have permission)",
 	forbiddenCatalog:    "模型列表 403",
 	forbiddenOther:      "其他 403",
+	invalidUnauthorized: "授权失效 (401)",
+	invalidRefreshToken: "Refresh token 失效/已吊销",
 }
 
 type forbiddenCred struct {
@@ -43,6 +49,7 @@ type forbiddenCred struct {
 	Seq        int64     `json:"seq,omitempty"`
 	Label      string    `json:"label"`
 	Category   string    `json:"category"`
+	Kind       string    `json:"kind"` // "403" | "401"
 	Message    string    `json:"message"`
 	Source     string    `json:"source"`
 	Last403At  time.Time `json:"last_403_at,omitzero"`
@@ -121,6 +128,43 @@ func forbiddenEvidence(a *coreauth.Auth, cat *cluster.AntigravityCatalogRecord) 
 	return cred, ok
 }
 
+// unauthorizedEvidence reports a credential Home has already disabled for a terminal
+// auth failure (401 / dead refresh token). Enabled credentials with a stray 401 are
+// left alone: Home only disables after a non-transient failure.
+func unauthorizedEvidence(a *coreauth.Auth) (cred forbiddenCred, ok bool) {
+	if a == nil || !a.Disabled {
+		return cred, false
+	}
+	le := a.LastError
+	if !strings.EqualFold(strings.TrimSpace(a.StatusMessage), "unauthorized") &&
+		(le == nil || (le.HTTPStatus != http.StatusUnauthorized && !strings.EqualFold(strings.TrimSpace(le.Code), "unauthorized"))) {
+		return cred, false
+	}
+	cred = forbiddenCred{ID: a.ID, Label: a.Label, Disabled: true, Kind: "401", Source: "status", Category: invalidUnauthorized, Last403At: a.UpdatedAt, Persistent: true}
+	msg := "unauthorized"
+	if le != nil {
+		msg = strings.TrimSpace(le.Code + " " + le.Message)
+	}
+	if isDeadRefreshTokenMessage(msg) {
+		cred.Category = invalidRefreshToken
+	}
+	if len(msg) > 240 {
+		msg = msg[:240]
+	}
+	cred.Message = msg
+	return cred, true
+}
+
+func isDeadRefreshTokenMessage(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, k := range []string{"invalid_grant", "refresh_token_expired", "refresh_token_revoked", "refresh_token_reused", "token has been expired or revoked", "token_revoked"} {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) collectForbidden(ctx context.Context) ([]forbiddenCred, map[string]*coreauth.Auth, error) {
 	auths, err := h.repo.ListAuths(ctx)
 	if err != nil {
@@ -140,10 +184,20 @@ func (h *Handler) collectForbidden(ctx context.Context) ([]forbiddenCred, map[st
 			cat = &r
 		}
 		cred, ok := forbiddenEvidence(a, cat)
-		if !ok {
+		if ok {
+			cred.Kind = "403"
+		} else if cred, ok = unauthorizedEvidence(a); !ok {
 			continue
 		}
 		cred.Seq = seqs[a.ID]
+		if cred.Kind == "401" {
+			if s := stats[a.ID]; s != nil {
+				cred.OK7d = s.OK
+			}
+			byID[a.ID] = a
+			out = append(out, cred)
+			continue
+		}
 		if s := stats[a.ID]; s != nil {
 			cred.Count7d, cred.OK7d = s.ByClass["403"], s.OK
 		}
@@ -180,7 +234,7 @@ func (h *Handler) ListForbiddenCredentials(c *gin.Context) {
 			g.Persistent++
 		}
 	}
-	order := []string{forbiddenTOS, forbiddenVerify, forbiddenPermission, forbiddenCatalog, forbiddenOther}
+	order := []string{forbiddenTOS, forbiddenVerify, forbiddenPermission, forbiddenCatalog, forbiddenOther, invalidUnauthorized, invalidRefreshToken}
 	out := []forbiddenCategory{}
 	for _, k := range order {
 		if g := groups[k]; g != nil {
@@ -223,7 +277,7 @@ func (h *Handler) PurgeForbiddenCredentials(c *gin.Context) {
 		id = strings.TrimSpace(id)
 		cr, ok := eligible[id]
 		if !ok {
-			skipped = append(skipped, id) // no 403 evidence any more
+			skipped = append(skipped, id) // no 403 / terminal-401 evidence any more
 			continue
 		}
 		if req.DryRun {
@@ -244,7 +298,7 @@ func (h *Handler) PurgeForbiddenCredentials(c *gin.Context) {
 	if !req.DryRun && len(deleted) > 0 {
 		audit, _ := json.Marshal(gin.H{"at": time.Now().UTC(), "client_ip": c.ClientIP(), "deleted": deleted, "skipped": skipped, "failed": failed, "backup_prefix": forbiddenBackupPrefix + stamp + ":"})
 		_, _ = h.repo.KVSet(ctx, forbiddenAuditPrefix+stamp, audit, 0, cluster.KVSetModeAlways)
-		log.WithFields(log.Fields{"deleted": len(deleted), "skipped": len(skipped), "failed": len(failed), "client_ip": c.ClientIP(), "backup": forbiddenBackupPrefix + stamp}).Warn("purged 403 credentials")
+		log.WithFields(log.Fields{"deleted": len(deleted), "skipped": len(skipped), "failed": len(failed), "client_ip": c.ClientIP(), "backup": forbiddenBackupPrefix + stamp}).Warn("purged invalid credentials")
 		_ = h.refreshAuths(ctx)
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": req.DryRun, "deleted": deleted, "skipped": skipped, "failed": failed, "backup_prefix": forbiddenBackupPrefix + stamp + ":"})
