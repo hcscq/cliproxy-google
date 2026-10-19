@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -469,16 +470,26 @@ func (e *AntigravityExecutor) prepareBuiltinToolsEmulation(ctx context.Context, 
 	uc := cand.Get("urlContextMetadata")
 	if len(gm.Get("groundingChunks").Array()) == 0 && len(gm.Get("webSearchQueries").Array()) == 0 && !uc.Exists() {
 		emu.status = "no-grounding"
-		log.WithFields(fields).Debugf("antigravity: builtin-tools pre-search returned no grounding in %s", time.Since(started).Round(time.Millisecond))
+		log.WithFields(fields).Infof("antigravity: builtin-tools pre-search returned no grounding in %s", time.Since(started).Round(time.Millisecond))
 		return pass2, pass2, emu
 	}
+	// The non-stream body is pretty-printed; compact so an attached value can
+	// never split an SSE data frame.
 	if gm.Exists() {
-		emu.grounding = gm.Raw
+		emu.grounding = compactJSON(gm.Raw)
 	}
 	if uc.Exists() {
-		emu.urlContext = uc.Raw
+		emu.urlContext = compactJSON(uc.Raw)
 	}
 	emu.status = "searched"
-	log.WithFields(fields).Debugf("antigravity: builtin-tools pre-search ok in %s (%d sources)", time.Since(started).Round(time.Millisecond), len(gm.Get("groundingChunks").Array()))
+	log.WithFields(fields).Infof("antigravity: builtin-tools pre-search ok in %s (%d sources)", time.Since(started).Round(time.Millisecond), len(gm.Get("groundingChunks").Array()))
 	return injectBuiltinPresearchContext(pass2, idx, formatBuiltinPresearchContext(text.String(), gm, time.Now())), pass2, emu
+}
+
+func compactJSON(raw string) string {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(raw)); err != nil {
+		return strings.NewReplacer("\r", "", "\n", "").Replace(raw)
+	}
+	return buf.String()
 }

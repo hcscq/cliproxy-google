@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -48,7 +49,10 @@ func (u *emuUpstream) handler(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.WriteString(w, `{"error":{"code":500,"message":"boom"}}`)
 			return
 		}
-		_, _ = io.WriteString(w, emuPass1Body)
+		// Real non-stream bodies are pretty-printed (multi-line).
+		var pretty bytes.Buffer
+		_ = json.Indent(&pretty, []byte(emuPass1Body), "", "  ")
+		_, _ = pretty.WriteTo(w)
 		return
 	}
 	if strings.Contains(r.URL.String(), "stream") {
@@ -152,6 +156,11 @@ func TestBuiltinEmulationStreamTwoPass(t *testing.T) {
 		t.Fatalf("upstream calls = %d, want 2", len(u.bodies))
 	}
 	s := all.String()
+	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !gjson.Valid(line) {
+			t.Fatalf("client stream frame is not valid single-line JSON: %q", line)
+		}
+	}
 	if !strings.Contains(s, `"groundingMetadata"`) || !strings.Contains(s, "kernel.org") {
 		t.Fatalf("stream lacks groundingMetadata: %s", s)
 	}
