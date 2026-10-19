@@ -87,3 +87,16 @@ func TestClassifyRegionRestriction(t *testing.T) {
 		t.Fatalf("region off: %+v", v)
 	}
 }
+
+func TestHealthServedSkipsQuotaFreshness(t *testing.T) {
+	p := HealthProbeResult{TierStatus: 200, Tier: "g1-pro-tier", GenStatus: 200}
+	cfg := (&config.Config{}).ImportCheckSettings()
+	in := HealthInputs{QuotaWindows: 4, QuotaMin: 0.4, CatalogOK: true, CatalogCount: 22}
+	if v := ClassifyHealth(p, in, cfg); v.Status != "fail" {
+		t.Fatalf("unserved used quota should fail: %+v", v)
+	}
+	in.Served = true
+	if v := ClassifyHealth(p, in, cfg); v.Status != "pass" {
+		t.Fatalf("served credential should pass: %+v", v)
+	}
+}

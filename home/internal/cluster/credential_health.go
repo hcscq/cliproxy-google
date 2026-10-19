@@ -180,6 +180,13 @@ func (r *Repository) HealthInputs(ctx context.Context, id string, since time.Tim
 		in.CatalogOK = c.Status == "ok"
 		in.CatalogCount = c.ModelCount
 	}
+	if tx.Dialector.Name() == "postgres" {
+		var served bool
+		if err := tx.Raw(`SELECT EXISTS (SELECT 1 FROM usage u JOIN auth a ON a.index = u.auth_index WHERE a.uuid = ? AND NOT u.failed
+			AND COALESCE(u.event_type,'') <> 'probe' AND u."timestamp" > now() - interval '7 days')`, id).Scan(&served).Error; err == nil {
+			in.Served = served
+		}
+	}
 	return in, int(q.Fresh), nil
 }
 

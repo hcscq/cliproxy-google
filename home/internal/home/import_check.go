@@ -112,6 +112,9 @@ type HealthInputs struct {
 	QuotaMin     float64 // min remaining ratio over the credential's quota windows
 	CatalogOK    bool
 	CatalogCount int
+	// Served: the credential already has real successful traffic, so "fresh quota"
+	// (an import-time check) no longer applies; only a missing quota reading counts.
+	Served bool
 }
 
 // HealthVerdict is the classified outcome.
@@ -204,7 +207,7 @@ func ClassifyHealth(p HealthProbeResult, in HealthInputs, cfg config.ImportCheck
 		switch {
 		case in.QuotaWindows == 0:
 			add(HealthQuotaNone, "未取得额度数据", "")
-		case in.QuotaMin < cfg.QuotaMin:
+		case in.QuotaMin < cfg.QuotaMin && !in.Served:
 			add(HealthQuotaUsed, "额度非新：最低剩余 "+strconv.Itoa(int(in.QuotaMin*100+0.5))+"%", "")
 		}
 		if !in.CatalogOK || in.CatalogCount == 0 {
