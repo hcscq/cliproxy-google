@@ -70,6 +70,7 @@ type Runtime struct {
 	prober                  quotaProber
 	reserve                 credentialReserve
 	healthRunner            atomic.Value // func(context.Context, []string)
+	subscriptionTierHook    atomic.Value // func(ctx, authID, tierID string): after each successful tier check
 	healthSweeping          atomic.Bool
 	reserveStoreOverride    ReserveStore   // tests
 	reserveCfgOverride      *config.Config // tests

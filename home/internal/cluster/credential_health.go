@@ -128,6 +128,22 @@ func (r *Repository) SaveHealthCheck(ctx context.Context, rec CredentialHealthCh
 	return db.WithContext(contextOrBackground(ctx)).Save(&rec).Error
 }
 
+// GetHealthCheck returns the latest check of one credential (ok=false when none).
+func (r *Repository) GetHealthCheck(ctx context.Context, authUUID string) (CredentialHealthCheck, bool, error) {
+	db, err := r.database()
+	if err != nil {
+		return CredentialHealthCheck{}, false, err
+	}
+	var rows []CredentialHealthCheck
+	if err := db.WithContext(contextOrBackground(ctx)).Where("auth_uuid = ?", authUUID).Limit(1).Find(&rows).Error; err != nil {
+		return CredentialHealthCheck{}, false, err
+	}
+	if len(rows) == 0 {
+		return CredentialHealthCheck{}, false, nil
+	}
+	return rows[0], true, nil
+}
+
 // ListHealthChecks returns credential -> latest check.
 func (r *Repository) ListHealthChecks(ctx context.Context) (map[string]CredentialHealthCheck, error) {
 	db, err := r.database()

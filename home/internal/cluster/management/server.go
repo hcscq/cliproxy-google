@@ -34,6 +34,7 @@ func NewHandler(repo *cluster.Repository, runtime *home.Runtime, nodeIP string, 
 	h := &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort, heartbeatTimeout: cluster.DefaultHeartbeatTimeout(), pluginStoreAuth: pluginauth.NewService(repo)}
 	if runtime != nil {
 		runtime.SetHealthCheckRunner(h.runHealthChecks)
+		runtime.SetSubscriptionTierHook(h.syncHealthTier)
 	}
 	return h
 }

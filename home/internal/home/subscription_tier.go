@@ -325,5 +325,18 @@ func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now ti
 	if changed {
 		log.Infof("subscription tier: %s (%s) -> %s (%s)", id, full.Label, tier, name)
 	}
+	if fn, _ := r.subscriptionTierHook.Load().(func(context.Context, string, string)); fn != nil {
+		fn(context.WithoutCancel(cctx), id, tier) // keeps the health-check 非Pro verdict in step
+	}
 	return true
 }
+
+// SetSubscriptionTierHook registers a callback run after every successful
+// subscription check (scheduled, event-driven or manual 刷新订阅).
+func (r *Runtime) SetSubscriptionTierHook(fn func(ctx context.Context, authID, tier string)) {
+	r.subscriptionTierHook.Store(fn)
+}
+
+// HealthTierMatches reports whether a subscription tier satisfies the import
+// check's expected tier (same rule the health check uses).
+func HealthTierMatches(tier, expected string) bool { return tierMatches(tier, expected) }
