@@ -17,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
+	log "github.com/sirupsen/logrus"
 )
 
 // GeminiAPIHandler contains the handlers for Gemini API endpoints.
@@ -152,6 +153,17 @@ func (h *GeminiAPIHandler) GeminiHandler(c *gin.Context) {
 
 	method := action[1]
 	rawJSON, _ := c.GetRawData()
+	if method == "generateContent" || method == "streamGenerateContent" {
+		cleaned, errMsg, note := normalizeGeminiRequestsField(rawJSON)
+		if errMsg != "" {
+			c.Data(http.StatusBadRequest, "application/json", geminiErrorBody(http.StatusBadRequest, errMsg))
+			return
+		}
+		if note != "" {
+			log.Infof("gemini %s %s: %s", method, action[0], note)
+		}
+		rawJSON = cleaned
+	}
 
 	switch method {
 	case "generateContent":
