@@ -285,6 +285,11 @@ type Config struct {
 	ImportCheckPromote      string `yaml:"import-check-promote,omitempty" json:"import-check-promote,omitempty"`
 	ImportCheckBlockFailed  bool   `yaml:"import-check-block-failed,omitempty" json:"import-check-block-failed,omitempty"`
 	ImportCheckRegionFail   *bool  `yaml:"import-check-region-fail,omitempty" json:"import-check-region-fail,omitempty"`
+	// ImportCheckRecheckBackoff: failed credentials are re-checked after these delays
+	// ("10m,30m,2h", last repeats; "off" disables). ImportCheckRecoverSuccesses: that many
+	// real successes after a failed check trigger an immediate re-check (0 = off).
+	ImportCheckRecheckBackoff   string `yaml:"import-check-recheck-backoff,omitempty" json:"import-check-recheck-backoff,omitempty"`
+	ImportCheckRecoverSuccesses *int   `yaml:"import-check-recover-successes,omitempty" json:"import-check-recover-successes,omitempty"`
 	// QuotaBucketReprobeSeconds: when the active quota probe reports a bucket (e.g.
 	// Antigravity "Gemini models") at 0%, every model of that bucket on that credential is
 	// skipped and the credential's quota is re-probed at this interval; the block is released
@@ -1813,13 +1818,18 @@ type ImportCheckSettings struct {
 	Promote      string // pass | not-failed | any
 	BlockFailed  bool
 	RegionFail   bool // UNSUPPORTED_LOCATION ineligible tier fails the check (default true)
+	// RecheckBackoff re-checks failed credentials (default 10m,30m,2h; last repeats).
+	RecheckBackoff []time.Duration
+	// RecoverSuccesses real successes after a failure trigger an immediate re-check (default 20).
+	RecoverSuccesses int
 }
 
 // ImportCheckSettings returns the import health check settings with defaults:
 // on import, expect pro, quota windows >= 95%, gemini-2.5-flash-lite, 3 at a time,
 // promote only passed reserves, failed credentials still scheduled.
 func (c *Config) ImportCheckSettings() ImportCheckSettings {
-	out := ImportCheckSettings{OnImport: true, ExpectedTier: "pro", QuotaMin: 0.95, Model: "gemini-2.5-flash-lite", Concurrency: 3, Promote: "pass", RegionFail: true}
+	out := ImportCheckSettings{OnImport: true, ExpectedTier: "pro", QuotaMin: 0.95, Model: "gemini-2.5-flash-lite", Concurrency: 3, Promote: "pass", RegionFail: true,
+		RecheckBackoff: []time.Duration{10 * time.Minute, 30 * time.Minute, 2 * time.Hour}, RecoverSuccesses: 20}
 	if c == nil {
 		return out
 	}
@@ -1848,6 +1858,24 @@ func (c *Config) ImportCheckSettings() ImportCheckSettings {
 	out.BlockFailed = c.ImportCheckBlockFailed
 	if c.ImportCheckRegionFail != nil {
 		out.RegionFail = *c.ImportCheckRegionFail
+	}
+	if b := strings.ToLower(strings.TrimSpace(c.ImportCheckRecheckBackoff)); b != "" {
+		if b == "off" || b == "0" || b == "none" {
+			out.RecheckBackoff = nil
+		} else {
+			var ds []time.Duration
+			for _, part := range strings.Split(b, ",") {
+				if d, err := time.ParseDuration(strings.TrimSpace(part)); err == nil && d >= time.Minute {
+					ds = append(ds, d)
+				}
+			}
+			if len(ds) > 0 {
+				out.RecheckBackoff = ds
+			}
+		}
+	}
+	if c.ImportCheckRecoverSuccesses != nil && *c.ImportCheckRecoverSuccesses >= 0 {
+		out.RecoverSuccesses = *c.ImportCheckRecoverSuccesses
 	}
 	return out
 }

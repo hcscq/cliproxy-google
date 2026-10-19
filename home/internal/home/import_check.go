@@ -36,7 +36,7 @@ const (
 	HealthAuth        = "auth" // 401 / no token
 	HealthNoEgress    = "no_egress"
 	HealthError       = "error"
-	HealthRegion      = "region" // 地区限制 (loadCodeAssist ineligible UNSUPPORTED_LOCATION)
+	HealthRegion      = "region"      // 地区限制 (loadCodeAssist ineligible UNSUPPORTED_LOCATION)
 	HealthRegionWarn  = "region_warn" // pass with a 地区提示 warning (region-fail off)
 )
 
@@ -365,6 +365,16 @@ func (r *Runtime) healthSweep(ctx context.Context) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	ids, err := s.ListHealthSweepIDs(cctx, 200)
+	if err == nil && len(ids) == 0 {
+		if rs, ok := s.(interface {
+			ListHealthRecheckIDs(context.Context, []time.Duration, int, int) ([]string, error)
+		}); ok {
+			cfg := r.ImportCheckSettings()
+			if ids, err = rs.ListHealthRecheckIDs(cctx, cfg.RecheckBackoff, cfg.RecoverSuccesses, 50); err == nil && len(ids) > 0 {
+				log.Infof("health check: re-checking %d failed credential(s)", len(ids))
+			}
+		}
+	}
 	cancel()
 	if err != nil || len(ids) == 0 {
 		r.healthSweeping.Store(false)

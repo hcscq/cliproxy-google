@@ -92,6 +92,7 @@ func buildV8Paths() []configPath {
 		{"import-check-quota-min-percent", "credentials.import-check.quota-min-percent"}, {"import-check-model", "credentials.import-check.model"},
 		{"import-check-concurrency", "credentials.import-check.concurrency"}, {"import-check-promote", "credentials.import-check.promote"},
 		{"import-check-block-failed", "credentials.import-check.block-failed"}, {"import-check-region-fail", "credentials.import-check.region-fail"},
+		{"import-check-recheck-backoff", "credentials.import-check.recheck-backoff"}, {"import-check-recover-successes", "credentials.import-check.recover-successes"},
 		{"quota-bucket-reprobe-seconds", "routing.cooldown.quota-bucket-reprobe-seconds"},
 		{"account-block-recheck-seconds", "routing.cooldown.account-block-recheck-seconds"},
 		{"proxy-url", "requests.proxy-url"}, {"passthrough-headers", "requests.passthrough-headers"},

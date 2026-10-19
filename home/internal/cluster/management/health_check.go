@@ -66,6 +66,7 @@ func (h *Handler) runHealthChecks(ctx context.Context, ids []string) {
 	cfg := h.runtime.ImportCheckSettings()
 	slots := healthSlots(cfg.Concurrency)
 	imports, _ := h.repo.ListCredentialImports(ctx)
+	prev, _ := h.repo.ListHealthChecks(ctx)
 	var wg sync.WaitGroup
 	for _, id := range ids {
 		id := strings.TrimSpace(id)
@@ -77,6 +78,9 @@ func (h *Handler) runHealthChecks(ctx context.Context, ids []string) {
 			rec.BatchID = imp.BatchID
 			t := imp.ImportedAt
 			rec.ImportedAt = &t
+		}
+		if p, ok := prev[id]; ok && p.Status == "fail" {
+			rec.RecheckCount = p.RecheckCount + 1 // consecutive failure if this one fails too
 		}
 		_ = h.repo.SaveHealthCheck(ctx, rec)
 		wg.Add(1)
@@ -124,6 +128,9 @@ func (h *Handler) checkOne(parent context.Context, rec cluster.CredentialHealthC
 		Inputs home.HealthInputs `json:"inputs"`
 	}{probe, in})
 	rec.Status = v.Status
+	if v.Status != "fail" {
+		rec.RecheckCount = 0
+	}
 	rec.Categories = strings.Join(v.Categories, ",")
 	rec.Reasons = strings.Join(v.Reasons, "\n")
 	rec.Evidence = v.Evidence

@@ -27,6 +27,8 @@ type CredentialHealthCheck struct {
 	BatchID    string     `gorm:"column:batch_id" json:"batch_id,omitempty"`
 	ImportedAt *time.Time `gorm:"column:imported_at" json:"imported_at,omitempty"`
 	VerifyURL  string     `gorm:"column:verify_url" json:"verify_url,omitempty"`
+	// RecheckCount counts consecutive failed checks (drives the re-check backoff).
+	RecheckCount int64 `gorm:"column:recheck_count;not null;default:0" json:"recheck_count,omitempty"`
 }
 
 // TableName returns the database table name.
@@ -70,6 +72,7 @@ func ensureCredentialHealthTables(ctx context.Context, db *gorm.DB) error {
 			`CREATE TABLE IF NOT EXISTS "credential_import" ("auth_uuid" text PRIMARY KEY, "batch_id" text NOT NULL, "imported_at" timestamptz NOT NULL DEFAULT now(), "source" text)`,
 			`CREATE INDEX IF NOT EXISTS "idx_credential_import_batch" ON "credential_import" ("batch_id")`,
 			`ALTER TABLE "credential_health_check" ADD COLUMN IF NOT EXISTS "verify_url" text`,
+			`ALTER TABLE "credential_health_check" ADD COLUMN IF NOT EXISTS "recheck_count" bigint NOT NULL DEFAULT 0`,
 		} {
 			if err := tx.Exec(stmt).Error; err != nil {
 				return err
@@ -319,4 +322,62 @@ func (a *RuntimeAdapter) SaveRegionObservation(ctx context.Context, id, codes, t
 		return err
 	}
 	return r.SaveRegionCheck(ctx, CredentialRegionCheck{AuthUUID: id, Codes: codes, Text: text, Tier: tier, HTTPStatus: status, CheckedAt: time.Now()})
+}
+
+// ListHealthRecheckIDs returns enabled credentials whose last check failed and that are
+// due again: the backoff step for their consecutive failures has elapsed, or real traffic
+// shows recoverN successes after the failed check (the result is stale).
+func (r *Repository) ListHealthRecheckIDs(ctx context.Context, backoff []time.Duration, recoverN, limit int) ([]string, error) {
+	if len(backoff) == 0 && recoverN <= 0 {
+		return nil, nil
+	}
+	db, err := r.database()
+	if err != nil {
+		return nil, err
+	}
+	tx := db.WithContext(contextOrBackground(ctx))
+	type row struct {
+		UUID         string
+		Idx          string
+		CheckedAt    time.Time
+		RecheckCount int64
+	}
+	var rows []row
+	if err := tx.Raw(`SELECT a.uuid, COALESCE(a.index,'') AS idx, h.checked_at, h.recheck_count FROM credential_health_check h
+		JOIN auth a ON a.uuid = h.auth_uuid
+		WHERE h.status = 'fail' AND a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false
+		ORDER BY h.checked_at LIMIT 2000`).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	var out []string
+	for _, x := range rows {
+		if len(out) >= limit {
+			break
+		}
+		if len(backoff) > 0 {
+			step := backoff[min(int(x.RecheckCount), len(backoff)-1)]
+			if now.Sub(x.CheckedAt) >= step {
+				out = append(out, x.UUID)
+				continue
+			}
+		}
+		if recoverN > 0 && x.Idx != "" {
+			var n int64
+			if err := tx.Raw(`SELECT count(*) FROM (SELECT 1 FROM usage WHERE auth_index = ? AND "timestamp" > ? AND NOT failed
+				AND COALESCE(event_type,'') <> 'probe' LIMIT ?) s`, x.Idx, x.CheckedAt, recoverN).Scan(&n).Error; err == nil && n >= int64(recoverN) {
+				out = append(out, x.UUID)
+			}
+		}
+	}
+	return out, nil
+}
+
+// ListHealthRecheckIDs exposes the lookup to the Home runtime.
+func (a *RuntimeAdapter) ListHealthRecheckIDs(ctx context.Context, backoff []time.Duration, recoverN, limit int) ([]string, error) {
+	r, err := a.reserveRepo()
+	if err != nil {
+		return nil, err
+	}
+	return r.ListHealthRecheckIDs(ctx, backoff, recoverN, limit)
 }
