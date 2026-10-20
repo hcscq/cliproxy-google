@@ -32,3 +32,14 @@ func TestClusterHealthStallCooldownSetting(t *testing.T) {
 		t.Fatalf("clamp high: %s", s.SubThresholdCool)
 	}
 }
+
+func TestClusterHealthSettingsLatencyAware(t *testing.T) {
+	s := clusterHealthSettings(config.AntigravityClusterHealthConfig{})
+	if !s.LatencyAware || s.LatencyFactor != 3 || s.LatencyAbs != 8*time.Second || s.LatencyTrickle != 0.1 || s.LatencyMaxFrac != 0.8 {
+		t.Fatalf("defaults = %+v", s)
+	}
+	s = clusterHealthSettings(config.AntigravityClusterHealthConfig{LatencyAwareDisabled: true, LatencySlowFactor: 1, LatencySlowSeconds: -1, LatencyTricklePercent: 1, LatencyMaxSlowPercent: 99})
+	if s.LatencyAware || s.LatencyFactor != 1.5 || s.LatencyAbs != 0 || s.LatencyTrickle != 0.02 || s.LatencyMaxFrac != 0.95 {
+		t.Fatalf("clamped = %+v", s)
+	}
+}

@@ -54,6 +54,16 @@ type HealthSettings struct {
 	// Absolute demotion (still subject to the guards above).
 	DemoteTTFBP95 time.Duration // recent TTFB p95 above this demotes the pair (0 = off)
 	DemoteFail    float64       // recent failure ratio above this demotes the pair (0 = off)
+	// Latency-aware scheduling: a pair whose TTFB EWMA is far above the
+	// family's healthy baseline (p25 of sampled pairs) keeps only a trickle
+	// share. Unlike SlowFactor (median-relative, capped by MaxDegradedFrac)
+	// this works when most pairs are slow. The scheduler still falls back to
+	// slow pairs when no fast pair is ready (429/cooldown/concurrency).
+	LatencyAware   bool
+	LatencyFactor  float64       // slow when TTFB > baseline * factor
+	LatencyAbs     time.Duration // or TTFB > this (only while the baseline is below it)
+	LatencyTrickle float64       // pick weight of a slow pair
+	LatencyMaxFrac float64       // at most this share of a family's sampled pairs is slowed
 }
 
 // demotedWeight is the pick weight of an absolutely demoted pair (>= probe floor).
@@ -81,6 +91,7 @@ func DefaultHealthSettings() HealthSettings {
 		Idle: 30 * time.Minute, MaxEntries: 100000, SyncInterval: 10 * time.Second,
 		FailMargin: 0.25, MaxDegradedFrac: 0.3, UpstreamFail: 0.5, UpstreamTTFB: 45 * time.Second, MinPeers: 4, SlowMinExtra: 5 * time.Second,
 		DemoteTTFBP95: 30 * time.Second, DemoteFail: 0.4,
+		LatencyAware: true, LatencyFactor: 3, LatencyAbs: 8 * time.Second, LatencyTrickle: 0.1, LatencyMaxFrac: 0.8,
 	}
 	return applyHealthEnv(s)
 }
@@ -117,6 +128,12 @@ func applyHealthEnv(s HealthSettings) HealthSettings {
 	d("CPA_HEALTH_SLOW_MIN_EXTRA", &s.SlowMinExtra)
 	d("CPA_HEALTH_DEMOTE_TTFB_P95", &s.DemoteTTFBP95)
 	f("CPA_HEALTH_DEMOTE_FAIL", &s.DemoteFail)
+	f("CPA_HEALTH_LATENCY_FACTOR", &s.LatencyFactor)
+	d("CPA_HEALTH_LATENCY_ABS", &s.LatencyAbs)
+	f("CPA_HEALTH_LATENCY_TRICKLE", &s.LatencyTrickle)
+	if v := strings.TrimSpace(os.Getenv("CPA_HEALTH_LATENCY_AWARE")); v == "0" || strings.EqualFold(v, "false") {
+		s.LatencyAware = false
+	}
 	if s.QuarantineMax < s.Quarantine {
 		s.QuarantineMax = s.Quarantine
 	}
@@ -675,8 +692,86 @@ func (t *HealthTracker) peerView(entries map[string]healthEntry, now int64) (map
 		for i := 0; i < len(bad) && i < limit; i++ {
 			penal[bad[i].key] = bad[i].w
 		}
+		applyLatencyPenalties(s, st, ps2latency(ps, func(p pk) (string, healthEntry) { return p.key, p.e }), penal)
 	}
 	return fams, penal
+}
+
+type latencyPair struct {
+	key  string
+	ttfb float64
+}
+
+func ps2latency[T any](ps []T, kv func(T) (string, healthEntry)) []latencyPair {
+	out := make([]latencyPair, 0, len(ps))
+	for _, p := range ps {
+		k, e := kv(p)
+		if e.ttfb > 0 {
+			out = append(out, latencyPair{k, e.ttfb})
+		}
+	}
+	return out
+}
+
+// latencyBaseline is the family's healthy TTFB baseline: the 25th percentile
+// of sampled pairs' TTFB EWMA, robust to more than half of a family being slow.
+func latencyBaseline(ps []latencyPair) float64 {
+	if len(ps) == 0 {
+		return 0
+	}
+	v := make([]float64, len(ps))
+	for i, p := range ps {
+		v[i] = p.ttfb
+	}
+	sort.Float64s(v)
+	return v[len(v)/4]
+}
+
+// latencySlow reports whether ttfb is far above the baseline.
+func latencySlow(s HealthSettings, base, ttfb float64) bool {
+	if base <= 0 || ttfb <= 0 {
+		return false
+	}
+	extra := float64(s.SlowMinExtra.Milliseconds())
+	if s.LatencyFactor > 0 && ttfb > base*s.LatencyFactor && ttfb-base > extra {
+		return true
+	}
+	abs := float64(s.LatencyAbs.Milliseconds())
+	return abs > 0 && base < abs/2 && ttfb > abs && ttfb > base*1.5
+}
+
+// applyLatencyPenalties gives latency-slow pairs a trickle weight (keeping any
+// lower weight already assigned), slowest first, capped at LatencyMaxFrac of
+// the family's pairs. Nothing is slowed when the family is upstream-wide slow
+// or has too few peers.
+func applyLatencyPenalties(s HealthSettings, st familyStat, ps []latencyPair, penal map[string]float64) {
+	if !s.LatencyAware || st.peers < s.MinPeers || len(ps) < s.MinPeers {
+		return
+	}
+	base := latencyBaseline(ps)
+	if s.UpstreamTTFB > 0 && base >= float64(s.UpstreamTTFB.Milliseconds()) {
+		return
+	}
+	trickle := s.LatencyTrickle
+	if trickle < 0.02 {
+		trickle = 0.02
+	}
+	if trickle > 1 {
+		trickle = 1
+	}
+	slow := make([]latencyPair, 0)
+	for _, p := range ps {
+		if latencySlow(s, base, p.ttfb) {
+			slow = append(slow, p)
+		}
+	}
+	sort.Slice(slow, func(i, j int) bool { return slow[i].ttfb > slow[j].ttfb })
+	limit := int(s.LatencyMaxFrac * float64(st.peers))
+	for i := 0; i < len(slow) && i < limit; i++ {
+		if w, ok := penal[slow[i].key]; !ok || w > trickle {
+			penal[slow[i].key] = trickle
+		}
+	}
 }
 
 func median(v []float64) float64 {

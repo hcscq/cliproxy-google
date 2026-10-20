@@ -11,7 +11,9 @@ import (
 )
 
 func localHealth() *HealthTracker {
-	return NewHealthTracker(DefaultHealthSettings(), nil)
+	s := DefaultHealthSettings()
+	s.LatencyAware = false // legacy median-relative weighting under test
+	return NewHealthTracker(s, nil)
 }
 
 func TestHealthFamilySharesTiersNotVersions(t *testing.T) {

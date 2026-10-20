@@ -984,7 +984,10 @@ func (r *Runtime) dispatchForAPIKey(ctx context.Context, reqModel string, header
 	bindingKey := affinityBindingKey(apiKey, affKey)
 	ttl := cfg.StickySessions.StickyTTL()
 	bound, hasBinding := store.LookupAffinity(ctx, bindingKey)
-	if hasBinding && !containsTrimmed(excludedAuthIDs, bound) {
+	// A latency-slow (or otherwise down-weighted) bound credential keeps the
+	// session only with its health weight; otherwise the session re-pins to a
+	// normally picked (usually faster) credential.
+	if hasBinding && !containsTrimmed(excludedAuthIDs, bound) && coreauth.ClusterHealth().Admit(bound, reqModel) {
 		res, err := r.dispatchForAPIKeyOnce(ctx, reqModel, headers, apiKey, credentialPolicy, excludedAuthIDs, bound, concurrencyCtx)
 		if err == nil && res != nil {
 			_, _ = store.BindAffinityFrom(ctx, bindingKey, res.AuthID, bound, reqModel, source, ttl)

@@ -296,6 +296,17 @@ type AntigravityClusterHealthConfig struct {
 	// is upstream-wide slow) so the scheduler skips it for that model only.
 	// Default 45 (30-60 sensible); clamped to 5..600.
 	StallCooldownSeconds int `yaml:"stall-cooldown-seconds,omitempty" json:"stall-cooldown-seconds,omitempty"`
+	// Latency-aware scheduling (default on): a pair whose recent TTFB is above
+	// the family's healthy baseline (p25) x LatencySlowFactor (3), or above
+	// LatencySlowSeconds (8) while the baseline is fast, gets
+	// LatencyTricklePercent (10) of its normal picks, capped at
+	// LatencyMaxSlowPercent (80) of the family. Slow pairs are still used
+	// when no fast pair is ready. LatencyAwareDisabled turns it off.
+	LatencyAwareDisabled  bool    `yaml:"latency-aware-disabled,omitempty" json:"latency-aware-disabled,omitempty"`
+	LatencySlowFactor     float64 `yaml:"latency-slow-factor,omitempty" json:"latency-slow-factor,omitempty"`
+	LatencySlowSeconds    int     `yaml:"latency-slow-seconds,omitempty" json:"latency-slow-seconds,omitempty"`
+	LatencyTricklePercent int     `yaml:"latency-trickle-percent,omitempty" json:"latency-trickle-percent,omitempty"`
+	LatencyMaxSlowPercent int     `yaml:"latency-max-slow-percent,omitempty" json:"latency-max-slow-percent,omitempty"`
 }
 
 // PromptRewriteRule is one literal prompt rewrite (see AntigravityConfig.PromptRewrites).

@@ -2,6 +2,7 @@ package home
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -116,6 +117,19 @@ func clusterHealthSettings(c config.AntigravityClusterHealthConfig) coreauth.Hea
 	}
 	if c.FailMarginPercent > 0 {
 		s.FailMargin = float64(c.FailMarginPercent) / 100
+	}
+	if c.LatencyAwareDisabled {
+		s.LatencyAware = false
+	}
+	if c.LatencySlowFactor > 0 {
+		s.LatencyFactor = math.Max(c.LatencySlowFactor, 1.5)
+	}
+	sec(c.LatencySlowSeconds, &s.LatencyAbs)
+	if v := c.LatencyTricklePercent; v > 0 {
+		s.LatencyTrickle = math.Min(math.Max(float64(v), 2), 100) / 100
+	}
+	if v := c.LatencyMaxSlowPercent; v > 0 {
+		s.LatencyMaxFrac = math.Min(float64(v), 95) / 100
 	}
 	if v := c.StallCooldownSeconds; v > 0 {
 		if v < 5 {
