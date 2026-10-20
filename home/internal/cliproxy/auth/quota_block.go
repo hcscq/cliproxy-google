@@ -50,6 +50,42 @@ func setQuotaBlockLocked(key string, b *quotaBlock) {
 		quotaBlockActive.Add(1)
 	}
 	quotaBlocks[key] = b
+	sweepQuotaBlocksLocked(time.Now())
+}
+
+// quotaBlockSweepEvery bounds how often expired blocks are swept, so the map only
+// holds live blocks (lookups also drop expired ones lazily).
+const quotaBlockSweepEvery = 30 * time.Second
+
+var quotaBlockLastSweep time.Time
+
+func sweepQuotaBlocksLocked(now time.Time) {
+	if now.Sub(quotaBlockLastSweep) < quotaBlockSweepEvery {
+		return
+	}
+	quotaBlockLastSweep = now
+	for k, b := range quotaBlocks {
+		if !b.until.After(now) {
+			deleteQuotaBlockLocked(k)
+		}
+	}
+}
+
+// MarkStallBlocked excludes (authID, model) from selection until the given time after a
+// first-byte stall. Unlike MarkQuotaBlocked it never touches an existing live block (a
+// quota block or canary stays as it is); it only adds a short block when none exists.
+func MarkStallBlocked(authID, model string, until time.Time) bool {
+	if strings.TrimSpace(authID) == "" || canonicalModelKey(model) == "" || !until.After(time.Now()) {
+		return false
+	}
+	key := quotaBlockKey(authID, model)
+	quotaBlockMu.Lock()
+	defer quotaBlockMu.Unlock()
+	if prev, ok := quotaBlocks[key]; ok && prev.until.After(time.Now()) {
+		return false
+	}
+	setQuotaBlockLocked(key, &quotaBlock{until: until})
+	return true
 }
 
 func deleteQuotaBlockLocked(key string) {

@@ -52,6 +52,9 @@ func (r *Runtime) RecordUsagePayload(ctx context.Context, payload string) {
 		if statusCode == http.StatusTooManyRequests && !result.Success {
 			r.blockAndPublishQuotaCooldown(id, result)
 		}
+		if strings.EqualFold(provider, "antigravity") {
+			r.blockAndPublishStallCooldown(id, statusCode, body, result)
+		}
 	}
 	r.coreManager.MarkResult(ctx, result)
 }

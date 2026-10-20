@@ -89,6 +89,34 @@ func (r *Runtime) blockAndPublishQuotaCooldown(authID string, result coreauth.Re
 		UntilMS: quotaCooldownUntil(result, time.Now()).UnixMilli(), Code: result.Error.Code, Message: msg})
 }
 
+// isStallResult reports a proxy first-byte timeout (504 "no first byte").
+func isStallResult(status int, body string, result coreauth.Result) bool {
+	return !result.Success && status == http.StatusGatewayTimeout && strings.Contains(strings.ToLower(body), "no first byte")
+}
+
+// blockAndPublishStallCooldown fast-blocks a (credential, model) pair on every Home right
+// after a first-byte stall so no Home re-dispatches it during the stall cooldown. The
+// model-state cooldown alone lives only on the Home that received the report (it is not
+// persisted), so the other Home kept picking the pair seconds later.
+func (r *Runtime) blockAndPublishStallCooldown(authID string, status int, body string, result coreauth.Result) {
+	if strings.TrimSpace(authID) == "" || !isStallResult(status, body, result) {
+		return
+	}
+	if r.coreManager != nil && r.coreManager.QuotaCooldownDisabledFor(authID) {
+		return
+	}
+	cd := coreauth.ClusterHealth().Settings().SubThresholdCool
+	if result.RetryAfter != nil && *result.RetryAfter > cd {
+		cd = *result.RetryAfter
+	}
+	if cd <= 0 {
+		return
+	}
+	until := time.Now().Add(cd)
+	coreauth.MarkStallBlocked(authID, result.Model, until)
+	publishQuotaSync(quotaSyncMsg{Kind: "stall", AuthID: authID, Model: result.Model, UntilMS: until.UnixMilli()})
+}
+
 // armQuotaCanary arms the single canary on this Home and tells the others to hold.
 func (r *Runtime) armQuotaCanary(authID, model string, reset time.Time) {
 	coreauth.ArmQuotaCanary(authID, model, reset)
@@ -139,6 +167,8 @@ func (r *Runtime) handleQuotaSync(raw string) {
 		if coreauth.MarkQuotaBlocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS)) {
 			quotaSyncApplied.Add(1)
 		}
+	case "stall":
+		coreauth.MarkStallBlocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS))
 	case "clear":
 		coreauth.ClearQuotaBlock(msg.AuthID, msg.Model)
 	case "hold":
