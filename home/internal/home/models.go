@@ -964,14 +964,18 @@ func rewriteModelInfoName(name, oldID, newID string) string {
 // applyOAuthModelAlias applies an o auth model alias.
 func applyOAuthModelAlias(cfg *config.Config, provider, authKind string, models []*ModelInfo) []*ModelInfo {
 	// Resolve credential context before calling upstream OAuth services.
-	if cfg == nil || len(models) == 0 {
+	if len(models) == 0 {
 		return models
 	}
 	channel := coreauth.OAuthModelAliasChannel(provider, authKind)
-	if channel == "" || len(cfg.OAuthModelAlias) == 0 {
+	if channel == "" {
 		return models
 	}
-	aliases := cfg.OAuthModelAlias[channel]
+	var configured map[string][]config.OAuthModelAlias
+	if cfg != nil {
+		configured = cfg.OAuthModelAlias
+	}
+	aliases := coreauth.WithBuiltinOAuthModelAliases(configured)[channel]
 	if len(aliases) == 0 {
 		return models
 	}

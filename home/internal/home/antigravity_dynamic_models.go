@@ -78,6 +78,22 @@ func antigravityExtraModelIDs() []string {
 
 // antigravityModelsForAuth returns the merged model list for one credential and
 // schedules a background catalog refresh when needed.
+// antigravityAccountGatedPrefixes are static models Google serves only to some
+// accounts (gemini-4-argon-*: Ultra only). Without a known catalog for the
+// credential they are not registered, so a cold catalog cache never routes
+// them to an account that would 404.
+var antigravityAccountGatedPrefixes = []string{"gemini-4-argon"}
+
+func antigravityAccountGatedModel(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	for _, p := range antigravityAccountGatedPrefixes {
+		if strings.HasPrefix(id, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runtime) antigravityModelsForAuth(a *coreauth.Auth, configModels []*ModelInfo) []*ModelInfo {
 	static := registry.GetAntigravityModels()
 	var upstream map[string]antigravityUpstreamModel
@@ -112,6 +128,8 @@ func mergeAntigravityModels(static []*ModelInfo, upstream map[string]antigravity
 			if _, ok := upstream[strings.ToLower(strings.TrimSpace(m.ID))]; !ok {
 				continue // the account cannot use this model
 			}
+		} else if antigravityAccountGatedModel(m.ID) {
+			continue // catalog not known yet: never assume a tier-gated model
 		}
 		add(withAntigravityOffMode(m))
 	}
