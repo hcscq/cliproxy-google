@@ -359,7 +359,13 @@ func parseAntigravityModelCapabilityHints(body []byte) (antigravityModelCapabili
 	var modelIDs map[string]struct{}
 	if parsed.Models != nil {
 		modelIDs = make(map[string]struct{}, len(parsed.Models))
-		for id := range parsed.Models {
+		for id, raw := range parsed.Models {
+			var entry struct {
+				Disabled bool `json:"disabled"`
+			}
+			if json.Unmarshal(raw, &entry) == nil && entry.Disabled {
+				continue // unavailable placeholder entry, not callable
+			}
 			if normalized := normalizeAntigravityFetchedModelID(id); normalized != "" {
 				modelIDs[normalized] = struct{}{}
 			}

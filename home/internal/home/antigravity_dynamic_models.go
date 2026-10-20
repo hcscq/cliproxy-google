@@ -302,8 +302,15 @@ func parseAntigravityCatalog(data []byte) (map[string]antigravityUpstreamModel, 
 			SupportsThinking  *bool  `json:"supportsThinking"`
 			MinThinkingBudget int    `json:"minThinkingBudget"`
 			ThinkingBudget    int    `json:"thinkingBudget"`
+			Disabled          bool   `json:"disabled"`
 		}
 		_ = json.Unmarshal(raw, &meta)
+		if meta.Disabled {
+			// Upstream lists some models as unavailable placeholders for this
+			// account (e.g. "gemini-4-argon-disabled" for Pro with the hub UA);
+			// they are not callable, so never register them.
+			continue
+		}
 		out[strings.ToLower(id)] = antigravityUpstreamModel{ID: id, DisplayName: strings.TrimSpace(meta.DisplayName), MaxTokens: meta.MaxTokens, MaxOutput: meta.MaxOutputTokens,
 			SupportsThinking: meta.SupportsThinking, MinThinking: meta.MinThinkingBudget, ThinkingBudget: meta.ThinkingBudget}
 	}

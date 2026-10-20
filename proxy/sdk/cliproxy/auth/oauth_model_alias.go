@@ -84,7 +84,7 @@ func (m *Manager) SetOAuthModelAlias(aliases map[string][]internalconfig.OAuthMo
 	if m == nil {
 		return
 	}
-	table := compileOAuthModelAliasTable(aliases)
+	table := compileOAuthModelAliasTable(WithBuiltinOAuthModelAliases(aliases))
 	// atomic.Value requires non-nil store values.
 	if table == nil {
 		table = &oauthModelAliasTable{}

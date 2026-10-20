@@ -64,8 +64,10 @@ func Version() string {
 	return Fallback
 }
 
-// UserAgent returns "antigravity/<latest> darwin/arm64".
-func UserAgent() string { return "antigravity/" + Version() + " darwin/arm64" }
+// UserAgent returns "antigravity/hub/<latest> darwin/arm64", the Antigravity Hub
+// client UA the proxy also sends. Google gates some catalog entries on the hub
+// form (e.g. gemini-4-argon-* for Ultra only appears with it).
+func UserAgent() string { return "antigravity/hub/" + Version() + " darwin/arm64" }
 
 // set is for tests.
 func set(v string) { mu.Lock(); cached = v; mu.Unlock() }

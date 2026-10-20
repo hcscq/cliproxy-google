@@ -18,7 +18,7 @@ func TestFetchAndFallback(t *testing.T) {
 	defer func() { manifestURL = old }()
 	set("")
 	RefreshNow(context.Background())
-	if got := UserAgent(); got != "antigravity/2.23.1 darwin/arm64" {
+	if got := UserAgent(); got != "antigravity/hub/2.23.1 darwin/arm64" {
 		t.Fatalf("got %q", got)
 	}
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("version: x\n")) }))

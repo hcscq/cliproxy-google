@@ -1011,10 +1011,11 @@ func applyOAuthModelAliasForAuth(cfg *config.Config, provider, authKind string, 
 
 func oauthModelAliasesForAuth(cfg *config.Config, channel string, attributes map[string]string) []config.OAuthModelAlias {
 	perAuthAliases := coreauth.OAuthModelAliasesFromAttributes(attributes)
-	if cfg == nil || len(cfg.OAuthModelAlias) == 0 {
-		return perAuthAliases
+	var configured map[string][]config.OAuthModelAlias
+	if cfg != nil {
+		configured = cfg.OAuthModelAlias
 	}
-	globalAliases := cfg.OAuthModelAlias[channel]
+	globalAliases := coreauth.WithBuiltinOAuthModelAliases(configured)[channel]
 	if len(perAuthAliases) == 0 {
 		return globalAliases
 	}
