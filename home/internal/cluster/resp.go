@@ -177,7 +177,7 @@ func (h *RESPHandler) Handle(ctx context.Context, args []string, remoteIP string
 		}
 		return h.nodePayload(ctx)
 	case "REFRESH":
-		if len(args) < 4 || len(args) > 5 {
+		if len(args) < 4 || len(args) > 6 {
 			return nil, fmt.Errorf("cluster resp: wrong number of arguments for 'cluster refresh'")
 		}
 		if _, errNode := h.authorizeNode(ctx, remoteIP, args[3]); errNode != nil {
@@ -187,8 +187,17 @@ func (h *RESPHandler) Handle(ctx context.Context, args []string, remoteIP string
 			return nil, fmt.Errorf("cluster resp: refresh controller is nil")
 		}
 		observedAccessTokenSHA256 := ""
-		if len(args) == 5 {
+		if len(args) >= 5 {
 			observedAccessTokenSHA256 = strings.TrimSpace(args[4])
+			if observedAccessTokenSHA256 == "-" {
+				observedAccessTokenSHA256 = ""
+			}
+		}
+		if len(args) == 6 {
+			if args[5] != disabledProbeRefreshArg {
+				return nil, fmt.Errorf("cluster resp: unsupported refresh flag")
+			}
+			ctx = coreauth.WithDisabledProbeRefresh(ctx)
 		}
 		return h.refresh.RefreshNowObserved(ctx, args[2], observedAccessTokenSHA256)
 	default:
@@ -341,6 +350,10 @@ func ForwardRefreshToMaster(ctx context.Context, master *ClusterNodeRecord, auth
 }
 
 // ForwardRefreshToMasterObserved forwards a token-versioned refresh request.
+// disabledProbeRefreshArg is the optional 6th CLUSTER REFRESH argument that
+// forwards an explicit disabled-credential probe refresh to the master.
+const disabledProbeRefreshArg = "allow-disabled"
+
 func ForwardRefreshToMasterObserved(ctx context.Context, master *ClusterNodeRecord, authUUID string, secret string, observedAccessTokenSHA256 string, tlsConfig *tls.Config) ([]byte, error) {
 	// Resolve credential context before calling upstream OAuth services.
 	if ctx == nil {
@@ -386,8 +399,16 @@ func ForwardRefreshToMasterObserved(ctx context.Context, master *ClusterNodeReco
 
 	args := []string{"CLUSTER", "REFRESH", authUUID, secret}
 	observedAccessTokenSHA256 = strings.TrimSpace(observedAccessTokenSHA256)
-	if observedAccessTokenSHA256 != "" {
-		args = append(args, observedAccessTokenSHA256)
+	allowDisabled := coreauth.DisabledProbeRefreshAllowed(ctx)
+	if observedAccessTokenSHA256 != "" || allowDisabled {
+		observed := observedAccessTokenSHA256
+		if observed == "" {
+			observed = "-"
+		}
+		args = append(args, observed)
+	}
+	if allowDisabled {
+		args = append(args, disabledProbeRefreshArg)
 	}
 	if _, errWrite := tlsConn.Write(encodeRESPArray(args...)); errWrite != nil {
 		return nil, errWrite

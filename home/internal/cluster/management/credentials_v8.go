@@ -59,7 +59,13 @@ func (h *Handler) RefreshAuthFiles(c *gin.Context) {
 		if !isOAuthAuth(auth) || (req.All && auth.Disabled) {
 			continue
 		}
-		_, errRefresh := h.runtime.RefreshNow(ctx, auth.ID)
+		refreshCtx := ctx
+		if !req.All && (auth.Disabled || auth.Status == coreauth.StatusDisabled) {
+			// Explicit single-credential refresh may rotate a disabled
+			// credential's token for probing; it stays disabled.
+			refreshCtx = coreauth.WithDisabledProbeRefresh(ctx)
+		}
+		_, errRefresh := h.runtime.RefreshNow(refreshCtx, auth.ID)
 		if !req.All {
 			if errRefresh != nil {
 				respondError(c, http.StatusInternalServerError, "refresh_failed", errRefresh)

@@ -187,11 +187,17 @@ func (h *Handler) apiCallAuthByIndex(ctx context.Context, authIndex string) (*co
 
 // apiCallToken converts api call token.
 func (h *Handler) apiCallToken(ctx context.Context, authIndex string, auth *coreauth.Auth) (string, error) {
-	if token := apiCallTokenValueForAuth(auth); token != "" {
+	disabled := auth != nil && (auth.Disabled || auth.Status == coreauth.StatusDisabled)
+	if token := apiCallTokenValueForAuth(auth); token != "" && !(disabled && apiCallTokenExpiring(auth, time.Now())) {
 		return token, nil
 	}
 	if h == nil || h.runtime == nil || strings.TrimSpace(authIndex) == "" {
 		return "", nil
+	}
+	if disabled {
+		// Disabled credentials are not auto-refreshed in the background; a
+		// probe through api-call refreshes on demand without enabling them.
+		ctx = coreauth.WithDisabledProbeRefresh(ctx)
 	}
 
 	payload, errRefresh := h.runtime.RefreshNow(ctx, authIndex)
@@ -318,6 +324,15 @@ func apiCallTokenValueForAuth(auth *coreauth.Auth) string {
 		}
 	}
 	return ""
+}
+
+// apiCallTokenExpiring reports whether the stored access token expires within a minute.
+func apiCallTokenExpiring(auth *coreauth.Auth, now time.Time) bool {
+	if auth == nil {
+		return false
+	}
+	expiresAt, ok := auth.ExpirationTime()
+	return ok && !expiresAt.IsZero() && expiresAt.Before(now.Add(time.Minute))
 }
 
 // apiCallTokenValueFromRefreshPayload converts api call token value from refresh payload.

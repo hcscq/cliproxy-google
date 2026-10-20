@@ -310,8 +310,9 @@ func (c *RefreshController) refreshLocalWithLock(ctx context.Context, authIndex,
 	var refreshErr error
 	var beforeClaim *coreauth.Auth
 	skipRefresh := false
+	allowDisabled := coreauth.DisabledProbeRefreshAllowed(ctx)
 	leased, _, leaseClaimed, errClaim := c.repo.MutateAuth(refreshCtx, targetUUID, "refresh-claim", func(auth *coreauth.Auth) bool {
-		if auth.Disabled || auth.Status == coreauth.StatusDisabled {
+		if (auth.Disabled || auth.Status == coreauth.StatusDisabled) && !allowDisabled {
 			refreshErr = newClusterUnauthorizedRefreshError()
 			if snapshot := auth.Clone(); snapshot.LastError != nil && strings.EqualFold(strings.TrimSpace(snapshot.LastError.Code), "authentication_error") {
 				refreshErr = snapshot.LastError
@@ -366,14 +367,16 @@ func (c *RefreshController) refreshLocalWithLock(ctx context.Context, authIndex,
 		}
 
 		finalizeCtx, cancelFinalize := context.WithTimeout(context.WithoutCancel(refreshCtx), refreshFinalizeTimeout)
-		finalized, finalizedLease, refreshSuperseded, disabledTarget, errFinalize := c.retryRefreshFinalize(finalizeCtx, targetUUID, leaseID, leased, beforeClaim, refreshed, refreshErr)
+		finalized, finalizedLease, refreshSuperseded, disabledTarget, errFinalize := c.retryRefreshFinalize(finalizeCtx, targetUUID, leaseID, leased, beforeClaim, refreshed, refreshErr, allowDisabled)
 		cancelFinalize()
 		if errFinalize != nil {
-			go c.continueRefreshFinalize(targetUUID, leaseID, leased.Clone(), beforeClaim.Clone(), refreshed.Clone(), refreshErr, now.Add(refreshLeaseDuration))
+			go c.continueRefreshFinalize(targetUUID, leaseID, leased.Clone(), beforeClaim.Clone(), refreshed.Clone(), refreshErr, now.Add(refreshLeaseDuration), allowDisabled)
 			return nil, errFinalize
 		}
 		updated = finalized
 		switch {
+		case disabledTarget && allowDisabled:
+			// Probe refresh of a disabled credential: keep refreshErr as-is.
 		case disabledTarget:
 			refreshErr = newClusterUnauthorizedRefreshError()
 			if updated != nil && updated.LastError != nil && strings.EqualFold(strings.TrimSpace(updated.LastError.Code), "authentication_error") {
@@ -410,6 +413,12 @@ func (c *RefreshController) refreshLocalWithLock(ctx context.Context, authIndex,
 		return nil, errUpdate
 	}
 	updated = updatedInMemory
+	if (updated.Disabled || updated.Status == coreauth.StatusDisabled) && allowDisabled {
+		if refreshErr != nil {
+			return nil, refreshErr
+		}
+		return home.BuildRefreshPayload(updated)
+	}
 	if updated.Disabled || updated.Status == coreauth.StatusDisabled {
 		if updated.LastError != nil && strings.EqualFold(strings.TrimSpace(updated.LastError.Code), "authentication_error") {
 			return nil, updated.LastError
@@ -434,9 +443,9 @@ func (c *RefreshController) refreshLocalWithLock(ctx context.Context, authIndex,
 	return home.BuildRefreshPayload(updated)
 }
 
-func (c *RefreshController) retryRefreshFinalize(ctx context.Context, targetUUID, leaseID string, leased, beforeClaim, refreshed *coreauth.Auth, errRefresh error) (*coreauth.Auth, bool, bool, bool, error) {
+func (c *RefreshController) retryRefreshFinalize(ctx context.Context, targetUUID, leaseID string, leased, beforeClaim, refreshed *coreauth.Auth, errRefresh error, allowDisabled bool) (*coreauth.Auth, bool, bool, bool, error) {
 	for {
-		finalized, finalizedLease, refreshSuperseded, disabledTarget, errFinalize := c.finalizeRefreshLease(ctx, targetUUID, leaseID, leased, beforeClaim, refreshed, errRefresh)
+		finalized, finalizedLease, refreshSuperseded, disabledTarget, errFinalize := c.finalizeRefreshLease(ctx, targetUUID, leaseID, leased, beforeClaim, refreshed, errRefresh, allowDisabled)
 		if errFinalize == nil {
 			return finalized, finalizedLease, refreshSuperseded, disabledTarget, nil
 		}
@@ -448,7 +457,7 @@ func (c *RefreshController) retryRefreshFinalize(ctx context.Context, targetUUID
 	}
 }
 
-func (c *RefreshController) finalizeRefreshLease(ctx context.Context, targetUUID, leaseID string, leased, beforeClaim, refreshed *coreauth.Auth, errRefresh error) (*coreauth.Auth, bool, bool, bool, error) {
+func (c *RefreshController) finalizeRefreshLease(ctx context.Context, targetUUID, leaseID string, leased, beforeClaim, refreshed *coreauth.Auth, errRefresh error, allowDisabled bool) (*coreauth.Auth, bool, bool, bool, error) {
 	refreshSuperseded := false
 	disabledTarget := false
 	finalized, _, finalizedLease, errFinalize := c.repo.MutateAuth(ctx, targetUUID, "refresh-finalize", func(current *coreauth.Auth) bool {
@@ -456,8 +465,14 @@ func (c *RefreshController) finalizeRefreshLease(ctx context.Context, targetUUID
 			return false
 		}
 		if current.Disabled || current.Status == coreauth.StatusDisabled {
-			clearRefreshLease(current)
 			disabledTarget = true
+			if allowDisabled {
+				merged := mergeDisabledProbeRefreshOutcome(current, leased, beforeClaim, refreshed, errRefresh, time.Now().UTC())
+				clearRefreshLease(merged)
+				*current = *merged
+				return true
+			}
+			clearRefreshLease(current)
 			return true
 		}
 		if coreauth.AuthIsNewerThanObserved(current, coreauth.AccessTokenSHA256(leased)) {
@@ -476,13 +491,13 @@ func (c *RefreshController) finalizeRefreshLease(ctx context.Context, targetUUID
 	return finalized, finalizedLease, refreshSuperseded, disabledTarget, errFinalize
 }
 
-func (c *RefreshController) continueRefreshFinalize(targetUUID, leaseID string, leased, beforeClaim, refreshed *coreauth.Auth, errRefresh error, deadline time.Time) {
+func (c *RefreshController) continueRefreshFinalize(targetUUID, leaseID string, leased, beforeClaim, refreshed *coreauth.Auth, errRefresh error, deadline time.Time, allowDisabled bool) {
 	if c == nil || c.repo == nil || c.runtime == nil || leased == nil || refreshed == nil {
 		return
 	}
 	for time.Now().UTC().Before(deadline) {
 		attemptCtx, cancelAttempt := context.WithTimeout(context.Background(), 5*time.Second)
-		finalized, finalizedLease, _, _, errFinalize := c.finalizeRefreshLease(attemptCtx, targetUUID, leaseID, leased, beforeClaim, refreshed, errRefresh)
+		finalized, finalizedLease, _, _, errFinalize := c.finalizeRefreshLease(attemptCtx, targetUUID, leaseID, leased, beforeClaim, refreshed, errRefresh, allowDisabled)
 		cancelAttempt()
 		if errFinalize == nil {
 			if finalizedLease && finalized != nil {
@@ -531,6 +546,40 @@ func clearRefreshLease(auth *coreauth.Auth) {
 	if len(auth.Attributes) == 0 {
 		auth.Attributes = nil
 	}
+}
+
+// mergeDisabledProbeRefreshOutcome applies an explicit probe refresh to a
+// disabled credential. Disabled/status/status message/last error/note and all
+// scheduling state are kept from current; success writes only token
+// metadata/attributes and LastRefreshedAt, failure records only
+// LastRefreshError. NextRefreshAfter returns to its pre-claim value so the
+// probe never schedules background refreshes.
+func mergeDisabledProbeRefreshOutcome(current, base, beforeClaim, refreshed *coreauth.Auth, errRefresh error, now time.Time) *coreauth.Auth {
+	merged := current.Clone()
+	if beforeClaim != nil {
+		merged.NextRefreshAfter = beforeClaim.NextRefreshAfter
+	}
+	merged.UpdatedAt = now
+	if errRefresh == nil && refreshed != nil {
+		if base == nil {
+			base = &coreauth.Auth{}
+		}
+		merged.Metadata = mergeRefreshMetadata(current.Metadata, base.Metadata, refreshed.Metadata)
+		merged.Attributes = mergeRefreshStringMap(current.Attributes, base.Attributes, refreshed.Attributes)
+		merged.Runtime = refreshed.Runtime
+		merged.LastRefreshedAt = now
+		merged.LastRefreshError = nil
+		return merged
+	}
+	if errRefresh != nil {
+		var authErr *coreauth.Error
+		if errors.As(errRefresh, &authErr) && authErr != nil {
+			merged.LastRefreshError = coreauth.CloneErrorForRefresh(authErr)
+		} else {
+			merged.LastRefreshError = &coreauth.Error{Code: "refresh_failed", Message: errRefresh.Error()}
+		}
+	}
+	return merged
 }
 
 func mergeClusterRefreshOutcome(current, base, refreshed *coreauth.Auth, errRefresh error, now time.Time) *coreauth.Auth {
