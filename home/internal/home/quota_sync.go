@@ -113,7 +113,8 @@ func (r *Runtime) blockAndPublishStallCooldown(authID string, status int, body s
 		return
 	}
 	until := time.Now().Add(cd)
-	coreauth.MarkStallBlocked(authID, result.Model, until)
+	applied := coreauth.MarkStallBlocked(authID, result.Model, until)
+	log.Infof("stall block: %s %s for %s (applied=%v)", authID, result.Model, cd, applied)
 	publishQuotaSync(quotaSyncMsg{Kind: "stall", AuthID: authID, Model: result.Model, UntilMS: until.UnixMilli()})
 }
 
@@ -168,7 +169,8 @@ func (r *Runtime) handleQuotaSync(raw string) {
 			quotaSyncApplied.Add(1)
 		}
 	case "stall":
-		coreauth.MarkStallBlocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS))
+		applied := coreauth.MarkStallBlocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS))
+		log.Debugf("stall block (remote): %s %s applied=%v", msg.AuthID, msg.Model, applied)
 	case "clear":
 		coreauth.ClearQuotaBlock(msg.AuthID, msg.Model)
 	case "hold":
