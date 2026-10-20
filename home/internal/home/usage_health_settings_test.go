@@ -17,3 +17,18 @@ func TestClusterHealthSettingsOverlay(t *testing.T) {
 		t.Fatalf("overlay: %+v", s)
 	}
 }
+
+func TestClusterHealthStallCooldownSetting(t *testing.T) {
+	if s := clusterHealthSettings(config.AntigravityClusterHealthConfig{}); s.SubThresholdCool != 45*time.Second {
+		t.Fatalf("default stall cooldown %s", s.SubThresholdCool)
+	}
+	if s := clusterHealthSettings(config.AntigravityClusterHealthConfig{StallCooldownSeconds: 30}); s.SubThresholdCool != 30*time.Second {
+		t.Fatalf("panel 30: %s", s.SubThresholdCool)
+	}
+	if s := clusterHealthSettings(config.AntigravityClusterHealthConfig{StallCooldownSeconds: 1}); s.SubThresholdCool != 5*time.Second {
+		t.Fatalf("clamp low: %s", s.SubThresholdCool)
+	}
+	if s := clusterHealthSettings(config.AntigravityClusterHealthConfig{StallCooldownSeconds: 99999}); s.SubThresholdCool != 600*time.Second {
+		t.Fatalf("clamp high: %s", s.SubThresholdCool)
+	}
+}

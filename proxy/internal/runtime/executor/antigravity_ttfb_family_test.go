@@ -13,7 +13,7 @@ func TestAntigravityStreamTTFBByFamily(t *testing.T) {
 	antigravityHealthLive.Store(nil)
 	s := antigravityHealthSettingsFrom(&config.Config{})
 	ctx := context.Background()
-	if got := s.streamTTFB(ctx, "gemini-3.8-flash-tiered"); got != 22*time.Second {
+	if got := s.streamTTFB(ctx, "gemini-3.8-flash-tiered"); got != 15*time.Second {
 		t.Fatalf("3.8 default = %s", got)
 	}
 	if got := s.streamTTFB(ctx, "gemini-2.5-flash"); got != 75*time.Second {

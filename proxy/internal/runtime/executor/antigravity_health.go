@@ -29,6 +29,7 @@ import (
 // traffic again (the probe); a repeat failure quarantines it longer.
 
 const (
+	antigravityDefaultStallCooldown = 45 * time.Second
 	antigravityHealthMaxEntries = 50000 // ~10k credentials x a few models
 	antigravityHealthWindow     = 10 * time.Minute
 )
@@ -52,7 +53,9 @@ func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 	thinking.SetClampUnsupportedLevels(h.ClampThinkingLevel == nil || *h.ClampThinkingLevel)
 }
 
-const defaultAntigravityTTFBByFamily = "3.8=22"
+// defaultAntigravityTTFBByFamily: 3.8 (tiered/high/medium/low) gets 15s; a
+// stall cools the credential+model down so the retry lands elsewhere.
+const defaultAntigravityTTFBByFamily = "3.8=15"
 
 // defaultAntigravityNonStreamByFamily bounds a whole non-streaming 3.8
 // attempt (no first byte exists there). 120s sits above the observed p97 of
@@ -321,7 +324,7 @@ func antigravityTTFBTimeoutErr(model string, wait, cooldown time.Duration) statu
 		state = antigravityHealthLabel(model) + " 降级"
 	}
 	if cooldown <= 0 {
-		cooldown = 30 * time.Second
+		cooldown = antigravityDefaultStallCooldown
 	}
 	body := fmt.Sprintf(`{"error":{"code":504,"status":"DEADLINE_EXCEEDED","message":"%s: no first byte from upstream within %s","cpa_cooldown_ms":%d}}`, state, wait.Round(time.Second), cooldown.Milliseconds())
 	return statusErr{code: http.StatusGatewayTimeout, msg: body, retryAfter: &cooldown}

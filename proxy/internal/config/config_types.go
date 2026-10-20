@@ -197,7 +197,7 @@ type AntigravityHealthConfig struct {
 	CapacityCooldownSeconds []int `yaml:"capacity-cooldown-seconds,omitempty" json:"capacity-cooldown-seconds,omitempty"`
 	// TTFBTimeoutByFamily overrides TTFBTimeoutSeconds per model family for
 	// streaming attempts, e.g. "3.8=28,2.5=60" (family = "gemini-3.8" or "3.8").
-	// Empty = built-in default "3.8=28"; "off" = no per-family override. The
+	// Empty = built-in default "3.8=15"; "off" = no per-family override. The
 	// last attempt allowed by the request budget uses the longer base timeout.
 	TTFBTimeoutByFamily string `yaml:"ttfb-timeout-by-family,omitempty" json:"ttfb-timeout-by-family,omitempty"`
 	// NonStreamTimeoutByFamily shortens NonStreamTimeoutSeconds per family for
@@ -291,6 +291,11 @@ type AntigravityClusterHealthConfig struct {
 	SlowFactor          float64 `yaml:"slow-factor,omitempty" json:"slow-factor,omitempty"`
 	SlowMinExtraSeconds int     `yaml:"slow-min-extra-seconds,omitempty" json:"slow-min-extra-seconds,omitempty"`
 	FailMarginPercent   int     `yaml:"fail-margin-percent,omitempty" json:"fail-margin-percent,omitempty"`
+	// StallCooldownSeconds cools a (credential, model) pair down after one
+	// first-byte timeout (below the quarantine threshold, or when the family
+	// is upstream-wide slow) so the scheduler skips it for that model only.
+	// Default 45 (30-60 sensible); clamped to 5..600.
+	StallCooldownSeconds int `yaml:"stall-cooldown-seconds,omitempty" json:"stall-cooldown-seconds,omitempty"`
 }
 
 // PromptRewriteRule is one literal prompt rewrite (see AntigravityConfig.PromptRewrites).

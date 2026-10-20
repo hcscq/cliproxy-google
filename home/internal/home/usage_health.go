@@ -117,6 +117,15 @@ func clusterHealthSettings(c config.AntigravityClusterHealthConfig) coreauth.Hea
 	if c.FailMarginPercent > 0 {
 		s.FailMargin = float64(c.FailMarginPercent) / 100
 	}
+	if v := c.StallCooldownSeconds; v > 0 {
+		if v < 5 {
+			v = 5
+		}
+		if v > 600 {
+			v = 600
+		}
+		s.SubThresholdCool = time.Duration(v) * time.Second
+	}
 	return s
 }
 

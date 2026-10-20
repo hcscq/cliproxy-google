@@ -41,7 +41,7 @@ func TestHealthSlowQuarantineEscalatesAndResets(t *testing.T) {
 	healthyPeers(h, 20)
 	o := HealthObservation{AuthID: "a", Model: "gemini-3.8-flash", Slow: true, Failed: true, TTFBMs: 75000}
 	for i := 0; i < 2; i++ {
-		if cd := h.Observe(context.Background(), o); cd != 15*time.Second {
+		if cd := h.Observe(context.Background(), o); cd != DefaultStallCooldown {
 			t.Fatalf("sub-threshold: %s", cd)
 		}
 	}
@@ -147,7 +147,7 @@ func TestHealthRedisClusterWide(t *testing.T) {
 		p.fams["gemini-3.8"] = familyStat{peers: 10}
 	}
 	o := HealthObservation{AuthID: "x", Model: "gemini-3.8-flash", Slow: true, Failed: true, TTFBMs: 75000}
-	if cd := podA.Observe(context.Background(), o); cd != 15*time.Second {
+	if cd := podA.Observe(context.Background(), o); cd != DefaultStallCooldown {
 		t.Fatalf("A first: %s", cd)
 	}
 	// The second slow event lands on another replica and still crosses the shared threshold.
@@ -185,7 +185,7 @@ func TestHealthUpstreamWideNoPenalty(t *testing.T) {
 	}
 	o := HealthObservation{AuthID: "c1", Model: "gemini-3.8-flash", Slow: true, Failed: true, TTFBMs: 75000}
 	for i := 0; i < 6; i++ {
-		if cd := h.Observe(ctx, o); cd != 15*time.Second {
+		if cd := h.Observe(ctx, o); cd != DefaultStallCooldown {
 			t.Fatalf("upstream-wide slow must not quarantine: %s", cd)
 		}
 	}

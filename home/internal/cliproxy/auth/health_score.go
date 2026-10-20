@@ -67,11 +67,15 @@ type familyStat struct {
 	quarantined int
 }
 
+// DefaultStallCooldown is the per-(credential, model) cooldown after a single
+// first-byte timeout (panel: health.cluster.stall-cooldown-seconds).
+const DefaultStallCooldown = 45 * time.Second
+
 // DefaultHealthSettings returns the defaults.
 func DefaultHealthSettings() HealthSettings {
 	s := HealthSettings{
 		Alpha: 0.2, SlowEvents: 3, Window: 10 * time.Minute,
-		Quarantine: 5 * time.Minute, QuarantineMax: 15 * time.Minute, SubThresholdCool: 15 * time.Second,
+		Quarantine: 5 * time.Minute, QuarantineMax: 15 * time.Minute, SubThresholdCool: DefaultStallCooldown,
 		CapacitySteps:  []time.Duration{time.Second, 10 * time.Second, time.Minute},
 		SlowClientWait: 45 * time.Second, MinSamples: 5, SlowFactor: 2, ProbeFloor: 0.15,
 		Idle: 30 * time.Minute, MaxEntries: 100000, SyncInterval: 10 * time.Second,
@@ -100,6 +104,7 @@ func applyHealthEnv(s HealthSettings) HealthSettings {
 	}
 	i("CPA_HEALTH_SLOW_EVENTS", &s.SlowEvents)
 	d("CPA_HEALTH_WINDOW", &s.Window)
+	d("CPA_HEALTH_STALL_COOLDOWN", &s.SubThresholdCool)
 	d("CPA_HEALTH_QUARANTINE", &s.Quarantine)
 	d("CPA_HEALTH_QUARANTINE_MAX", &s.QuarantineMax)
 	f("CPA_HEALTH_SLOW_FACTOR", &s.SlowFactor)
