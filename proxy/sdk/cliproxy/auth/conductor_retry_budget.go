@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -40,7 +41,48 @@ type retryBudget struct {
 	observed  int
 	bareBody  string
 	bareRun   int
+	ttfbCount int
 	stopCause string
+}
+
+// maxFirstByteTimeouts caps first-byte timeouts per request (set from the
+// antigravity health panel). -1 = unset (DefaultMaxFirstByteTimeouts),
+// 0 = unlimited.
+var maxFirstByteTimeouts atomic.Int32
+
+func init() { maxFirstByteTimeouts.Store(-1) }
+
+// DefaultMaxFirstByteTimeouts: after this many first-byte timeouts on one
+// request, more credentials rarely help (the prompt itself is slow upstream).
+const DefaultMaxFirstByteTimeouts = 2
+
+// SetMaxFirstByteTimeouts sets the per-request first-byte timeout cap
+// (0 = unlimited, negative = default).
+func SetMaxFirstByteTimeouts(n int) {
+	if n < 0 {
+		n = -1
+	}
+	maxFirstByteTimeouts.Store(int32(n))
+}
+
+func firstByteTimeoutCap() int {
+	n := int(maxFirstByteTimeouts.Load())
+	if n < 0 {
+		return DefaultMaxFirstByteTimeouts
+	}
+	return n
+}
+
+// isFirstByteTimeoutErr matches the executor's first-byte deadline 504.
+func isFirstByteTimeoutErr(err error) bool {
+	if statusCodeFromError(err) != http.StatusGatewayTimeout {
+		return false
+	}
+	body := extractErrorBody(err)
+	if body == "" {
+		body = err.Error()
+	}
+	return strings.Contains(body, "no first byte from upstream")
 }
 
 func normalizeMaxRequestCredentials(v int) int {
@@ -149,10 +191,15 @@ func (b *retryBudget) exhausted(lastErr error) (bool, string) {
 		} else {
 			b.bareBody, b.bareRun = "", 0
 		}
+		if isFirstByteTimeoutErr(lastErr) {
+			b.ttfbCount++
+		}
 	}
 	switch {
 	case b.bareRun >= identicalBare429StopRun:
 		b.stopCause = "identical non-quota 429 across credentials"
+	case b.ttfbCount > 0 && firstByteTimeoutCap() > 0 && b.ttfbCount >= firstByteTimeoutCap():
+		b.stopCause = "first-byte timeout cap reached"
 	case b.maxCreds > 0 && len(b.distinct) >= b.maxCreds:
 		b.stopCause = "max-request-credentials reached"
 	case b.maxDur > 0 && time.Since(b.start) >= b.maxDur:

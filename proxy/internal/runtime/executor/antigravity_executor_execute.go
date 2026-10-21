@@ -381,7 +381,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	requestPayload = applyClaudeWebSearchWithFunctions(baseModel, from, originalPayload, requestPayload)
 	requestPayload = ensureAntigravityGeminiBoundaryUserContent(baseModel, requestPayload)
 	health := antigravityHealthSettingsFrom(e.cfg)
-	attemptLimit := health.streamTTFB(ctx, baseModel)
+	attemptLimit := health.streamTTFB(ctx, baseModel, len(requestPayload))
 	sendPayload, requestPayload, builtinEmu := e.prepareBuiltinToolsEmulation(ctx, auth, token, baseModel, baseURL, httpClient, requestPayload, attemptLimit, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata), from)
 	attemptTimer := newAntigravityAttemptTimer(ctx, attemptLimit)
 	defer attemptTimer.cancel()

@@ -30,8 +30,8 @@ import (
 
 const (
 	antigravityDefaultStallCooldown = 45 * time.Second
-	antigravityHealthMaxEntries = 50000 // ~10k credentials x a few models
-	antigravityHealthWindow     = 10 * time.Minute
+	antigravityHealthMaxEntries     = 50000 // ~10k credentials x a few models
+	antigravityHealthWindow         = 10 * time.Minute
 )
 
 type antigravityHealthSettings struct {
@@ -41,6 +41,8 @@ type antigravityHealthSettings struct {
 	quarantine, maxQ      time.Duration
 	slowEvents            int
 	capacitySteps         []time.Duration
+	ttfbExtraPer10k       time.Duration // first-byte allowance per 10k input tokens
+	ttfbScaledMax         time.Duration // cap for the input-scaled family limit
 }
 
 // antigravityHealthLive is the latest hot-reloaded health config; it wins
@@ -51,11 +53,22 @@ var antigravityHealthLive atomic.Pointer[config.AntigravityHealthConfig]
 func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 	antigravityHealthLive.Store(&h)
 	thinking.SetClampUnsupportedLevels(h.ClampThinkingLevel == nil || *h.ClampThinkingLevel)
+	maxTTFB := defaultAntigravityTTFBMaxRetries
+	if h.TTFBTimeoutMaxRetries != nil {
+		maxTTFB = *h.TTFBTimeoutMaxRetries
+	}
+	cliproxyauth.SetMaxFirstByteTimeouts(maxTTFB)
 }
 
 // defaultAntigravityTTFBByFamily: 3.8 (tiered/high/medium/low) gets 15s; a
 // stall cools the credential+model down so the retry lands elsewhere.
 const defaultAntigravityTTFBByFamily = "3.8=15"
+
+const (
+	defaultAntigravityTTFBExtraPer10k = 5 * time.Second
+	defaultAntigravityTTFBScaledMax   = 45 * time.Second
+	defaultAntigravityTTFBMaxRetries  = 2
+)
 
 // defaultAntigravityNonStreamByFamily bounds a whole non-streaming 3.8
 // attempt (no first byte exists there). 120s sits above the observed p97 of
@@ -131,6 +144,13 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 		}
 	}
 	sec(h.TTFBTimeoutSeconds, &s.ttfb, time.Second)
+	s.ttfbExtraPer10k, s.ttfbScaledMax = defaultAntigravityTTFBExtraPer10k, defaultAntigravityTTFBScaledMax
+	if h.TTFBExtraSecondsPer10kTokens != nil {
+		s.ttfbExtraPer10k = time.Duration(max(*h.TTFBExtraSecondsPer10kTokens, 0)) * time.Second
+	}
+	if h.TTFBScaledMaxSeconds > 0 {
+		s.ttfbScaledMax = time.Duration(h.TTFBScaledMaxSeconds) * time.Second
+	}
 	sec(h.NonStreamTimeoutSeconds, &s.nonStream, time.Second)
 	sec(h.SlowThresholdSeconds, &s.slow, time.Second)
 	sec(h.QuarantineMinutes, &s.quarantine, time.Minute)
@@ -156,8 +176,32 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 // per-family limit when shorter than the base, except for the last attempt
 // the request budget allows (cutting it short would only turn a slow answer
 // into an error), which keeps the base limit.
-func (s antigravityHealthSettings) streamTTFB(ctx context.Context, model string) time.Duration {
-	return familyAttemptLimit(ctx, s.byFamily, model, s.ttfb)
+//
+// payloadBytes (the upstream request body size, 0 = unknown) lengthens the
+// per-family limit by ttfbExtraPer10k per 10k estimated input tokens
+// (bytes/4), capped at ttfbScaledMax and the base limit: big prompts need
+// longer prefill before the first byte.
+func (s antigravityHealthSettings) streamTTFB(ctx context.Context, model string, payloadBytes int) time.Duration {
+	byFamily := s.byFamily
+	if extra := s.ttfbInputExtra(payloadBytes); extra > 0 {
+		if fam, ok := byFamily[antigravityHealthBucket(model)]; ok && fam > 0 {
+			scaled := fam + extra
+			if hi := max(s.ttfbScaledMax, fam); scaled > hi {
+				scaled = hi
+			}
+			byFamily = map[string]time.Duration{antigravityHealthBucket(model): scaled}
+		}
+	}
+	return familyAttemptLimit(ctx, byFamily, model, s.ttfb)
+}
+
+// ttfbInputExtra is the first-byte allowance for a request body of n bytes.
+func (s antigravityHealthSettings) ttfbInputExtra(n int) time.Duration {
+	if n <= 0 || s.ttfbExtraPer10k <= 0 {
+		return 0
+	}
+	tokens := int64(n) / 4
+	return time.Duration(int64(s.ttfbExtraPer10k) / 10000 * tokens)
 }
 
 // nonStreamLimit is the whole-attempt limit for a non-streaming attempt

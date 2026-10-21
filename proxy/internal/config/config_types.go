@@ -204,6 +204,18 @@ type AntigravityHealthConfig struct {
 	// whole non-streaming attempts, e.g. "3.8=120". Empty = built-in default
 	// "3.8=120"; "off" = none. The last budgeted attempt keeps the base limit.
 	NonStreamTimeoutByFamily string `yaml:"nonstream-timeout-by-family,omitempty" json:"nonstream-timeout-by-family,omitempty"`
+	// TTFBExtraSecondsPer10kTokens lengthens the per-family first-byte limit
+	// by this many seconds per 10k estimated input tokens (body bytes / 4), so
+	// large-context requests are not cut while the model is still prefilling.
+	// nil = default 5; 0 = off (flat per-family limit).
+	TTFBExtraSecondsPer10kTokens *int `yaml:"ttfb-extra-seconds-per-10k-tokens,omitempty" json:"ttfb-extra-seconds-per-10k-tokens,omitempty"`
+	// TTFBScaledMaxSeconds caps the input-scaled per-family limit. Default 45;
+	// never above TTFBTimeoutSeconds.
+	TTFBScaledMaxSeconds int `yaml:"ttfb-scaled-max-seconds,omitempty" json:"ttfb-scaled-max-seconds,omitempty"`
+	// TTFBTimeoutMaxRetries stops a request after this many first-byte
+	// timeouts (on different credentials) and returns the 504 instead of
+	// trying more credentials. nil = default 2; 0 = unlimited.
+	TTFBTimeoutMaxRetries *int `yaml:"ttfb-timeout-max-retries,omitempty" json:"ttfb-timeout-max-retries,omitempty"`
 	// SubscriptionIntervalMinutes is how often Home re-reads each enabled
 	// credential's subscription tier (loadCodeAssist, pinned egress). Default 60.
 	SubscriptionIntervalMinutes int `yaml:"subscription-interval-minutes,omitempty" json:"subscription-interval-minutes,omitempty"`
@@ -250,14 +262,14 @@ type AntigravityHealthConfig struct {
 	// Per-credential request caps by subscription tier (Home). Every upstream
 	// attempt counts (retries included). 0 = unlimited (default). Credentials
 	// can override via metadata request_cap_mode (custom|unlimited).
-	RequestCapHourlyFree int `yaml:"request-cap-hourly-free,omitempty" json:"request-cap-hourly-free,omitempty"`
-	RequestCapHourlyPro int `yaml:"request-cap-hourly-pro,omitempty" json:"request-cap-hourly-pro,omitempty"`
-	RequestCapHourlyUltra int `yaml:"request-cap-hourly-ultra,omitempty" json:"request-cap-hourly-ultra,omitempty"`
+	RequestCapHourlyFree    int `yaml:"request-cap-hourly-free,omitempty" json:"request-cap-hourly-free,omitempty"`
+	RequestCapHourlyPro     int `yaml:"request-cap-hourly-pro,omitempty" json:"request-cap-hourly-pro,omitempty"`
+	RequestCapHourlyUltra   int `yaml:"request-cap-hourly-ultra,omitempty" json:"request-cap-hourly-ultra,omitempty"`
 	RequestCapHourlyUnknown int `yaml:"request-cap-hourly-unknown,omitempty" json:"request-cap-hourly-unknown,omitempty"`
-	RequestCapDailyFree int `yaml:"request-cap-daily-free,omitempty" json:"request-cap-daily-free,omitempty"`
-	RequestCapDailyPro int `yaml:"request-cap-daily-pro,omitempty" json:"request-cap-daily-pro,omitempty"`
-	RequestCapDailyUltra int `yaml:"request-cap-daily-ultra,omitempty" json:"request-cap-daily-ultra,omitempty"`
-	RequestCapDailyUnknown int `yaml:"request-cap-daily-unknown,omitempty" json:"request-cap-daily-unknown,omitempty"`
+	RequestCapDailyFree     int `yaml:"request-cap-daily-free,omitempty" json:"request-cap-daily-free,omitempty"`
+	RequestCapDailyPro      int `yaml:"request-cap-daily-pro,omitempty" json:"request-cap-daily-pro,omitempty"`
+	RequestCapDailyUltra    int `yaml:"request-cap-daily-ultra,omitempty" json:"request-cap-daily-ultra,omitempty"`
+	RequestCapDailyUnknown  int `yaml:"request-cap-daily-unknown,omitempty" json:"request-cap-daily-unknown,omitempty"`
 	// Cluster tunes Home's cluster-wide (credential, model-family) health
 	// weighting. Zero = CPA_HEALTH_* env, then built-in default.
 	Cluster AntigravityClusterHealthConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`
