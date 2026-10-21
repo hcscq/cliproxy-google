@@ -276,6 +276,11 @@ type Config struct {
 	ReservePromotionWindow string `yaml:"reserve-promotion-window,omitempty" json:"reserve-promotion-window,omitempty"`
 	ReserveTierFilter      string `yaml:"reserve-tier-filter,omitempty" json:"reserve-tier-filter,omitempty"`
 	ReserveCountCooled     *bool  `yaml:"reserve-count-cooled,omitempty" json:"reserve-count-cooled,omitempty"`
+	// ReserveBanProbeInterval: how often each reserved credential gets one minimal
+	// request through its pinned egress to catch 403 bans while in reserve ("0" = off).
+	ReserveBanProbeInterval string `yaml:"reserve-ban-probe-interval,omitempty" json:"reserve-ban-probe-interval,omitempty"`
+	// ReservePrePromoteCheck: probe each candidate right before promotion (default on).
+	ReservePrePromoteCheck *bool `yaml:"reserve-pre-promote-check,omitempty" json:"reserve-pre-promote-check,omitempty"`
 	// Import health check (导入体检).
 	ImportCheckOnImport     *bool  `yaml:"import-check-on-import,omitempty" json:"import-check-on-import,omitempty"`
 	ImportCheckExpectedTier string `yaml:"import-check-expected-tier,omitempty" json:"import-check-expected-tier,omitempty"`
@@ -1886,8 +1891,10 @@ type ReserveSettings struct {
 	ActivationDelay time.Duration
 	MaxPromotions   int
 	PromotionWindow time.Duration
-	Tiers           []string // ultra | pro | free | unknown; empty = any
-	CountCooled     bool     // quota-cooled credentials count as available (default true)
+	Tiers           []string      // ultra | pro | free | unknown; empty = any
+	CountCooled     bool          // quota-cooled credentials count as available (default true)
+	BanProbeEvery   time.Duration // per-credential reserve ban probe interval (0 = off; default 12h)
+	PrePromoteCheck bool          // probe candidates right before promotion (default true)
 }
 
 func parseDurationOr(s string, def, lo, hi time.Duration) time.Duration {
@@ -1907,9 +1914,18 @@ func parseDurationOr(s string, def, lo, hi time.Duration) time.Duration {
 // ReserveSettings returns the credential reserve settings with defaults applied:
 // delay 5m (0..24h), at most 3 promotions per 1h window (window 1m..7d).
 func (c *Config) ReserveSettings() ReserveSettings {
-	out := ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour, CountCooled: true}
+	out := ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour, CountCooled: true,
+		BanProbeEvery: 12 * time.Hour, PrePromoteCheck: true}
 	if c == nil {
 		return out
+	}
+	if c.ReservePrePromoteCheck != nil {
+		out.PrePromoteCheck = *c.ReservePrePromoteCheck
+	}
+	if v := strings.TrimSpace(c.ReserveBanProbeInterval); v == "0" || strings.EqualFold(v, "off") {
+		out.BanProbeEvery = 0
+	} else {
+		out.BanProbeEvery = parseDurationOr(v, out.BanProbeEvery, 10*time.Minute, 7*24*time.Hour)
 	}
 	if c.ReserveCountCooled != nil {
 		out.CountCooled = *c.ReserveCountCooled

@@ -69,6 +69,8 @@ type Runtime struct {
 	subTierLastReq          map[string]time.Time
 	prober                  quotaProber
 	reserve                 credentialReserve
+	reserveProbe            reserveProber
+	reserveProbing          atomic.Bool
 	healthRunner            atomic.Value // func(context.Context, []string)
 	subscriptionTierHook    atomic.Value // func(ctx, authID, tierID string): after each successful tier check
 	healthSweeping          atomic.Bool

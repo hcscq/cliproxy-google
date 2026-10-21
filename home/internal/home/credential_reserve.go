@@ -195,6 +195,7 @@ func (r *Runtime) reserveSettings() config.ReserveSettings {
 
 func (r *Runtime) startCredentialReserve(ctx context.Context) {
 	r.syncReserve(ctx) // before serving: never schedule a reserved credential at startup
+	r.startReserveBanProbe(ctx)
 	go func() {
 		sync := time.NewTicker(reserveSyncEvery)
 		ctl := time.NewTicker(reserveControlEvery)
@@ -355,21 +356,38 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 		})
 		return
 	}
-	r.reserve.state = "promoted"
-	if n > len(cands) {
-		n = len(cands)
+	picked := cands
+	if n > len(picked) {
+		n = len(picked)
 	}
+	picked = picked[:n]
+	if cfg.PrePromoteCheck {
+		var banned int
+		picked, banned = r.prePromoteFilter(ctx, cands, n, now.UTC())
+		if banned > 0 {
+			log.Warnf("credential reserve: pre-promotion probe found %d banned reserve(s); skipped", banned)
+			r.syncReserve(ctx)
+		}
+		if len(picked) == 0 {
+			r.reserve.state = "probing"
+			return
+		}
+		n = len(picked)
+	}
+	r.reserve.state = "promoted"
 	ids := make([]string, 0, n)
-	for _, c := range cands[:n] {
+	for _, c := range picked {
 		ids = append(ids, c.ID)
 	}
 	detail := fmt.Sprintf("自动启用：可用 %d < 最低 %d（持续 %s）", active, cfg.MinActive, now.Sub(r.reserve.shortfallSince).Round(time.Second))
-	done, err := s.SetCredentialsReserved(cctx, ids, false, "promote", detail)
+	sctx, scancel := context.WithTimeout(ctx, 15*time.Second) // probes may have used cctx's budget
+	defer scancel()
+	done, err := s.SetCredentialsReserved(sctx, ids, false, "promote", detail)
 	if err != nil {
 		log.WithError(err).Warn("credential reserve: promotion failed")
 		return
 	}
-	for _, c := range cands[:n] {
+	for _, c := range picked {
 		log.Infof("credential reserve: promoted %s (seq %d, tier %s, healthy %v): %s", c.ID, c.Seq, reserveTierClass(c.Tier), c.Healthy, detail)
 	}
 	if done > 0 {
