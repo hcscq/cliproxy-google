@@ -185,3 +185,34 @@ func normalizeAppLogLevel(level string) string {
 	}
 	return level
 }
+
+const (
+	appLogPruneBatch      = 5000
+	appLogPruneMaxBatches = 200 // <= 1M rows per maintenance run, keeps each run short
+)
+
+// PruneAppLogs deletes CPA application log rows older than retentionDays in
+// small batches (the request-log retention also covers this table).
+// retentionDays <= 0 keeps everything. Freed pages are reused by Postgres.
+func (r *Repository) PruneAppLogs(ctx context.Context, retentionDays int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	db, err := r.database()
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	var total int64
+	for i := 0; i < appLogPruneMaxBatches; i++ {
+		res := db.WithContext(contextOrBackground(ctx)).Exec(`DELETE FROM "log" WHERE id IN (SELECT id FROM "log" WHERE created_at < ? ORDER BY created_at LIMIT ?)`, cutoff, appLogPruneBatch)
+		if res.Error != nil {
+			return total, res.Error
+		}
+		total += res.RowsAffected
+		if res.RowsAffected < appLogPruneBatch {
+			break
+		}
+	}
+	return total, nil
+}

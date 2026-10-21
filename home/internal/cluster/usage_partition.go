@@ -425,8 +425,14 @@ func (r *Repository) StartUsageRetention(ctx context.Context, retentionDays func
 		run := func() {
 			mctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
-			if err := r.MaintainUsageRetention(mctx, retentionDays()); err != nil && ctx.Err() == nil {
+			days := retentionDays()
+			if err := r.MaintainUsageRetention(mctx, days); err != nil && ctx.Err() == nil {
 				log.WithError(err).Warn("request log retention maintenance failed")
+			}
+			if n, err := r.PruneAppLogs(mctx, days); err != nil && ctx.Err() == nil {
+				log.WithError(err).Warn("app log retention failed")
+			} else if n > 0 {
+				log.WithFields(log.Fields{"deleted_rows": n, "retention_days": days}).Info("app log retention applied")
 			}
 		}
 		run()
