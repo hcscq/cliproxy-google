@@ -18,7 +18,7 @@ import (
 
 const (
 	// Fallback mirrors the previously hardcoded catalog/quota version.
-	Fallback        = "1.11.5"
+	Fallback        = "2.25.0"
 	refreshInterval = 3 * time.Hour
 	fetchTimeout    = 10 * time.Second
 )
