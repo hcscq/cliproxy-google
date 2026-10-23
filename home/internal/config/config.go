@@ -102,6 +102,11 @@ type Config struct {
 	// partitions are dropped.
 	RequestLogRetentionDays int `yaml:"request-log-retention-days,omitempty" json:"request-log-retention-days,omitempty"`
 
+	// BillingChargeRetentionDays keeps billing ledger (billing_charge) rows this
+	// many days (0 = default 7, negative = keep forever). Older rows are deleted
+	// hourly in small batches. User balances are not affected.
+	BillingChargeRetentionDays int `yaml:"billing-charge-retention-days,omitempty" json:"billing-charge-retention-days,omitempty"`
+
 	// CredentialRPM caps requests per minute per credential across all Home
 	// replicas (0 = unlimited). A credential at its cap is skipped like one at
 	// its concurrency cap; if every candidate is capped the request gets 429.

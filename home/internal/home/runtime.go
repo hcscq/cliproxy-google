@@ -275,6 +275,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	if cfg != nil {
 		errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
 		logretention.Set(cfg.RequestLogRetentionDays)
+		logretention.SetBilling(cfg.BillingChargeRetentionDays)
 	}
 	runtime := &Runtime{
 		cfg:           cfg,

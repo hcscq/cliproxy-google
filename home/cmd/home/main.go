@@ -462,6 +462,7 @@ func run() int {
 		clusterRepo.StartScopeCache(runCtx)
 		clusterRepo.StartAffinityJanitor(runCtx)
 		clusterRepo.StartUsageRetention(runCtx, func() int { return cluster.RequestLogRetentionDays(logretention.Configured()) })
+		clusterRepo.StartBillingChargeRetention(runCtx, func() int { return cluster.BillingChargeRetentionDays(logretention.BillingConfigured()) })
 	}
 	userMailService := usermail.NewService(repo, func() *config.Config { return rt.Config() })
 	userMailService.Start(runCtx)

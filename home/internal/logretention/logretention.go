@@ -12,3 +12,11 @@ func Set(days int) { configured.Store(int64(days)) }
 
 // Configured returns the raw configured value.
 func Configured() int { return int(configured.Load()) }
+
+var billingConfigured atomic.Int64
+
+// SetBilling stores the configured billing_charge retention (0 = default 7 days, negative = keep forever).
+func SetBilling(days int) { billingConfigured.Store(int64(days)) }
+
+// BillingConfigured returns the raw configured billing_charge retention.
+func BillingConfigured() int { return int(billingConfigured.Load()) }

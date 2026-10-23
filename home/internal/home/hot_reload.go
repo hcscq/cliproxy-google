@@ -114,6 +114,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	r.cfg = cfg
 	errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
 	logretention.Set(cfg.RequestLogRetentionDays)
+	logretention.SetBilling(cfg.BillingChargeRetentionDays)
 	r.authDir = cfg.AuthDir
 	r.cfgMu.Unlock()
 
