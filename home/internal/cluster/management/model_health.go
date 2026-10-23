@@ -282,10 +282,8 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 			}
 		}
 		var lastSuccess time.Time
-		available, cooling, errored := 0, 0, 0
-		var earliestRetry *time.Time
 		retiredMsg := ""
-		removedCount := 0
+		var allCreds []modelHealthCredential
 		for _, a := range agAuths {
 			cred := modelHealthCredential{Label: credLabel(a), State: "ok"}
 			for _, cat := range catalogs {
@@ -318,9 +316,6 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 						cred.State = "cooling"
 						t := st.NextRetryAfter
 						cred.NextRetryAfter = &t
-						if earliestRetry == nil || t.Before(*earliestRetry) {
-							earliestRetry = &t
-						}
 					}
 					if e.LastErrorAt == nil || st.UpdatedAt.After(*e.LastErrorAt) {
 						t := st.UpdatedAt
@@ -333,19 +328,11 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 					lastSuccess = st.UpdatedAt
 				}
 			}
-			switch cred.State {
-			case "removed":
-				removedCount++
-			case "cooling":
-				cooling++
-			case "error":
-				errored++
-				available++
-			default:
-				available++
-			}
-			e.Credentials = append(e.Credentials, cred)
+			allCreds = append(allCreds, cred)
 		}
+		mc := countModelCredentials(allCreds, catalogCount > 0)
+		e.Credentials = mc.creds
+		available, cooling, removedCount, total, earliestRetry := mc.available, mc.cooling, mc.removed, mc.total, mc.earliestRetry
 		if rec, ok := checks[id]; ok {
 			e.LastCheck = checkFromRecord(rec)
 		} else if rec, ok := checks[key]; ok {
@@ -364,7 +351,6 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 		if check != nil && check.Outcome != home.ProbeOK && !lastSuccess.IsZero() && lastSuccess.After(check.CheckedAt) {
 			check = nil
 		}
-		_ = errored
 		switch {
 		case check != nil && check.Outcome == home.ProbeRetired:
 			e.Status, e.Reason = modelStatusRetired, "已下线（上游）："+check.Message
@@ -387,13 +373,13 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 			if at := latestChange(removedBy[key]); at != "" {
 				e.Reason += "（" + at + "）"
 			}
-		case len(agAuths) > 0 && cooling == len(agAuths):
+		case total > 0 && cooling == total:
 			e.Status, e.Reason = modelStatusCooling, "所有凭据冷却中"
 			if earliestRetry != nil {
 				e.Reason += "，最早恢复于 " + earliestRetry.In(shanghai()).Format("01-02 15:04")
 			}
 		case cooling > 0:
-			e.Status, e.Reason = modelStatusPartial, "部分凭据冷却（"+itoa(available)+"/"+itoa(len(agAuths))+" 可用）"
+			e.Status, e.Reason = modelStatusPartial, "部分凭据冷却（"+itoa(available)+"/"+itoa(total)+" 可用）"
 		case !e.InCatalog && !e.Registered:
 			e.Status, e.Reason = modelStatusUnknown, "当前账号的模型目录中没有此模型"
 		default:
@@ -543,4 +529,41 @@ func isAntigravityExtraModel(id string) bool {
 		}
 	}
 	return false
+}
+
+// modelCredentialCounts is the per-model credential tally.
+type modelCredentialCounts struct {
+	creds                              []modelHealthCredential
+	total, available, cooling, removed int
+	earliestRetry                      *time.Time
+}
+
+// countModelCredentials tallies credentials for one model. When restrict is
+// set (some credential lists the model in its catalog), only in-catalog
+// credentials are kept and counted: credentials whose account does not offer
+// the model (and any stale cooldown on them) do not dilute "x/y 可用".
+// "error" (e.g. a 499) still counts as usable; "removed" is not counted.
+func countModelCredentials(all []modelHealthCredential, restrict bool) modelCredentialCounts {
+	var c modelCredentialCounts
+	for _, cred := range all {
+		if restrict && !cred.InCatalog {
+			continue
+		}
+		c.creds = append(c.creds, cred)
+		switch cred.State {
+		case "removed":
+			c.removed++
+			continue
+		case "cooling":
+			c.cooling++
+			if t := cred.NextRetryAfter; t != nil && (c.earliestRetry == nil || t.Before(*c.earliestRetry)) {
+				tt := *t
+				c.earliestRetry = &tt
+			}
+		default: // ok, error
+			c.available++
+		}
+		c.total++
+	}
+	return c
 }

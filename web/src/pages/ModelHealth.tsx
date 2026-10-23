@@ -10,9 +10,15 @@ import { fmtRecover } from '../components/quota';
 
 const STATUS_ORDER: ModelHealthStatus[] = ['retired', 'removed', 'rejected', 'cooling', 'partial', 'unknown', 'available'];
 
+/** Credentials that count for a model: only in-catalog ones when any credential offers it. */
+export function countedCreds(m: ModelHealth): ModelHealth['credentials'] {
+  const inCat = m.credentials.filter((c) => c.in_catalog);
+  return inCat.length > 0 ? inCat : m.credentials;
+}
+
 /** Earliest recovery time across the model's cooling credentials. */
 function earliestRetry(m: ModelHealth): string | undefined {
-  return m.credentials.map((c) => c.next_retry_after).filter(Boolean).sort()[0];
+  return countedCreds(m).map((c) => c.next_retry_after).filter(Boolean).sort()[0];
 }
 
 export function statusBadge(s: ModelHealthStatus, tr: (zh: string, en: string) => string, until?: string) {
@@ -47,7 +53,8 @@ const OUTCOME_ZH: Record<string, string> = {
 
 /** One short Chinese reason for the status column (full text goes to the tooltip / drawer). */
 export function shortReason(m: ModelHealth, tr: (zh: string, en: string) => string): string {
-  const ok = m.credentials.filter((c) => c.state !== 'cooling').length;
+  const creds = countedCreds(m);
+  const ok = creds.filter((c) => c.state !== 'cooling' && c.state !== 'removed').length;
   switch (m.status) {
     case 'retired':
       return tr('上游已下线，请改用其他模型', 'Retired upstream');
@@ -55,11 +62,11 @@ export function shortReason(m: ModelHealth, tr: (zh: string, en: string) => stri
       if (m.deprecated_to && m.deprecated_to !== '-') return tr(`已弃用 → ${m.deprecated_to}`, `Deprecated → ${m.deprecated_to}`);
       return tr(`上游拒绝${m.last_check?.http_status ? ` (${m.last_check.http_status})` : ''}`, 'Rejected upstream');
     case 'cooling': {
-      const t = m.credentials.map((c) => c.next_retry_after).filter(Boolean).sort()[0];
+      const t = creds.map((c) => c.next_retry_after).filter(Boolean).sort()[0];
       return t ? tr(`冷却至 ${fmtTime(t)}`, `Cooling until ${fmtTime(t)}`) : tr('全部凭据冷却中', 'All credentials cooling');
     }
     case 'partial':
-      return tr(`${ok}/${m.credentials.length} 凭据可用`, `${ok}/${m.credentials.length} usable`);
+      return tr(`${ok}/${creds.length} 凭据可用`, `${ok}/${creds.length} usable`);
     case 'removed': {
       const t = m.credentials.map((c) => c.removed_at).filter(Boolean).sort().reverse()[0];
       return t ? tr(`${fmtTime(t)} 从上游目录移除`, `Removed ${fmtTime(t)}`) : tr('已从上游目录移除', 'Removed from catalog');
@@ -126,14 +133,15 @@ export function credBuckets(creds: ModelHealth['credentials']): { bucket: CredBu
  *  Height never depends on the number of credentials; full per-credential list is in the tooltip and the drawer. */
 function CredSummary({ m }: { m: ModelHealth }) {
   const { tr } = useI18n();
-  const total = m.credentials.length;
-  const buckets = credBuckets(m.credentials);
+  const creds = countedCreds(m);
+  const total = creds.length;
+  const buckets = credBuckets(creds);
   const ok = buckets.find((b) => b.bucket === 'ok')?.count ?? 0;
   const counts = buckets.map((b) => `${tr(BUCKET_LABEL[b.bucket][0], BUCKET_LABEL[b.bucket][1])} ${b.count}`).join(' · ');
   const tip =
     counts +
     '\n' +
-    m.credentials
+    creds
       .map((c) => `${c.label}: ${c.state}${c.http_status ? ` ${c.http_status}` : ''}${c.quota_remaining !== undefined ? ` · ${tr('额度', 'quota')} ${Math.round(c.quota_remaining * 100)}%` : ''}`)
       .join('\n') +
     '\n' +

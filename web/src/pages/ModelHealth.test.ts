@@ -50,4 +50,8 @@ describe('credential buckets', () => {
     expect(b.reduce((a, x) => a + x.count, 0)).toBe(300);
     expect(credBuckets([])).toEqual([]);
   });
+  it('partial counts only in-catalog credentials', () => {
+    const creds = [{ label: 'a', state: 'ok', in_catalog: true }, { label: 'b', state: 'cooling', in_catalog: true }, { label: 'c', state: 'ok', in_catalog: false }, { label: 'd', state: 'cooling', in_catalog: false }] as ModelHealth['credentials'];
+    expect(shortReason({ ...base, status: 'partial', credentials: creds }, tr)).toBe('1/2 凭据可用');
+  });
 });
