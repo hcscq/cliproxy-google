@@ -206,7 +206,7 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 		c.Header("Connection", "keep-alive")
 		c.Header("Access-Control-Allow-Origin", "*")
 	}
-	delay, interval := h.EarlyKeepAliveSettings()
+	delay, interval := h.EarlyKeepAliveSettingsFor(modelName)
 	if alt != "" {
 		delay = 0 // raw JSON-array streaming has no comment syntax for keep-alives
 	}

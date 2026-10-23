@@ -22,9 +22,14 @@ func applyClusterHealth(ctx context.Context, authID, model string, status int, b
 	s := h.Settings()
 	o := coreauth.HealthObservation{AuthID: authID, Model: model, TTFBMs: ttftMs}
 	lower := strings.ToLower(body)
+	exempt := s.StallExemptModel(model)
 	switch {
 	case status >= 200 && status < 300:
 		o.Success = true
+	case exempt && status == http.StatusGatewayTimeout && strings.Contains(lower, "no first byte"):
+		o.Failed = true // slow by design: not a stall, no cooldown
+	case exempt && status == 499:
+		return
 	case status == http.StatusGatewayTimeout && strings.Contains(lower, "no first byte"):
 		o.Slow, o.Failed, o.TTFBMs = true, true, latencyMs
 	case status == 499 && ttftMs <= 0 && latencyMs >= s.SlowClientWait.Milliseconds():
@@ -140,6 +145,7 @@ func clusterHealthSettings(c config.AntigravityClusterHealthConfig) coreauth.Hea
 		}
 		s.SubThresholdCool = time.Duration(v) * time.Second
 	}
+	s.StallExempt = coreauth.ParseStallExemptFamilies(c.StallExemptFamilies)
 	return s
 }
 

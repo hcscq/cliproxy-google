@@ -29,11 +29,11 @@ func TestAntigravityStreamTTFBByFamily(t *testing.T) {
 	if s.streamTTFB(ctx, "gemini-3.8-flash", 0) != 75*time.Second {
 		t.Fatal("off must disable per-family limits")
 	}
-	// A longer family value never extends the base limit.
+	// A longer family value lengthens that family's limit.
 	SetAntigravityHealthConfig(config.AntigravityHealthConfig{TTFBTimeoutByFamily: "3.8=120"})
 	s = antigravityHealthSettingsFrom(&config.Config{})
-	if s.streamTTFB(ctx, "gemini-3.8-flash", 0) != 75*time.Second {
-		t.Fatal("family limit above base must keep base")
+	if s.streamTTFB(ctx, "gemini-3.8-flash", 0) != 120*time.Second {
+		t.Fatal("family limit above base must lengthen")
 	}
 }
 
@@ -55,8 +55,8 @@ func TestAntigravityNonStreamLimitByFamily(t *testing.T) {
 	}
 	SetAntigravityHealthConfig(config.AntigravityHealthConfig{NonStreamTimeoutByFamily: "3.8=300"})
 	s = antigravityHealthSettingsFrom(&config.Config{})
-	if s.nonStreamLimit(ctx, "gemini-3.8-flash") != 180*time.Second {
-		t.Fatal("family limit above base must keep base")
+	if s.nonStreamLimit(ctx, "gemini-3.8-flash") != 300*time.Second {
+		t.Fatal("family limit above base must lengthen")
 	}
 	SetAntigravityHealthConfig(config.AntigravityHealthConfig{NonStreamTimeoutByFamily: "off"})
 	s = antigravityHealthSettingsFrom(&config.Config{})

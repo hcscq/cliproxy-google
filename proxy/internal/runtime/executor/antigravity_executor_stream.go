@@ -170,6 +170,13 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	// credential health penalty. It returns a replacement error (or nil).
 	slowFailure := func(cause error) error {
 		now := time.Now()
+		if health.stallExemptModel(baseModel) {
+			if ttfbTimedOut.Load() {
+				log.Warnf("antigravity executor: no first byte within %s (auth=%s model=%s), stall-exempt family: no cooldown, no retry", ttfbLimit, auth.ID, baseModel)
+				return antigravityTTFBTimeoutFinalErr(baseModel, ttfbLimit)
+			}
+			return nil
+		}
 		if ttfbTimedOut.Load() {
 			cd := antigravityLocalSlow(healthKey, now, health)
 			log.Warnf("antigravity executor: no first byte within %s (auth=%s model=%s), switching credential; quarantine=%s", ttfbLimit, auth.ID, baseModel, cd)

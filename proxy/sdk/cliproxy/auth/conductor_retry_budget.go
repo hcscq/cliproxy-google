@@ -42,6 +42,7 @@ type retryBudget struct {
 	bareBody  string
 	bareRun   int
 	ttfbCount int
+	ttfbFinal bool
 	stopCause string
 }
 
@@ -71,6 +72,16 @@ func firstByteTimeoutCap() int {
 		return DefaultMaxFirstByteTimeouts
 	}
 	return n
+}
+
+// isFinalFirstByteTimeoutErr matches a first-byte timeout the executor marked
+// as not worth retrying elsewhere (stall-exempt family, e.g. Gemini 4).
+func isFinalFirstByteTimeoutErr(err error) bool {
+	body := extractErrorBody(err)
+	if body == "" && err != nil {
+		body = err.Error()
+	}
+	return strings.Contains(body, `"cpa_ttfb_final":true`)
 }
 
 // isFirstByteTimeoutErr matches the executor's first-byte deadline 504.
@@ -193,9 +204,14 @@ func (b *retryBudget) exhausted(lastErr error) (bool, string) {
 		}
 		if isFirstByteTimeoutErr(lastErr) {
 			b.ttfbCount++
+			if isFinalFirstByteTimeoutErr(lastErr) {
+				b.ttfbFinal = true
+			}
 		}
 	}
 	switch {
+	case b.ttfbFinal:
+		b.stopCause = "first-byte timeout on a slow-by-design model family (not retried)"
 	case b.bareRun >= identicalBare429StopRun:
 		b.stopCause = "identical non-quota 429 across credentials"
 	case b.ttfbCount > 0 && firstByteTimeoutCap() > 0 && b.ttfbCount >= firstByteTimeoutCap():

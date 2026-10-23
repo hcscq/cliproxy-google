@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // DefaultFirstByteDeadline bounds how long a model request may run before the
@@ -83,6 +84,45 @@ func SetFirstByteDeadlineSeconds(sec int) {
 	default:
 		firstByteDeadlineNanos.Store(int64(time.Duration(sec) * time.Second))
 	}
+}
+
+// modelDeadlineFloor, when set, returns a minimum request first-byte deadline
+// for a model (0 = none), so families with a lengthened per-attempt limit
+// (e.g. Gemini 4) are not cut by the request-wide deadline.
+var modelDeadlineFloor atomic.Pointer[func(model string, stream bool) time.Duration]
+
+// SetModelDeadlineFloor installs the per-model deadline floor (nil clears it).
+func SetModelDeadlineFloor(f func(model string, stream bool) time.Duration) {
+	if f == nil {
+		modelDeadlineFloor.Store(nil)
+		return
+	}
+	modelDeadlineFloor.Store(&f)
+}
+
+// requestModel extracts the model from a Gemini path (/models/<m>:action) or
+// a JSON body "model" field. The body is read and restored.
+func requestModel(r *http.Request) string {
+	p := r.URL.Path
+	if i := strings.Index(p, "/models/"); i >= 0 {
+		m := p[i+len("/models/"):]
+		if j := strings.IndexAny(m, ":/"); j >= 0 {
+			m = m[:j]
+		}
+		if m != "" {
+			return m
+		}
+	}
+	if r.Body == nil || r.Body == http.NoBody {
+		return ""
+	}
+	body, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return ""
+	}
+	return gjson.GetBytes(body, "model").String()
 }
 
 // FirstByteDeadline returns the active deadline (0 = disabled).
@@ -160,6 +200,11 @@ func FirstByteDeadlineMiddleware() gin.HandlerFunc {
 		if limit <= 0 {
 			c.Next()
 			return
+		}
+		if fp := modelDeadlineFloor.Load(); fp != nil {
+			if floor := (*fp)(requestModel(c.Request), requestIsStreaming(c.Request)); floor > limit {
+				limit = floor
+			}
 		}
 		ctx, cancel := context.WithCancel(c.Request.Context())
 		defer cancel()

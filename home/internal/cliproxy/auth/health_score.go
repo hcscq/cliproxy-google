@@ -38,6 +38,7 @@ type HealthSettings struct {
 	SubThresholdCool time.Duration   // cooldown for a slow event below threshold
 	CapacitySteps    []time.Duration // 503 no-capacity escalation
 	SlowClientWait   time.Duration   // 499 after this long counts as slow
+	StallExempt      map[string]bool // families (HealthFamily) whose slow first byte is not a stall
 	MinSamples       int             // samples before soft weighting applies
 	SlowFactor       float64         // TTFB above family baseline * factor degrades weight
 	ProbeFloor       float64         // minimum pick weight (probe traffic)
@@ -89,7 +90,8 @@ func DefaultHealthSettings() HealthSettings {
 		CapacitySteps:  []time.Duration{time.Second, 10 * time.Second, time.Minute},
 		SlowClientWait: 45 * time.Second, MinSamples: 5, SlowFactor: 2, ProbeFloor: 0.15,
 		Idle: 30 * time.Minute, MaxEntries: 100000, SyncInterval: 10 * time.Second,
-		FailMargin: 0.25, MaxDegradedFrac: 0.3, UpstreamFail: 0.5, UpstreamTTFB: 45 * time.Second, MinPeers: 4, SlowMinExtra: 5 * time.Second,
+		StallExempt: ParseStallExemptFamilies(""),
+		FailMargin:  0.25, MaxDegradedFrac: 0.3, UpstreamFail: 0.5, UpstreamTTFB: 45 * time.Second, MinPeers: 4, SlowMinExtra: 5 * time.Second,
 		DemoteTTFBP95: 30 * time.Second, DemoteFail: 0.4,
 		LatencyAware: true, LatencyFactor: 3, LatencyAbs: 8 * time.Second, LatencyTrickle: 0.1, LatencyMaxFrac: 0.8,
 	}
@@ -797,3 +799,34 @@ func ClusterHealth() *HealthTracker {
 
 // Settings returns the tracker settings.
 func (t *HealthTracker) Settings() HealthSettings { return t.cfg() }
+
+// DefaultStallExemptFamilies: Gemini 4 sends nothing until the answer is done.
+const DefaultStallExemptFamilies = "4"
+
+// ParseStallExemptFamilies parses "4,3.8" (empty = default, "off" = none)
+// into HealthFamily keys.
+func ParseStallExemptFamilies(raw string) map[string]bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = DefaultStallExemptFamilies
+	}
+	m := map[string]bool{}
+	if l := strings.ToLower(raw); l == "off" || l == "none" || l == "0" {
+		return m
+	}
+	for _, k := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+		k = strings.ToLower(strings.TrimSpace(k))
+		if k != "" && k[0] >= '0' && k[0] <= '9' {
+			k = "gemini-" + k
+		}
+		if k != "" {
+			m[HealthFamily(k)] = true
+		}
+	}
+	return m
+}
+
+// StallExemptModel reports whether model's family is stall-exempt.
+func (s HealthSettings) StallExemptModel(model string) bool {
+	return s.StallExempt[HealthFamily(model)]
+}

@@ -117,8 +117,12 @@ type StreamingConfig struct {
 	// request, hence a conservative delay. 0 = default (30); < 0 disables.
 	// EarlyKeepAlive turns the early keep-alive on. Default false: with it on,
 	// a committed 200 stops the client (e.g. new-api) from retrying another channel.
-	EarlyKeepAlive bool `yaml:"early-keepalive" json:"early-keepalive"`
-	EarlyKeepAliveSeconds int `yaml:"early-keepalive-seconds,omitempty" json:"early-keepalive-seconds,omitempty"`
+	EarlyKeepAlive        bool `yaml:"early-keepalive" json:"early-keepalive"`
+	EarlyKeepAliveSeconds int  `yaml:"early-keepalive-seconds,omitempty" json:"early-keepalive-seconds,omitempty"`
 	// EarlyKeepAliveIntervalSeconds: 0 = default (15).
 	EarlyKeepAliveIntervalSeconds int `yaml:"early-keepalive-interval-seconds,omitempty" json:"early-keepalive-interval-seconds,omitempty"`
+	// EarlyKeepAliveModels turns the early keep-alive on only for streaming
+	// requests whose model starts with one of these comma-separated prefixes
+	// (e.g. "gemini-4"), even when EarlyKeepAlive is off. Empty = none.
+	EarlyKeepAliveModels string `yaml:"early-keepalive-models,omitempty" json:"early-keepalive-models,omitempty"`
 }

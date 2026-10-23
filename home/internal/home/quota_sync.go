@@ -91,7 +91,10 @@ func (r *Runtime) blockAndPublishQuotaCooldown(authID string, result coreauth.Re
 
 // isStallResult reports a proxy first-byte timeout (504 "no first byte").
 func isStallResult(status int, body string, result coreauth.Result) bool {
-	return !result.Success && status == http.StatusGatewayTimeout && strings.Contains(strings.ToLower(body), "no first byte")
+	if result.Success || status != http.StatusGatewayTimeout || !strings.Contains(strings.ToLower(body), "no first byte") {
+		return false
+	}
+	return !coreauth.ClusterHealth().Settings().StallExemptModel(result.Model)
 }
 
 // blockAndPublishStallCooldown fast-blocks a (credential, model) pair on every Home right

@@ -245,7 +245,7 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 		c.Header("Connection", "keep-alive")
 		c.Header("Access-Control-Allow-Origin", "*")
 	}
-	delay, interval := h.EarlyKeepAliveSettings()
+	delay, interval := h.EarlyKeepAliveSettingsFor(modelName)
 	started := handlers.StartStreamWithEarlyKeepAlive(c, flusher, delay, interval, setSSEHeaders, []byte("event: ping\ndata: {\"type\": \"ping\"}\n\n"), func() (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
 		return h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
 	})

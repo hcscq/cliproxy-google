@@ -196,13 +196,15 @@ type AntigravityHealthConfig struct {
 	// capacity" on the same credential+model, reset on success. Default [1,10,60].
 	CapacityCooldownSeconds []int `yaml:"capacity-cooldown-seconds,omitempty" json:"capacity-cooldown-seconds,omitempty"`
 	// TTFBTimeoutByFamily overrides TTFBTimeoutSeconds per model family for
-	// streaming attempts, e.g. "3.8=28,2.5=60" (family = "gemini-3.8" or "3.8").
-	// Empty = built-in default "3.8=15"; "off" = no per-family override. The
-	// last attempt allowed by the request budget uses the longer base timeout.
+	// streaming attempts, e.g. "3.8=28,2.5=60,4=240" (family = "gemini-3.8" or
+	// "3.8"). A value above the base lengthens that family's limit (and the
+	// request first-byte deadline follows it); a shorter value applies except on
+	// the last attempt allowed by the request budget, which keeps the base.
+	// Empty = built-in default "3.8=15,4=240"; "off" = no per-family override.
 	TTFBTimeoutByFamily string `yaml:"ttfb-timeout-by-family,omitempty" json:"ttfb-timeout-by-family,omitempty"`
-	// NonStreamTimeoutByFamily shortens NonStreamTimeoutSeconds per family for
-	// whole non-streaming attempts, e.g. "3.8=120". Empty = built-in default
-	// "3.8=120"; "off" = none. The last budgeted attempt keeps the base limit.
+	// NonStreamTimeoutByFamily overrides NonStreamTimeoutSeconds per family for
+	// whole non-streaming attempts, e.g. "3.8=120,4=300" (longer values
+	// lengthen, as above). Empty = built-in default "3.8=120,4=300"; "off" = none.
 	NonStreamTimeoutByFamily string `yaml:"nonstream-timeout-by-family,omitempty" json:"nonstream-timeout-by-family,omitempty"`
 	// TTFBExtraSecondsPer10kTokens lengthens the per-family first-byte limit
 	// by this many seconds per 10k estimated input tokens (body bytes / 4), so
@@ -308,6 +310,12 @@ type AntigravityClusterHealthConfig struct {
 	// is upstream-wide slow) so the scheduler skips it for that model only.
 	// Default 45 (30-60 sensible); clamped to 5..600.
 	StallCooldownSeconds int `yaml:"stall-cooldown-seconds,omitempty" json:"stall-cooldown-seconds,omitempty"`
+	// StallExemptFamilies lists model families (e.g. "4" = gemini-4*) whose
+	// slow first byte is expected (the answer is generated before anything is
+	// sent): a first-byte timeout there is not a stall (no cooldown, no
+	// quarantine, no slow event, no retry on another credential, which would
+	// be just as slow). Empty = default "4"; "off" = none.
+	StallExemptFamilies string `yaml:"stall-exempt-families,omitempty" json:"stall-exempt-families,omitempty"`
 	// Latency-aware scheduling (default on): a pair whose recent TTFB is above
 	// the family's healthy baseline (p25) x LatencySlowFactor (3), or above
 	// LatencySlowSeconds (8) while the baseline is fast, gets

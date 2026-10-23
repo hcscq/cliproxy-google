@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -41,13 +42,72 @@ type antigravityHealthSettings struct {
 	quarantine, maxQ      time.Duration
 	slowEvents            int
 	capacitySteps         []time.Duration
-	ttfbExtraPer10k       time.Duration // first-byte allowance per 10k input tokens
-	ttfbScaledMax         time.Duration // cap for the input-scaled family limit
+	ttfbExtraPer10k       time.Duration   // first-byte allowance per 10k input tokens
+	ttfbScaledMax         time.Duration   // cap for the input-scaled family limit
+	stallExempt           map[string]bool // health buckets whose slow first byte is not a stall
+}
+
+// defaultAntigravityStallExemptFamilies: Gemini 4 (argon) sends nothing until
+// the whole answer is generated, so a long first byte is normal there.
+const defaultAntigravityStallExemptFamilies = "4"
+
+// parseAntigravityStallExempt parses "4,3.8" into health buckets.
+func parseAntigravityStallExempt(raw string) map[string]bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = defaultAntigravityStallExemptFamilies
+	}
+	m := map[string]bool{}
+	if l := strings.ToLower(raw); l == "off" || l == "none" || l == "0" {
+		return m
+	}
+	for _, k := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+		k = strings.ToLower(strings.TrimSpace(k))
+		if k != "" && k[0] >= '0' && k[0] <= '9' {
+			k = "gemini-" + k
+		}
+		if k != "" {
+			m[antigravityHealthBucket(k)] = true
+		}
+	}
+	return m
+}
+
+// stallExemptModel reports whether model's family is stall-exempt.
+func (s antigravityHealthSettings) stallExemptModel(model string) bool {
+	return s.stallExempt[antigravityHealthBucket(model)]
 }
 
 // antigravityHealthLive is the latest hot-reloaded health config; it wins
 // over the executor's construction-time config so panel edits apply live.
 var antigravityHealthLive atomic.Pointer[config.AntigravityHealthConfig]
+
+// antigravityRequestDeadlineMargin is added on top of a lengthened family
+// attempt limit for the request-wide first-byte deadline (dispatch, Home calls).
+const antigravityRequestDeadlineMargin = 30 * time.Second
+
+func init() {
+	middleware.SetModelDeadlineFloor(antigravityRequestDeadlineFloor)
+}
+
+// antigravityRequestDeadlineFloor is the minimum request first-byte deadline
+// for model: a family attempt limit lengthened above the base plus a margin,
+// else 0 (the global deadline applies).
+func antigravityRequestDeadlineFloor(model string, stream bool) time.Duration {
+	if strings.TrimSpace(model) == "" {
+		return 0
+	}
+	s := antigravityHealthSettingsFrom(nil)
+	byFamily, base := s.byFamily, s.ttfb
+	if !stream {
+		byFamily, base = s.nonStreamByFamily, s.nonStream
+	}
+	fam, ok := byFamily[antigravityHealthBucket(model)]
+	if !ok || fam <= 0 || (base > 0 && fam <= base) {
+		return 0
+	}
+	return fam + antigravityRequestDeadlineMargin
+}
 
 // SetAntigravityHealthConfig installs the live health config (on load/reload).
 func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
@@ -62,7 +122,7 @@ func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 
 // defaultAntigravityTTFBByFamily: 3.8 (tiered/high/medium/low) gets 15s; a
 // stall cools the credential+model down so the retry lands elsewhere.
-const defaultAntigravityTTFBByFamily = "3.8=15"
+const defaultAntigravityTTFBByFamily = "3.8=15,4=240"
 
 const (
 	defaultAntigravityTTFBExtraPer10k = 5 * time.Second
@@ -73,7 +133,7 @@ const (
 // defaultAntigravityNonStreamByFamily bounds a whole non-streaming 3.8
 // attempt (no first byte exists there). 120s sits above the observed p97 of
 // successful 3.8 non-stream responses, so only hung attempts are cut.
-const defaultAntigravityNonStreamByFamily = "3.8=120"
+const defaultAntigravityNonStreamByFamily = "3.8=120,4=300"
 
 type familyTTFBCache struct {
 	raw string
@@ -135,6 +195,7 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 	}
 	s.byFamily = parseAntigravityTTFBByFamily(h.TTFBTimeoutByFamily)
 	s.nonStreamByFamily = parseAntigravityNonStreamByFamily(h.NonStreamTimeoutByFamily)
+	s.stallExempt = parseAntigravityStallExempt(h.Cluster.StallExemptFamilies)
 	sec := func(v int, d *time.Duration, unit time.Duration) {
 		switch {
 		case v < 0:
@@ -172,8 +233,9 @@ func antigravityHealthSettingsFrom(cfg *config.Config) antigravityHealthSettings
 	return s
 }
 
-// streamTTFB is the first-byte limit for a streaming attempt of model: the
-// per-family limit when shorter than the base, except for the last attempt
+// streamTTFB is the first-byte limit for a streaming attempt of model: a
+// per-family limit above the base always applies (slow-by-design families);
+// a shorter per-family limit applies except for the last attempt
 // the request budget allows (cutting it short would only turn a slow answer
 // into an error), which keeps the base limit.
 //
@@ -188,6 +250,9 @@ func (s antigravityHealthSettings) streamTTFB(ctx context.Context, model string,
 			scaled := fam + extra
 			if hi := max(s.ttfbScaledMax, fam); scaled > hi {
 				scaled = hi
+			}
+			if s.ttfb > 0 && fam <= s.ttfb && scaled > s.ttfb {
+				scaled = s.ttfb // input scaling never lifts a shortened family above the base
 			}
 			byFamily = map[string]time.Duration{antigravityHealthBucket(model): scaled}
 		}
@@ -213,8 +278,11 @@ func (s antigravityHealthSettings) nonStreamLimit(ctx context.Context, model str
 
 func familyAttemptLimit(ctx context.Context, byFamily map[string]time.Duration, model string, base time.Duration) time.Duration {
 	fam, ok := byFamily[antigravityHealthBucket(model)]
-	if !ok || fam <= 0 || (base > 0 && fam >= base) {
+	if !ok || fam <= 0 || fam == base {
 		return base
+	}
+	if base <= 0 || fam > base {
+		return fam // lengthened (or base disabled): applies to every attempt
 	}
 	if cliproxyauth.RetryBudgetFinalAttempt(ctx, fam) {
 		return base
@@ -362,6 +430,15 @@ func (t *antigravityHealthTracker) len() int {
 
 // antigravityTTFBTimeoutErr is returned when an attempt produced no first byte
 // in time; it is a credential failure so the conductor switches credentials.
+// antigravityTTFBTimeoutFinalErr is the first-byte timeout of a stall-exempt
+// family: no cooldown (1ms hint so no default cooldown applies either) and a
+// marker telling the conductor not to retry on another credential.
+func antigravityTTFBTimeoutFinalErr(model string, wait time.Duration) statusErr {
+	cd := time.Millisecond
+	body := fmt.Sprintf(`{"error":{"code":504,"status":"DEADLINE_EXCEEDED","message":"%s: no first byte from upstream within %s (slow by design; not retried)","cpa_cooldown_ms":1,"cpa_ttfb_final":true}}`, antigravityHealthLabel(model), wait.Round(time.Second))
+	return statusErr{code: http.StatusGatewayTimeout, msg: body, retryAfter: &cd}
+}
+
 func antigravityTTFBTimeoutErr(model string, wait, cooldown time.Duration) statusErr {
 	state := antigravityHealthLabel(model) + " 慢"
 	if cooldown >= time.Minute {
@@ -427,6 +504,13 @@ func (t *antigravityAttemptTimer) firstByte() bool {
 func (t *antigravityAttemptTimer) penalty(parent context.Context, auth *cliproxyauth.Auth, model string, s antigravityHealthSettings) error {
 	now := time.Now()
 	key := antigravityHealthKey(auth.ID, model)
+	if s.stallExemptModel(model) {
+		if t.timedOut.Load() {
+			log.Warnf("antigravity executor: no response within %s (auth=%s model=%s), stall-exempt family: no cooldown, no retry", t.limit, auth.ID, model)
+			return antigravityTTFBTimeoutFinalErr(model, t.limit)
+		}
+		return nil
+	}
 	if t.timedOut.Load() {
 		cd := antigravityLocalSlow(key, now, s)
 		log.Warnf("antigravity executor: no response within %s (auth=%s model=%s), switching credential; quarantine=%s", t.limit, auth.ID, model, cd)

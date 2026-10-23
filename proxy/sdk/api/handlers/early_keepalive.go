@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,8 +17,17 @@ const (
 // EarlyKeepAliveSettings returns the delay before committing SSE headers for a
 // stream that has not started yet (0 = disabled) and the repeat interval.
 func (h *BaseAPIHandler) EarlyKeepAliveSettings() (time.Duration, time.Duration) {
+	return h.EarlyKeepAliveSettingsFor("")
+}
+
+// EarlyKeepAliveSettingsFor is EarlyKeepAliveSettings for a model: the
+// keep-alive is also on when model matches streaming.early-keepalive-models.
+func (h *BaseAPIHandler) EarlyKeepAliveSettingsFor(model string) (time.Duration, time.Duration) {
 	delay, interval := defaultEarlyKeepAlive, defaultEarlyKeepAliveInterval
-	if h == nil || h.Cfg == nil || !h.Cfg.Streaming.EarlyKeepAlive {
+	if h == nil || h.Cfg == nil {
+		return 0, 0
+	}
+	if !h.Cfg.Streaming.EarlyKeepAlive && !earlyKeepAliveModelMatch(h.Cfg.Streaming.EarlyKeepAliveModels, model) {
 		return 0, 0 // off by default
 	}
 	{
@@ -94,4 +104,19 @@ func StartStreamWithEarlyKeepAlive(c *gin.Context, flusher http.Flusher, delay, 
 			flusher.Flush()
 		}
 	}
+}
+
+// earlyKeepAliveModelMatch reports whether model starts with one of the
+// comma-separated prefixes (case-insensitive; a "models/" prefix is ignored).
+func earlyKeepAliveModelMatch(prefixes, model string) bool {
+	m := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(model), "models/"))
+	if m == "" || strings.TrimSpace(prefixes) == "" {
+		return false
+	}
+	for _, p := range strings.FieldsFunc(prefixes, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+		if p = strings.ToLower(strings.TrimSpace(p)); p != "" && strings.HasPrefix(m, p) {
+			return true
+		}
+	}
+	return false
 }
