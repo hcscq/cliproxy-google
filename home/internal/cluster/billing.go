@@ -89,8 +89,8 @@ type BillingChargeRecord struct {
 	Model            string    `gorm:"column:model;index:idx_billing_charge_provider_model_time,priority:2"`
 	OriginalModel    string    `gorm:"column:original_model"`
 	ActualModel      string    `gorm:"column:actual_model"`
-	RequestID        string    `gorm:"column:request_id;index"`
-	Endpoint         string    `gorm:"column:endpoint;index"`
+	RequestID        string    `gorm:"column:request_id"` // idx_billing_charge_request_id dropped 2026-10-23 (never scanned, no query filters on it)
+	Endpoint         string    `gorm:"column:endpoint"`   // idx_billing_charge_endpoint dropped 2026-10-23 (never scanned)
 	InputTokens      int64     `gorm:"column:input_tokens;not null;default:0"`
 	OutputTokens     int64     `gorm:"column:output_tokens;not null;default:0"`
 	CacheTokens      int64     `gorm:"column:cache_tokens;not null;default:0"`
