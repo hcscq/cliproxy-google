@@ -18,6 +18,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/diff"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
@@ -786,6 +787,9 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	if note := noteFromAuth(auth); note != "" {
 		entry["note"] = note
 	}
+	if excludedModels := credentialExcludedModels(auth.Metadata); len(excludedModels) > 0 {
+		entry["excluded_models"] = excludedModels
+	}
 	if !auth.CreatedAt.IsZero() {
 		entry["created_at"] = auth.CreatedAt
 	}
@@ -1265,6 +1269,73 @@ func syncOAuthMetadataFields(auth *coreauth.Auth, touchedRoots map[string]struct
 	if _, ok := touchedRoots["disabled"]; ok {
 		syncOAuthDisabledState(auth)
 	}
+	if _, ok := touchedRoots["excluded_models"]; ok {
+		syncOAuthExcludedModelsAttribute(auth)
+	}
+}
+
+// syncOAuthExcludedModelsAttribute mirrors the per-credential exclusion list
+// (metadata "excluded_models") into the routing attribute. Runtimes union the
+// attribute with the global oauth-excluded-models, so only the per-credential
+// patterns are stored here.
+func syncOAuthExcludedModelsAttribute(auth *coreauth.Auth) {
+	if auth == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	list := credentialExcludedModels(auth.Metadata)
+	if len(list) == 0 {
+		delete(auth.Metadata, "excluded_models")
+		delete(auth.Attributes, "excluded_models")
+		delete(auth.Attributes, "excluded_models_hash")
+		return
+	}
+	auth.Metadata["excluded_models"] = list
+	auth.Attributes["excluded_models"] = strings.Join(list, ",")
+	auth.Attributes["excluded_models_hash"] = diff.ComputeExcludedModelsHash(list)
+}
+
+// credentialExcludedModels returns the normalized (trimmed, lower-cased,
+// de-duplicated, sorted) per-credential exclusion patterns from metadata.
+// Accepts a list or a comma/newline separated string.
+func credentialExcludedModels(metadata map[string]any) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["excluded_models"]
+	if !ok {
+		raw = metadata["excluded-models"]
+	}
+	var items []string
+	switch v := raw.(type) {
+	case string:
+		items = strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' })
+	case []string:
+		items = v
+	case []any:
+		for _, it := range v {
+			if str, ok := it.(string); ok {
+				items = append(items, str)
+			}
+		}
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		it = strings.ToLower(strings.TrimSpace(it))
+		if it == "" {
+			continue
+		}
+		if _, dup := seen[it]; dup {
+			continue
+		}
+		seen[it] = struct{}{}
+		out = append(out, it)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func syncOAuthHeaderAttributes(auth *coreauth.Auth) {

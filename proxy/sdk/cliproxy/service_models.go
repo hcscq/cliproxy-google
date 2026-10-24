@@ -60,11 +60,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 	excluded := s.oauthExcludedModels(provider, authKind)
 	// The synthesizer pre-merges per-account and global exclusions into the "excluded_models" attribute.
 	// If this attribute is present, it represents the complete list of exclusions and overrides the global config.
-	if a.Attributes != nil {
-		if val, ok := a.Attributes["excluded_models"]; ok && strings.TrimSpace(val) != "" {
-			excluded = strings.Split(val, ",")
-		}
-	}
+	excluded = mergeAuthExcludedModels(excluded, a)
 	if s.tryRegisterPluginModelsForAuth(ctx, a, provider, authKind, excluded) {
 		return
 	}
@@ -588,6 +584,37 @@ func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 		return nil
 	}
 	return cfg.OAuthExcludedModels[providerKey]
+}
+
+// mergeAuthExcludedModels unions the global provider exclusions with the
+// credential's persisted "excluded_models" attribute (per-credential model
+// exclusions set from the panel). The attribute no longer overrides the global
+// list, so a credential-level exclusion never re-enables a globally hidden model.
+func mergeAuthExcludedModels(global []string, a *coreauth.Auth) []string {
+	if a == nil || a.Attributes == nil {
+		return global
+	}
+	val := strings.TrimSpace(a.Attributes["excluded_models"])
+	if val == "" {
+		return global
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(global)+4)
+	for _, list := range [][]string{global, strings.Split(val, ",")} {
+		for _, item := range list {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			key := strings.ToLower(item)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {

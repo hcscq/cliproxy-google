@@ -187,6 +187,14 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 		}
 	}
 	sort.Slice(agAuths, func(i, j int) bool { return credLabel(agAuths[i]) < credLabel(agAuths[j]) })
+	// Per-credential exclusions (credential detail → 排除模型): an excluded
+	// credential never serves the model, so it is left out of that model's counts.
+	credExcluded := map[string][]string{}
+	for _, a := range agAuths {
+		if list := credentialExcludedModels(a.Metadata); len(list) > 0 {
+			credExcluded[a.ID] = list
+		}
+	}
 	// Some transitions (e.g. model_not_supported suspensions) live only in the
 	// dispatching runtime's memory; merge them with the stored state.
 	memStates := map[string]map[string]*coreauth.ModelState{}
@@ -265,7 +273,9 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 		catalogCount := 0
 		for _, cat := range catalogs {
 			if m, ok := cat.Models[key]; ok {
-				catalogCount++
+				if !matchesExcluded(credExcluded[cat.AuthID], id) {
+					catalogCount++
+				}
 				e.InCatalog = true
 				if e.DisplayName == "" {
 					e.DisplayName = m.DisplayName
@@ -285,6 +295,9 @@ func (h *Handler) buildModelHealth(ctx context.Context) ([]modelHealthEntry, gin
 		retiredMsg := ""
 		var allCreds []modelHealthCredential
 		for _, a := range agAuths {
+			if matchesExcluded(credExcluded[a.ID], id) {
+				continue
+			}
 			cred := modelHealthCredential{Label: credLabel(a), State: "ok"}
 			for _, cat := range catalogs {
 				if cat.AuthID == a.ID {

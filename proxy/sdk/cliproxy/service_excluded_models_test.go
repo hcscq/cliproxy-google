@@ -12,7 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
-func TestRegisterModelsForAuth_UsesPreMergedExcludedModelsAttribute(t *testing.T) {
+func TestRegisterModelsForAuth_UnionsAttributeAndGlobalExcludedModels(t *testing.T) {
 	service := &Service{
 		cfg: &config.Config{
 			OAuthExcludedModels: map[string][]string{
@@ -63,8 +63,8 @@ func TestRegisterModelsForAuth_UsesPreMergedExcludedModelsAttribute(t *testing.T
 			break
 		}
 	}
-	if !seenGlobalExcluded {
-		t.Fatal("expected global excluded model to be present when attribute override is set")
+	if seenGlobalExcluded {
+		t.Fatal("expected global excluded model to stay excluded when a per-credential exclusion is set")
 	}
 }
 
@@ -396,5 +396,24 @@ func TestRegisterModelsForAuth_DevinSWE16SlowIncluded(t *testing.T) {
 	}
 	if foundSlow.DisplayName != "SWE-1.6 Slow" {
 		t.Errorf("DisplayName = %q, want 'SWE-1.6 Slow'", foundSlow.DisplayName)
+	}
+}
+
+func TestRegisterModelsForAuth_PerCredentialWildcardExclusion(t *testing.T) {
+	service := &Service{cfg: &config.Config{}}
+	auth := &coreauth.Auth{
+		ID:         "auth-ag-wild",
+		Provider:   "gemini",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"auth_kind": "oauth", "excluded_models": "gemini-2.5-*"},
+	}
+	registry := GlobalModelRegistry()
+	registry.UnregisterClient(auth.ID)
+	t.Cleanup(func() { registry.UnregisterClient(auth.ID) })
+	service.registerModelsForAuth(context.Background(), auth)
+	for _, model := range registry.GetModelsForClient(auth.ID) {
+		if model != nil && strings.HasPrefix(strings.ToLower(model.ID), "gemini-2.5-") {
+			t.Fatalf("model %q should be excluded by per-credential wildcard", model.ID)
+		}
 	}
 }

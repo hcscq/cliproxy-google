@@ -1336,6 +1336,7 @@ function CredentialDrawer({
     proxy_url: cred.proxy_url ?? "",
     egress: cred.egress_id || (cred.proxy_url ? "custom" : "auto"),
     note: cred.note ?? "",
+    excludedModels: (cred.excluded_models ?? []).join(", "),
     requestRetry: cred["request-retry"]?.toString() ?? "",
     cooling:
       cred["disable-cooling"] === undefined
@@ -1354,6 +1355,10 @@ function CredentialDrawer({
       const fields: Record<string, unknown> = {
         prefix: form.prefix.trim(),
         note: form.note.trim(),
+        excluded_models: form.excludedModels
+          .split(/[\s,]+/)
+          .map((x) => x.trim())
+          .filter(Boolean),
         "request-retry":
           form.requestRetry.trim() === "" ? null : Number(form.requestRetry),
         "disable-cooling":
@@ -1596,6 +1601,21 @@ function CredentialDrawer({
                 value={form.note}
                 onChange={(e) => setForm({ ...form, note: e.target.value })}
               />
+            </div>
+            <div className="field full">
+              <label>{tr("排除模型", "Excluded models")}</label>
+              <input
+                className="input"
+                value={form.excludedModels}
+                placeholder="claude-*, gemini-4-argon*"
+                onChange={(e) => setForm({ ...form, excludedModels: e.target.value })}
+              />
+              <span className="faint small">
+                {tr(
+                  "该凭据永不提供这些模型（逗号分隔，支持 * 通配）。调度直接跳过；所有凭据都排除时请求返回模型不可用，不会改用其他模型。",
+                  "This credential never serves these models (comma-separated, * wildcard). Routing skips it; if every credential excludes a model, requests fail instead of falling back.",
+                )}
+              </span>
             </div>
           </div>
           <div className="row" style={{ marginTop: 12 }}>

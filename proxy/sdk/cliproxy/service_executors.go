@@ -531,11 +531,7 @@ func (s *Service) tryRegisterPluginModelsForAuth(ctx context.Context, a *coreaut
 	if a == activeAuth && len(activeExcluded) == 0 {
 		activeExcluded = excluded
 	}
-	if activeAuth.Attributes != nil {
-		if val, ok := activeAuth.Attributes["excluded_models"]; ok && strings.TrimSpace(val) != "" {
-			activeExcluded = strings.Split(val, ",")
-		}
-	}
+	activeExcluded = mergeAuthExcludedModels(activeExcluded, activeAuth)
 	if ctx != nil && ctx.Err() != nil {
 		return true
 	}

@@ -710,6 +710,7 @@ export interface Credential {
   proxy_url?: string;
   priority?: number;
   note?: string;
+  excluded_models?: string[];
   websockets?: boolean;
   'disable-cooling'?: boolean;
   'request-retry'?: number;
