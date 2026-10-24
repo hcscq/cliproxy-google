@@ -1151,6 +1151,7 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 			auth.Attributes = make(map[string]string, 3)
 		}
 		auth.Attributes[homeUpstreamModelAttributeKey] = upstreamModel
+		m.learnHomeAlias(requestedModel, upstreamModel)
 	}
 	if originalAlias := strings.TrimSpace(dispatch.OriginalAlias); dispatch.ForceMapping && originalAlias != "" {
 		if auth.Attributes == nil {

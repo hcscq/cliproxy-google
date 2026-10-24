@@ -33,3 +33,12 @@ func TestResolveEffortVariantModel(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveEffortVariantModelLearnedFromHome(t *testing.T) {
+	m := coreauth.NewManager(nil, nil, nil)
+	m.LearnHomeAliasForTest("claude-sonnet-5-5", "claude-sonnet-5-5-high")
+	h := &BaseAPIHandler{AuthManager: m}
+	if got := h.resolveEffortVariantModel("openai", "claude-sonnet-5-5", []byte(`{"reasoning_effort":"low"}`)); got != "claude-sonnet-5-5-low" {
+		t.Fatalf("got %s", got)
+	}
+}

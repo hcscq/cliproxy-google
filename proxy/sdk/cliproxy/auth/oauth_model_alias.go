@@ -514,12 +514,52 @@ func (m *Manager) OAuthAliasUpstream(channel, alias string) string {
 	}
 	raw := m.oauthModelAlias.Load()
 	table, _ := raw.(*oauthModelAliasTable)
-	if table == nil || table.reverse == nil {
+	if table == nil {
+		table = &oauthModelAliasTable{}
+	}
+	if rev := table.reverse[strings.ToLower(strings.TrimSpace(channel))]; rev != nil {
+		if upstream := rev[strings.ToLower(strings.TrimSpace(alias))].upstreamModel; upstream != "" {
+			return upstream
+		}
+	}
+	return m.learnedHomeAlias(alias)
+}
+
+// In Home mode the panel's oauth-model-alias is resolved by Home, so the
+// proxy learns alias -> upstream pairs from Home dispatch responses (bounded).
+const maxLearnedHomeAliases = 4096
+
+func (m *Manager) learnHomeAlias(requestedModel, upstreamModel string) {
+	if m == nil {
+		return
+	}
+	req := strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(requestedModel).ModelName))
+	up := strings.TrimSpace(thinking.ParseSuffix(upstreamModel).ModelName)
+	if req == "" || up == "" || strings.EqualFold(req, up) {
+		return
+	}
+	if prev, ok := m.homeAliases.Load(req); ok {
+		if prev.(string) == up {
+			return
+		}
+	} else if m.homeAliasCount.Add(1) > maxLearnedHomeAliases {
+		m.homeAliasCount.Add(-1)
+		return
+	}
+	m.homeAliases.Store(req, up)
+}
+
+func (m *Manager) learnedHomeAlias(alias string) string {
+	if m == nil {
 		return ""
 	}
-	rev := table.reverse[strings.ToLower(strings.TrimSpace(channel))]
-	if rev == nil {
-		return ""
+	if v, ok := m.homeAliases.Load(strings.ToLower(strings.TrimSpace(alias))); ok {
+		return v.(string)
 	}
-	return rev[strings.ToLower(strings.TrimSpace(alias))].upstreamModel
+	return ""
+}
+
+// LearnHomeAliasForTest records a learned Home alias (tests only).
+func (m *Manager) LearnHomeAliasForTest(requestedModel, upstreamModel string) {
+	m.learnHomeAlias(requestedModel, upstreamModel)
 }

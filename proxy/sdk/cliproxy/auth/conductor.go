@@ -191,6 +191,8 @@ type Manager struct {
 
 	// oauthModelAlias stores global OAuth model alias mappings (alias -> upstream name) keyed by channel.
 	oauthModelAlias atomic.Value
+	homeAliases     sync.Map // lower alias -> upstream model learned from Home dispatch
+	homeAliasCount  atomic.Int64
 
 	// apiKeyModelRouting atomically publishes per-auth aliases and configured capabilities.
 	apiKeyModelRouting atomic.Value
