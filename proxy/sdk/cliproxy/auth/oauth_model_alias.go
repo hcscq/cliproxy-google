@@ -504,3 +504,22 @@ func normalizeOAuthModelAliasAuthKind(authKind string) string {
 		return authKind
 	}
 }
+
+// OAuthAliasUpstream returns the upstream model a channel-level alias
+// (configured oauth-model-alias or built-in) points to, or "" when the model
+// is not an alias. O(1) map lookup.
+func (m *Manager) OAuthAliasUpstream(channel, alias string) string {
+	if m == nil {
+		return ""
+	}
+	raw := m.oauthModelAlias.Load()
+	table, _ := raw.(*oauthModelAliasTable)
+	if table == nil || table.reverse == nil {
+		return ""
+	}
+	rev := table.reverse[strings.ToLower(strings.TrimSpace(channel))]
+	if rev == nil {
+		return ""
+	}
+	return rev[strings.ToLower(strings.TrimSpace(alias))].upstreamModel
+}

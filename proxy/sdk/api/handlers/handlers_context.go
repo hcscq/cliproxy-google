@@ -91,6 +91,7 @@ func WithSelectedAuthIDCallback(ctx context.Context, callback func(string)) cont
 // PrepareStreamModelRoute resolves a stream route once and stores it on the returned context for execution.
 // The boolean reports whether the route overrides normal model-to-provider resolution.
 func (h *BaseAPIHandler) PrepareStreamModelRoute(ctx context.Context, handlerType string, modelName string, rawJSON []byte) (context.Context, bool) {
+	modelName = h.resolveEffortVariantModel(handlerType, modelName, rawJSON)
 	if ctx == nil {
 		ctx = context.Background()
 	}
