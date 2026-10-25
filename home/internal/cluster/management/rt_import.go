@@ -792,6 +792,8 @@ type egressPicker struct {
 	items    []home.EgressStatus
 	// allowPrimary lets auto use node primary IPs.
 	allowPrimary bool
+	// maxPer is Settings MaxPerEgress (0 = unlimited).
+	maxPer int
 }
 
 func (h *Handler) newEgressPicker(ctx context.Context, choice string, allowPrimary *bool) (*egressPicker, error) {
@@ -812,6 +814,7 @@ func (h *Handler) newEgressPicker(ctx context.Context, choice string, allowPrima
 		p.explicit = &spec
 		return p, nil
 	}
+	p.maxPer = h.runtime.EgressSettings(ctx).MaxPerEgress
 	p.items, _ = h.runtime.EgressStatuses(ctx)
 	p.items = assignableEgressStatuses(p.items, h.runtime.EgressSettings(ctx))
 	return p, nil
@@ -829,7 +832,7 @@ func (p *egressPicker) pick() (home.EgressSpec, bool) {
 	best := -1
 	for i := range p.items {
 		it := &p.items[i]
-		if !it.Healthy || it.Removed || (it.Primary && !p.allowPrimary) {
+		if !it.Healthy || it.Removed || (it.Primary && !p.allowPrimary) || (p.maxPer > 0 && it.Credentials >= p.maxPer) {
 			continue
 		}
 		if best < 0 || it.Credentials < p.items[best].Credentials || (it.Credentials == p.items[best].Credentials && it.Name < p.items[best].Name) {

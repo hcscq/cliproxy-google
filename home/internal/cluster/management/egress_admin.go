@@ -274,6 +274,9 @@ func (h *Handler) PutEgressSettings(c *gin.Context) {
 		// Older clients send only allow_primary/max_per_egress: keep the list.
 		body.Disabled = h.runtime.EgressSettings(c.Request.Context()).Disabled
 	}
+	if _, ok := keys["ultra_max_per_egress"]; !ok {
+		body.UltraMaxPerEgress = h.runtime.EgressSettings(c.Request.Context()).UltraMaxPerEgress
+	}
 	if err := h.runtime.SetEgressSettings(c.Request.Context(), body); err != nil {
 		respondError(c, http.StatusInternalServerError, "save_failed", err)
 		return

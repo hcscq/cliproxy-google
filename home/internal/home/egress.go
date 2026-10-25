@@ -125,6 +125,10 @@ type egressPin struct {
 	paused  bool
 	reason  string
 	version int64
+	// Ultra placement (see egress_ultra.go).
+	ultra   bool
+	placed  bool
+	created time.Time
 }
 
 func pauseReasonFor(s EgressSpec) string {
@@ -147,7 +151,8 @@ func (r *Runtime) egressPinFor(ctx context.Context, a *coreauth.Auth, refresh bo
 	if full == nil {
 		return pin, ok
 	}
-	pin = egressPin{proxy: strings.TrimSpace(full.ProxyURL), paused: full.Disabled && isEgressPauseReason(metaString(full, EgressPausedReasonKey)), reason: metaString(full, EgressPausedReasonKey), version: a.StateVersion}
+	pin = egressPin{proxy: strings.TrimSpace(full.ProxyURL), paused: full.Disabled && isEgressPauseReason(metaString(full, EgressPausedReasonKey)), reason: metaString(full, EgressPausedReasonKey), version: a.StateVersion,
+		ultra: isUltraTier(metaString(full, SubscriptionTierKey)), placed: metaString(full, EgressUltraPlacedKey) != "", created: full.CreatedAt}
 	r.setPin(a.ID, pin)
 	return pin, true
 }
@@ -533,6 +538,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 			st.Paused++
 		}
 	}
+	r.placeNewUltras(ctx, assignableEgressSpecs(specs, settings), status, pins, counts, settings, now)
 	list := make([]*EgressStatus, 0, len(specs))
 	for _, s := range specs {
 		if st := status[s.ProxyURL]; st != nil {
@@ -804,6 +810,24 @@ type EgressSettingsValue struct {
 	// not affect health checks, and credentials already pinned there are left
 	// as they are (neither paused nor moved).
 	Disabled []string `json:"disabled,omitempty"`
+	// UltraMaxPerEgress caps Ultra-tier credentials per egress IP (nil = default 1,
+	// 0 = unlimited). Applied when a new credential's tier becomes known as Ultra;
+	// existing pins are never moved automatically (explicit rebalance only).
+	UltraMaxPerEgress *int `json:"ultra_max_per_egress,omitempty"`
+}
+
+// DefaultUltraMaxPerEgress is the Ultra-per-IP cap when unset.
+const DefaultUltraMaxPerEgress = 1
+
+// UltraLimit returns the effective Ultra-per-egress cap (0 = unlimited).
+func (v EgressSettingsValue) UltraLimit() int {
+	if v.UltraMaxPerEgress == nil {
+		return DefaultUltraMaxPerEgress
+	}
+	if *v.UltraMaxPerEgress < 0 {
+		return 0
+	}
+	return *v.UltraMaxPerEgress
 }
 
 // IsDisabled reports whether spec is on the disabled list.

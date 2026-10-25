@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAction, useApi, useAsync, useUi } from '../app-context';
 import { useI18n } from '../i18n';
 import { Badge, Card, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
-import { fmtBytes } from '../api/client';
+import { fmtBytes, type EgressMove } from '../api/client';
 import { fmtNum, fmtTime } from '../format';
 
 type FieldType = 'bool' | 'number' | 'text' | 'select' | 'list';
@@ -438,7 +438,7 @@ function EgressPolicy() {
           onChange={async (e) => {
             setSaving(true);
             try {
-              await api.saveEgressSettings({ allow_primary: e.target.checked, max_per_egress: st.data?.max_per_egress ?? 0 });
+              await api.saveEgressSettings({ ...st.data!, allow_primary: e.target.checked });
               toast(tr('已保存', 'Saved'));
               await st.reload();
             } catch (err) {
@@ -467,7 +467,7 @@ function EgressPolicy() {
             if (v === (st.data?.max_per_egress ?? 0)) return;
             setSaving(true);
             try {
-              await api.saveEgressSettings({ allow_primary: st.data!.allow_primary, max_per_egress: v });
+              await api.saveEgressSettings({ ...st.data!, max_per_egress: v });
               toast(tr('已保存', 'Saved'));
               await st.reload();
             } catch (err) {
@@ -478,6 +478,35 @@ function EgressPolicy() {
           }}
         />
       </label>
+      <label
+        style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginLeft: 24 }}
+        title={tr('每个出口 IP 最多绑定的 Ultra 凭据数（默认 1，0 = 不限）。新凭据确认为 Ultra 后，若所在 IP 已满会自动改到有空位的 IP；都满时留在原 IP 继续服务并标注。已有凭据不会自动移动，见下方超限列表。', 'Max Ultra credentials per egress IP (default 1, 0 = unlimited). A new credential confirmed as Ultra moves to an IP with room; if none, it stays and is flagged. Existing pins are never moved automatically.')}
+      >
+        {tr('每 IP Ultra 上限', 'Ultra per IP')}
+        <input
+          type="number"
+          min={0}
+          style={{ width: 80 }}
+          defaultValue={st.data.ultra_max_per_egress ?? 1}
+          disabled={saving}
+          data-testid="settings-ultra-max-per-egress"
+          onBlur={async (e) => {
+            const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
+            if (v === (st.data?.ultra_max_per_egress ?? 1)) return;
+            setSaving(true);
+            try {
+              await api.saveEgressSettings({ ...st.data!, ultra_max_per_egress: v });
+              toast(tr('已保存', 'Saved'));
+              await st.reload();
+            } catch (err) {
+              toastError(err);
+            } finally {
+              setSaving(false);
+            }
+          }}
+        />
+      </label>
+      <UltraViolations />
       <label
         style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 12 }}
         title={tr('停用的出口（id 如 node/ip，或 IP，逗号分隔）不会被任何新分配使用（导入、添加、自动均衡、手动指定）。不影响健康检查；已绑定的凭据不会被暂停或移动。', 'Disabled egresses (id like node/ip, or IP; comma-separated) are never used for new assignments (import, add, auto-balance, explicit). Health checks are unaffected; credentials already pinned are neither paused nor moved.')}
@@ -494,7 +523,7 @@ function EgressPolicy() {
             if (v.join(',') === (st.data?.disabled ?? []).join(',')) return;
             setSaving(true);
             try {
-              await api.saveEgressSettings({ allow_primary: st.data!.allow_primary, max_per_egress: st.data?.max_per_egress ?? 0, disabled: v });
+              await api.saveEgressSettings({ ...st.data!, disabled: v });
               toast(tr('已保存', 'Saved'));
               await st.reload();
             } catch (err) {
@@ -506,6 +535,83 @@ function EgressPolicy() {
         />
       </label>
     </Card>
+  );
+}
+
+/** Egress IPs holding more Ultra credentials than allowed, with an explicit rebalance. */
+function UltraViolations() {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast, toastError } = useUi();
+  const st = useAsync(() => api.egressUltra(), []);
+  const [plan, setPlan] = useState<EgressMove[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (st.error) return <ErrorBox error={st.error} onRetry={st.reload} />;
+  if (!st.data) return null;
+  const v = st.data.violations ?? [];
+  const run = async (dry: boolean) => {
+    setBusy(true);
+    try {
+      const r = await api.egressUltraRebalance(dry);
+      if (dry) setPlan(r.moves);
+      else {
+        toast(tr(`已移动 ${r.applied ?? 0} 个`, `Moved ${r.applied ?? 0}`));
+        setPlan(null);
+        await st.reload();
+      }
+    } catch (err) {
+      toastError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 12 }} data-testid="ultra-violations">
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span>
+          {v.length === 0
+            ? tr(`Ultra 分布正常（共 ${st.data.ultra_total} 个，上限 ${st.data.limit || '不限'}/IP）`, `Ultra spread OK (${st.data.ultra_total}, limit ${st.data.limit || 'none'}/IP)`)
+            : tr(`${v.length} 个出口 IP 超过 Ultra 上限 ${st.data.limit}`, `${v.length} egress IPs over the Ultra limit ${st.data.limit}`)}
+        </span>
+        {v.length > 0 && (
+          <button className="btn btn-sm" disabled={busy} onClick={() => run(true)}>
+            {tr('预览均衡', 'Preview rebalance')}
+          </button>
+        )}
+      </div>
+      {v.length > 0 && (
+        <table className="table" style={{ marginTop: 6 }}>
+          <tbody>
+            {v.map((g) => (
+              <tr key={g.egress}>
+                <td>{g.egress}</td>
+                <td>{g.public_ip || g.ip}</td>
+                <td>{g.count}</td>
+                <td>{g.credentials.map((c) => `#${c.seq ?? ''} ${c.label}${c.note ? ' ⚠' : ''}`).join(', ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {plan && (
+        <div style={{ marginTop: 6 }}>
+          {plan.length === 0 ? (
+            tr('没有可移入的空位出口（需增加出口 IP 或调高上限）', 'No egress with room (add IPs or raise the limit)')
+          ) : (
+            <>
+              <ul>
+                {plan.map((m) => (
+                  <li key={m.credential_id}>{`#${m.seq ?? ''} ${m.label}: ${m.from} (${m.from_ip}) → ${m.to} (${m.to_ip})`}</li>
+                ))}
+              </ul>
+              <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => run(false)}>
+                {tr(`确认移动 ${plan.length} 个`, `Apply ${plan.length} moves`)}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

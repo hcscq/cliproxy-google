@@ -222,11 +222,17 @@ export class ApiClient {
     }
     return out;
   }
-  egressSettings() {
-    return this.get<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[] }>('/proxy/egress/settings');
+  egressUltra() {
+    return this.get<{ limit: number; ultra_total: number; violations: { egress: string; ip: string; public_ip?: string; count: number; credentials: { id: string; seq?: number; label: string; created_at: string; note?: string }[] }[] }>('/proxy/egress/ultra');
   }
-  saveEgressSettings(v: { allow_primary: boolean; max_per_egress?: number; disabled?: string[] }) {
-    return this.request<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[] }>('PUT', '/proxy/egress/settings', { body: v });
+  egressUltraRebalance(dryRun: boolean) {
+    return this.post<{ dry_run: boolean; moves: EgressMove[]; applied?: number }>('/proxy/egress/ultra/rebalance', { dry_run: dryRun });
+  }
+  egressSettings() {
+    return this.get<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[]; ultra_max_per_egress?: number }>('/proxy/egress/settings');
+  }
+  saveEgressSettings(v: { allow_primary: boolean; max_per_egress?: number; disabled?: string[]; ultra_max_per_egress?: number }) {
+    return this.request<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[]; ultra_max_per_egress?: number }>('PUT', '/proxy/egress/settings', { body: v });
   }
   egressAck(id: string) {
     return this.post<{ status: string }>('/proxy/egress/ack', { id });

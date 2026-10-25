@@ -268,6 +268,8 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/proxy/proxy-pools", handler.ListProxyPoolItems)
 	r.Set(http.MethodGet, "/proxy/egress", handler.ListEgress)
 	r.Set(http.MethodPost, "/proxy/egress/rebalance", handler.RebalanceEgress)
+	r.Set(http.MethodGet, "/proxy/egress/ultra", handler.UltraEgress)
+	r.Set(http.MethodPost, "/proxy/egress/ultra/rebalance", handler.RebalanceUltraEgress)
 	r.Set(http.MethodPost, "/proxy/egress/ack", handler.AckEgress)
 	r.Set(http.MethodPost, "/proxy/egress/forget", handler.ForgetEgress)
 	r.Set(http.MethodPost, "/proxy/egress/assign", handler.AssignEgress)
