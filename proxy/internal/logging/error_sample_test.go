@@ -10,6 +10,7 @@ func TestErrorSampleType(t *testing.T) {
 		`{"error":{"code":400,"message":"The input token count exceeds the maximum number of tokens allowed 131072."}}`: "400:input-token-exceeds",
 		`{"error":{"message":"No capacity available for model gemini-2.5-pro on the server"}}`:                         "400:no-capacity",
 		`unknown provider for model foo-123`: "400:model-not-found",
+		`{"error":{"code":"model_cooldown","message":"All credentials for model gemini-3-pro are cooling down"}}`: "400:model-cooldown",
 	}
 	for in, want := range cases {
 		if got := ErrorSampleType(400, in); got != want {

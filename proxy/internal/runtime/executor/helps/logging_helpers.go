@@ -40,6 +40,9 @@ type UpstreamRequestLog struct {
 	AuthLabel string
 	AuthType  string
 	AuthValue string
+	// BodyImmutable marks Body as never mutated after the call, so the
+	// deferred (error-only) capture may keep a reference instead of a copy.
+	BodyImmutable bool
 }
 
 type upstreamAttempt struct {
@@ -146,7 +149,11 @@ func deferAPIRequest(ginCtx *gin.Context, info UpstreamRequestLog) {
 	if captureLength > remaining {
 		captureLength = remaining
 	}
-	capturedInfo.Body = bytes.Clone(info.Body[:captureLength])
+	if info.BodyImmutable {
+		capturedInfo.Body = info.Body[:captureLength:captureLength]
+	} else {
+		capturedInfo.Body = bytes.Clone(info.Body[:captureLength])
+	}
 	bodyEmpty := len(info.Body) == 0
 	bodyTruncated := captureLength < len(info.Body)
 	ginCtx.Set(deferredAPIRequestBytesKey, bytesUsed+captureLength)

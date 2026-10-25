@@ -87,6 +87,9 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		bodyReader = bytes.NewReader(payloadStrBytes)
 		if e.cfg != nil && e.cfg.RequestLog {
 			payloadLog = append([]byte(nil), payloadStrBytes...)
+		} else {
+			// Referenced (not copied) for the deferred error log / error samples.
+			payloadLog = payloadStrBytes
 		}
 	} else {
 		if strings.Contains(modelName, "claude") {
@@ -100,6 +103,8 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		bodyReader = bytes.NewReader(payload)
 		if e.cfg != nil && e.cfg.RequestLog {
 			payloadLog = append([]byte(nil), payload...)
+		} else {
+			payloadLog = payload
 		}
 	}
 
@@ -143,15 +148,16 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		authType, authValue = auth.AccountInfo()
 	}
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
-		URL:       requestURL.String(),
-		Method:    http.MethodPost,
-		Headers:   httpReq.Header.Clone(),
-		Body:      payloadLog,
-		Provider:  e.Identifier(),
-		AuthID:    authID,
-		AuthLabel: authLabel,
-		AuthType:  authType,
-		AuthValue: authValue,
+		URL:           requestURL.String(),
+		Method:        http.MethodPost,
+		Headers:       httpReq.Header.Clone(),
+		Body:          payloadLog,
+		BodyImmutable: true,
+		Provider:      e.Identifier(),
+		AuthID:        authID,
+		AuthLabel:     authLabel,
+		AuthType:      authType,
+		AuthValue:     authValue,
 	})
 
 	return httpReq, nil

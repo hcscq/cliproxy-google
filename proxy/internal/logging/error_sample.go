@@ -130,6 +130,8 @@ func ErrorSampleType(status int, texts ...string) string {
 	switch {
 	case strings.Contains(l, "input token count exceeds") || strings.Contains(l, "exceeds the maximum number of tokens") || strings.Contains(l, "prompt is too long") || strings.Contains(l, "context length"):
 		return code + ":input-token-exceeds"
+	case strings.Contains(l, "cooling down") || strings.Contains(l, "cooldown") || strings.Contains(l, "model_cooldown"):
+		return code + ":model-cooldown"
 	case strings.Contains(l, "no capacity"):
 		return code + ":no-capacity"
 	case strings.Contains(l, "individual quota") || strings.Contains(l, "exhausted your capacity") || strings.Contains(l, "resource_exhausted") || strings.Contains(l, "resource exhausted") || strings.Contains(l, "quota"):
