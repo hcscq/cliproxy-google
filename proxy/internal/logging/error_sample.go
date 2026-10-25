@@ -309,7 +309,7 @@ func captureErrorSample(url, method string, requestHeaders map[string][]string, 
 	p := errorSamplePayload{
 		Type: key, RequestID: requestID, Time: now.UTC(), Status: status, Method: method,
 		URL: RedactErrorSampleText(url), ClientKeyPrefix: keyPrefix, RequestedModel: model,
-		RequestHeaders: headers,
+		RequestHeaders:   headers,
 		RequestBody:      capErrorSampleField(body, nil),
 		UpstreamRequest:  capErrorSampleField(apiRequest, apiRequestSource),
 		UpstreamResponse: capErrorSampleField(apiResponse, apiResponseSource),
