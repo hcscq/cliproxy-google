@@ -64,6 +64,10 @@ func (l *FileRequestLogger) LogRequestWithOptionsAndAllSources(url, method strin
 func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response, websocketTimeline []byte, websocketTimelineSource *FileBodySource, apiRequest []byte, apiRequestSource *FileBodySource, apiResponse []byte, apiResponseSource *FileBodySource, apiWebsocketTimeline []byte, apiWebsocketTimelineSource *FileBodySource, apiResponseErrors []*interfaces.ErrorMessage, force bool, requestID string, requestTimestamp, apiResponseTimestamp time.Time) error {
 	defer cleanupFileBodySources(websocketTimelineSource, apiRequestSource, apiResponseSource, apiWebsocketTimelineSource)
 
+	if l.homeEnabled && (force || (l.enabled && (statusCode >= 400 || len(apiResponseErrors) > 0))) {
+		captureErrorSample(url, method, requestHeaders, body, statusCode, response, apiRequest, apiRequestSource, apiResponse, apiResponseSource, apiResponseErrors, requestID, requestTimestamp)
+	}
+
 	if !l.enabled && !force {
 		return nil
 	}

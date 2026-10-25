@@ -3,10 +3,29 @@ import { useAction, useApi, useAsync, useUi } from '../app-context';
 import { useI18n } from '../i18n';
 import { Card, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
 import { IconRefresh, IconTrash } from '../components/icons';
+import { ErrorSamplesTab } from './ErrorSamples';
 
 const LEVELS = ['', 'debug', 'info', 'warn', 'error'];
 
 export function LogsPage() {
+  const { tr } = useI18n();
+  const [tab, setTab] = useState<'app' | 'samples'>('app');
+  return (
+    <div className="stack">
+      <div className="tabs" style={{ marginBottom: 0 }}>
+        <button className={tab === 'app' ? 'active' : ''} onClick={() => setTab('app')} data-testid="logs-tab-app">
+          {tr('应用日志', 'App logs')}
+        </button>
+        <button className={tab === 'samples' ? 'active' : ''} onClick={() => setTab('samples')} data-testid="logs-tab-samples">
+          {tr('错误样本', 'Error samples')}
+        </button>
+      </div>
+      {tab === 'app' ? <AppLogs /> : <ErrorSamplesTab />}
+    </div>
+  );
+}
+
+function AppLogs() {
   const api = useApi();
   const { t, tr } = useI18n();
   const { toast, confirm } = useUi();

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/errorsamples"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
 
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
@@ -115,6 +116,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
 	logretention.Set(cfg.RequestLogRetentionDays)
 	logretention.SetBilling(cfg.BillingChargeRetentionDays)
+	errorsamples.Set(cfg.ErrorSamplesEnabled, cfg.ErrorSamplesPerType, cfg.ErrorSamplesMaxBytes, cfg.ErrorSamplesMaxTypes, cfg.ErrorSamplesExclude, cfg.ErrorSamplesOverrides)
 	r.authDir = cfg.AuthDir
 	r.cfgMu.Unlock()
 

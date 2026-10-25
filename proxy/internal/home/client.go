@@ -34,6 +34,7 @@ const (
 	redisKeyInFlightSnapshot   = "in-flight-snapshot"
 	redisKeyConcurrencyRelease = "concurrency-release"
 	redisKeyRequestLog         = "request-log"
+	redisKeyErrorSample        = "error-sample"
 	redisKeyAppLog             = "app-log"
 	redisKeyPluginStatus       = "plugin-status"
 	redisKeyPluginTasks        = "plugin-tasks"
@@ -1730,6 +1731,18 @@ func (c *Client) RPushRequestLog(ctx context.Context, payload []byte) error {
 		return nil
 	}
 	return cmd.RPush(ctx, redisKeyRequestLog, payload).Err()
+}
+
+// RPushErrorSample forwards one failed-request sample to Home.
+func (c *Client) RPushErrorSample(ctx context.Context, payload []byte) error {
+	cmd, errClient := c.commandClient()
+	if errClient != nil {
+		return errClient
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	return cmd.RPush(ctx, redisKeyErrorSample, payload).Err()
 }
 
 func (c *Client) RPushAppLog(ctx context.Context, payload []byte) error {

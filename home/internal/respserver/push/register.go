@@ -15,5 +15,6 @@ func Register(reg *dispatch.Registry) {
 
 	_ = reg.RegisterDirect("RPUSH", "request-log", handleRequestLog)
 	_ = reg.RegisterDirect("RPUSH", "app-log", handleAppLog)
+	_ = reg.RegisterDirect("RPUSH", "error-sample", handleErrorSample)
 	_ = reg.RegisterDirect("RPUSH", "plugin-status", handlePluginStatus)
 }

@@ -528,6 +528,15 @@ export class ApiClient {
   logs(query?: Query) {
     return this.get<{ logs: LogLine[]; total: number; limit: number; offset: number }>('/observability/logs', query);
   }
+  errorSampleTypes() {
+    return this.get<ErrorSampleTypesResponse>('/error-samples');
+  }
+  errorSamples(type: string) {
+    return this.get<{ type: string; samples: ErrorSample[] }>('/error-samples/items', { type });
+  }
+  clearErrorSamples(type?: string) {
+    return this.del<{ deleted: number }>('/error-samples', type ? { type } : undefined);
+  }
   clearLogs() {
     return this.del<{ success: boolean; removed: number }>('/observability/logs');
   }
@@ -1414,3 +1423,28 @@ export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at:
 export interface HealthInfo { status: 'pass' | 'fail' | 'running' | string; categories: string[]; reasons?: string[]; checked_at?: string; tier?: string; evidence?: string; verify_url?: string }
 export interface HealthSummary { total: number; pass: number; fail: number; running: number; by_category: Record<string, number> }
 export interface HealthItem extends HealthInfo { auth_id: string; seq?: number; email?: string; batch_id?: string; imported_at?: string; model?: string }
+
+export interface ErrorSampleType {
+  type: string;
+  count: number;
+  bytes: number;
+  last_seen: string;
+  status: number;
+}
+export interface ErrorSampleTypesResponse {
+  types: ErrorSampleType[];
+  stored_bytes: number;
+  settings: { enabled: boolean; per_type: number; max_bytes: number; max_types: number; exclude?: string[]; overrides?: Record<string, number> };
+}
+export interface ErrorSample {
+  id: number;
+  type: string;
+  created_at: string;
+  status: number;
+  requested_model?: string;
+  request_id?: string;
+  proxy_ip?: string;
+  home_ip?: string;
+  size: number;
+  sample?: Record<string, unknown>;
+}

@@ -187,6 +187,17 @@ func (a *RuntimeAdapter) StoreAppLogPayload(ctx context.Context, clientIP string
 	return errAppend
 }
 
+// StoreErrorSample stores one error sample and prunes per the given limits.
+func (a *RuntimeAdapter) StoreErrorSample(ctx context.Context, rec *ErrorSampleRecord, raw []byte, keep, maxTypes int) error {
+	if !a.Enabled() {
+		return fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	a.mu.RLock()
+	rec.HomeIP = a.homeIP
+	a.mu.RUnlock()
+	return a.repo.InsertErrorSample(ctx, rec, raw, keep, maxTypes)
+}
+
 // KVGet returns an active KV value.
 func (a *RuntimeAdapter) KVGet(ctx context.Context, key string) ([]byte, bool, error) {
 	if !a.Enabled() {

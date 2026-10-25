@@ -107,6 +107,15 @@ type Config struct {
 	// hourly in small batches. User balances are not affected.
 	BillingChargeRetentionDays int `yaml:"billing-charge-retention-days,omitempty" json:"billing-charge-retention-days,omitempty"`
 
+	// Error samples: keep the most recent N full request contexts per error
+	// type (redacted). Enabled by default.
+	ErrorSamplesEnabled   *bool  `yaml:"error-samples-enabled,omitempty" json:"error-samples-enabled,omitempty"`
+	ErrorSamplesPerType   int    `yaml:"error-samples-per-type,omitempty" json:"error-samples-per-type,omitempty"`
+	ErrorSamplesMaxBytes  int    `yaml:"error-samples-max-bytes,omitempty" json:"error-samples-max-bytes,omitempty"`
+	ErrorSamplesMaxTypes  int    `yaml:"error-samples-max-types,omitempty" json:"error-samples-max-types,omitempty"`
+	ErrorSamplesExclude   string `yaml:"error-samples-exclude,omitempty" json:"error-samples-exclude,omitempty"`
+	ErrorSamplesOverrides string `yaml:"error-samples-overrides,omitempty" json:"error-samples-overrides,omitempty"`
+
 	// CredentialRPM caps requests per minute per credential across all Home
 	// replicas (0 = unlimited). A credential at its cap is skipped like one at
 	// its concurrency cap; if every candidate is capped the request gets 429.

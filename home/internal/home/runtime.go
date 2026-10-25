@@ -18,6 +18,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/errorbody"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/errorsamples"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logretention"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/ratelimit"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/usageerr"
@@ -276,6 +277,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 		errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
 		logretention.Set(cfg.RequestLogRetentionDays)
 		logretention.SetBilling(cfg.BillingChargeRetentionDays)
+		errorsamples.Set(cfg.ErrorSamplesEnabled, cfg.ErrorSamplesPerType, cfg.ErrorSamplesMaxBytes, cfg.ErrorSamplesMaxTypes, cfg.ErrorSamplesExclude, cfg.ErrorSamplesOverrides)
 	}
 	runtime := &Runtime{
 		cfg:           cfg,

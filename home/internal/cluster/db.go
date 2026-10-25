@@ -1182,6 +1182,9 @@ func ensureExtraTablesUnlocked(ctx context.Context, db *gorm.DB) error {
 	if err := ensureHomeDrainTable(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureErrorSampleTable(ctx, db); err != nil {
+		return err
+	}
 	if err := ensureCredentialCallStatTables(ctx, db); err != nil {
 		return err
 	}
