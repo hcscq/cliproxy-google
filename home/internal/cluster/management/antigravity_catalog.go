@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 )
 
 // GetAntigravityCatalog returns per-credential upstream catalog status.
@@ -74,4 +75,14 @@ func (h *Handler) RefreshSubscriptionTiers(c *gin.Context) {
 	}
 	_ = h.refreshAuths(c.Request.Context())
 	c.JSON(http.StatusOK, gin.H{"results": out})
+}
+
+// GetCredentialQuotaGroups returns the resolved quota groups of one credential.
+func (h *Handler) GetCredentialQuotaGroups(c *gin.Context) {
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "runtime unavailable"})
+		return
+	}
+	id := strings.TrimSpace(c.Param("credential_id"))
+	c.JSON(http.StatusOK, gin.H{"groups": h.runtime.CredentialQuotaGroups(id), "stats": home.QuotaGroupStats()})
 }

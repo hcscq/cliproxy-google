@@ -121,7 +121,19 @@ func credentialBucketModels(auth *coreauth.Auth) map[string][]string {
 			return
 		}
 		seen[model] = true
-		if b := antigravityModelBucket(model); b != "" {
+		// The probe buckets only describe the shared groups: a model resolved to another
+		// quota group (e.g. gemini-4-argon on Pro) is never blocked/released by them.
+		b := antigravityModelBucket(model)
+		switch quotaGroupOf(auth, model) {
+		case "":
+		case "gemini":
+			b = quotaBucketGemini
+		case "3p":
+			b = quotaBucketThirdParty
+		default:
+			b = ""
+		}
+		if b != "" {
 			out[b] = append(out[b], model)
 		}
 	}
@@ -183,7 +195,7 @@ func planQuotaBucketActions(auth *coreauth.Auth, models map[string][]string, ver
 			// An explicit per-model QUOTA_EXHAUSTED is a hidden per-model window: the bucket
 			// ratio says nothing about it, so it is never released here (the per-model prober
 			// re-checks it, and is nudged when the bucket ratio rises).
-			hiddenModelQuota := st.LastError != nil && st.LastError.Code == coreauth.ModelQuotaExhaustedCode
+			hiddenModelQuota := st.LastError != nil && (st.LastError.Code == coreauth.ModelQuotaExhaustedCode || st.LastError.Code == QuotaGroupExhaustedCode || st.LastError.Code == QuotaGroupLowCode)
 			longQuota := enabled && v.known && st.Quota.Exceeded && !hiddenModelQuota && st.NextRetryAfter.Sub(now) > 2*reprobe
 			if (guardState && (v.known || !enabled)) || longQuota {
 				out = append(out, quotaBucketAction{model: model, bucket: bucket})

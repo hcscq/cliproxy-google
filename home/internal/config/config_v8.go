@@ -85,6 +85,8 @@ func buildV8Paths() []configPath {
 		{"quota-probe-interval-seconds", "routing.cooldown.quota-probe-interval-seconds"},
 		{"quota-probe-backoff", "routing.cooldown.quota-probe-backoff"},
 		{"quota-canary", "routing.cooldown.quota-canary"},
+		{"quota-group-overrides", "routing.cooldown.quota-group-overrides"}, {"quota-group-cooldown", "routing.cooldown.quota-group-cooldown"},
+		{"quota-probe-skip-until-reset", "routing.cooldown.quota-probe-skip-until-reset"}, {"quota-low-remaining", "routing.cooldown.quota-low-remaining"},
 		{"reserve-min-active", "routing.reserve.min-active"}, {"reserve-activation-delay", "routing.reserve.activation-delay"},
 		{"reserve-max-promotions", "routing.reserve.max-promotions"}, {"reserve-promotion-window", "routing.reserve.promotion-window"},
 		{"reserve-tier-filter", "routing.reserve.tier-filter"}, {"reserve-count-cooled", "routing.reserve.count-cooled"},

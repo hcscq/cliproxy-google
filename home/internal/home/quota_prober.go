@@ -54,8 +54,9 @@ type quotaProber struct {
 	mu      sync.Mutex
 	next    map[string]time.Time
 	running map[string]bool
-	level   map[string]int // probes answered "still exhausted" in the current cooldown
-	carry   map[string]int // backoff level kept across a canary unlock (key -> level)
+	level   map[string]int  // probes answered "still exhausted" in the current cooldown
+	carry   map[string]int  // backoff level kept across a canary unlock (key -> level)
+	nudged  map[string]bool // probeNow requests: bypass skip-until-reset once
 	started bool
 }
 
@@ -74,13 +75,18 @@ func (p *quotaProber) probeNow(authID, model string) {
 		return
 	}
 	now := time.Now()
+	if p.nudged == nil {
+		p.nudged = map[string]bool{}
+	}
 	if model != "" {
 		p.next[authID+"|"+model] = now
+		p.nudged[authID+"|"+model] = true
 		return
 	}
 	for key := range p.next {
 		if strings.HasPrefix(key, authID+"|") {
 			p.next[key] = now
+			p.nudged[key] = true
 		}
 	}
 }
@@ -166,6 +172,7 @@ func (r *Runtime) startQuotaProber(ctx context.Context) {
 	r.prober.running = map[string]bool{}
 	r.prober.level = map[string]int{}
 	r.prober.carry = map[string]int{}
+	r.prober.nudged = map[string]bool{}
 	r.prober.mu.Unlock()
 	go func() {
 		sem := make(chan struct{}, envInt("HOME_QUOTA_PROBE_CONCURRENCY", quotaProbeConcurrency*4))
@@ -229,7 +236,7 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 			if st.LastError == nil || st.LastError.HTTPStatus != http.StatusTooManyRequests {
 				continue
 			}
-			if st.Quota.Reason == "credential_quota" || st.LastError.Code == QuotaBucketExhaustedCode {
+			if st.Quota.Reason == "credential_quota" || st.LastError.Code == QuotaBucketExhaustedCode || st.LastError.Code == QuotaGroupExhaustedCode || st.LastError.Code == QuotaGroupLowCode {
 				// Bucket blocks are re-checked by the quota collector, not per-model probes.
 				continue
 			}
@@ -244,6 +251,8 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 
 func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 	pairs := coolingQuotaPairs(r.coreManager.ListMatching(func(a *coreauth.Auth) bool { return hasCoolingQuotaPair(a, now) }), now)
+	r.syncQuotaGroupRules()
+	skipFar := r.quotaProbeSkipThreshold()
 	interval := r.quotaProbeInterval()
 	steps := r.quotaProbeBackoff()
 	r.prober.mu.Lock()
@@ -253,6 +262,7 @@ func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 	budget := rate * int((quotaProbeTick+time.Second-1)/time.Second)
 	// Nearest reset first: those credentials come back soonest.
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].reset.Before(pairs[j].reset) })
+	pairs = filterQuotaProbePairs(pairs, r.prober.nudged, skipFar, now)
 	var due []quotaProbeTarget
 	for _, p := range pairs {
 		key := p.auth.ID + "|" + p.model
@@ -276,6 +286,7 @@ func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 			continue
 		}
 		r.prober.running[key] = true
+		delete(r.prober.nudged, key)
 		due = append(due, p)
 	}
 	for key := range r.prober.next {
@@ -357,6 +368,7 @@ func (r *Runtime) runQuotaProbe(ctx context.Context, t quotaProbeTarget) {
 			break
 		}
 		log.Infof("quota probe: %s %s recovered, cooldown cleared", t.auth.ID, t.model)
+		r.releaseQuotaGroupSiblings(pctx, t.auth.ID, t.model)
 	case code == http.StatusTooManyRequests:
 		status.Result = "quota"
 		res := coreauth.Result{AuthID: t.auth.ID, Provider: "antigravity", Model: t.model,

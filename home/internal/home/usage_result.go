@@ -51,6 +51,7 @@ func (r *Runtime) RecordUsagePayload(ctx context.Context, payload string) {
 		r.observeQuotaCanary(id, result)
 		if statusCode == http.StatusTooManyRequests && !result.Success {
 			r.blockAndPublishQuotaCooldown(id, result)
+			r.propagateQuotaGroupCooldown(ctx, id, result, body)
 		}
 		if strings.EqualFold(provider, "antigravity") {
 			r.blockAndPublishStallCooldown(id, statusCode, body, result)

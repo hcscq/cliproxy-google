@@ -563,6 +563,7 @@ func (r *Runtime) applyCatalogRow(authID string, row AntigravityCatalogRow) {
 	changed := !sameAntigravityCatalog(entry.models, models)
 	entry.models, entry.health, entry.fetchedAt = models, health, row.FetchedAt
 	antigravityCatalogMu.Unlock()
+	r.applyCatalogQuotaGroups(authID, health)
 	if changed && r.coreManager != nil {
 		if auth, ok := r.coreManager.GetByID(authID); ok && auth != nil {
 			log.Infof("antigravity model catalog for %s: %d upstream models (%s)", authID, len(models), row.Trigger)

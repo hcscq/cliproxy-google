@@ -29,6 +29,11 @@ func (h *Handler) annotateQuotaProbes(ctx context.Context, entries []gin.H) {
 			if item["cooling"] != true || item["http_status"] != 429 {
 				continue
 			}
+			if item["error_code"] == home.QuotaGroupExhaustedCode || item["error_code"] == home.QuotaGroupLowCode {
+				// Group cooldown: released by catalog refresh / the group's representative probe.
+				item["group_cooldown"] = true
+				continue
+			}
 			if item["error_code"] == home.QuotaBucketExhaustedCode {
 				// Re-checked by the credential quota probe, not by per-model probes.
 				item["bucket_exhausted"] = true

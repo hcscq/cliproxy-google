@@ -236,6 +236,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/models/health", handler.GetModelHealth)
 	r.Set(http.MethodPost, "/models/health/retest", handler.RetestModelHealth)
 	r.Set(http.MethodGet, "/models/catalog", handler.GetAntigravityCatalog)
+	r.Set(http.MethodGet, "/credentials/:credential_id/quota-groups", handler.GetCredentialQuotaGroups)
 	r.Set(http.MethodPost, "/models/catalog/refresh", handler.RefreshAntigravityCatalog)
 	r.Set(http.MethodPost, "/auth-files/subscription/refresh", handler.RefreshSubscriptionTiers)
 	r.Set(http.MethodGet, "/quota/credentials", handler.ListQuotaCredentials)

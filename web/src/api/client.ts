@@ -288,6 +288,9 @@ export class ApiClient {
   models(scope: 'available' | 'static' = 'available') {
     return this.get<{ scope: string; models: ModelInfo[] | Record<string, ModelInfo[]> }>('/models', { scope });
   }
+  credentialQuotaGroups(id: string) {
+    return this.get<{ groups: CredentialQuotaGroup[] }>(`/credentials/${encodeURIComponent(id)}/quota-groups`);
+  }
   antigravityCatalog() {
     return this.get<CatalogResponse>('/models/catalog');
   }
@@ -1454,4 +1457,13 @@ export interface ErrorSample {
   home_ip?: string;
   size: number;
   sample?: Record<string, unknown>;
+}
+
+export interface CredentialQuotaGroup {
+  group: string;
+  source: string;
+  models: string[];
+  remaining?: number;
+  reset_at?: string;
+  cooling: number;
 }

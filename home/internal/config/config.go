@@ -282,6 +282,19 @@ type Config struct {
 	// QuotaCanary: a probe success before the known quota reset lets exactly one real
 	// request through (cluster-wide) and unlocks only if it succeeds. Default on.
 	QuotaCanary *bool `yaml:"quota-canary,omitempty" json:"quota-canary,omitempty"`
+	// QuotaGroupOverrides maps models to upstream quota groups per tier, one rule per line
+	// or ';' separated: "tier: pat|pat=group" (tier = ultra|pro|free|unknown|*; '*' wildcards).
+	// First match wins; empty = built-in defaults; "off" = learned groups only.
+	QuotaGroupOverrides string `yaml:"quota-group-overrides,omitempty" json:"quota-group-overrides,omitempty"`
+	// QuotaGroupCooldown: a quota-type 429 (QUOTA_EXHAUSTED with a reset) or an exhausted
+	// catalog group cools every model of that group on the credential. Default on.
+	QuotaGroupCooldown *bool `yaml:"quota-group-cooldown,omitempty" json:"quota-group-cooldown,omitempty"`
+	// QuotaProbeSkipUntilReset: cooling pairs whose known reset is further away than this are
+	// not probed until then (catalog refresh still releases early resets). "off" disables; default 30m.
+	QuotaProbeSkipUntilReset string `yaml:"quota-probe-skip-until-reset,omitempty" json:"quota-probe-skip-until-reset,omitempty"`
+	// QuotaLowRemaining: credentials whose catalog group remaining fraction is below this are
+	// skipped for that group while enough other credentials have more (0 disables). Default 0.03.
+	QuotaLowRemaining *float64 `yaml:"quota-low-remaining,omitempty" json:"quota-low-remaining,omitempty"`
 	// Credential reserve (凭据储备): auto-promote reserved credentials when the active
 	// (enabled, non-reserved) count stays below ReserveMinActive (0 = off).
 	ReserveMinActive       int    `yaml:"reserve-min-active,omitempty" json:"reserve-min-active,omitempty"`
@@ -1959,6 +1972,48 @@ func (c *Config) ReserveSettings() ReserveSettings {
 		}
 	}
 	return out
+}
+
+// QuotaGroupCooldownEnabled reports routing.cooldown.quota-group-cooldown (default true).
+func (c *Config) QuotaGroupCooldownEnabled() bool {
+	return c == nil || c.QuotaGroupCooldown == nil || *c.QuotaGroupCooldown
+}
+
+// QuotaProbeSkipThreshold returns the skip-until-reset threshold (0 = disabled).
+func (c *Config) QuotaProbeSkipThreshold() time.Duration {
+	raw := ""
+	if c != nil {
+		raw = strings.ToLower(strings.TrimSpace(c.QuotaProbeSkipUntilReset))
+	}
+	switch raw {
+	case "":
+		return 30 * time.Minute
+	case "off", "0", "false", "no":
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 30 * time.Minute
+	}
+	if d < time.Minute {
+		d = time.Minute
+	}
+	return d
+}
+
+// QuotaLowRemainingThreshold returns routing.cooldown.quota-low-remaining (default 0.03, 0 = off).
+func (c *Config) QuotaLowRemainingThreshold() float64 {
+	if c == nil || c.QuotaLowRemaining == nil {
+		return 0.03
+	}
+	v := *c.QuotaLowRemaining
+	if v <= 0 {
+		return 0
+	}
+	if v > 0.5 {
+		v = 0.5
+	}
+	return v
 }
 
 // QuotaCanaryEnabled reports routing.cooldown.quota-canary (default true).

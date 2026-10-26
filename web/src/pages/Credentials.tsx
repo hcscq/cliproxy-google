@@ -943,6 +943,27 @@ function fmtN(n: number) {
 
 /** Hidden per-model quota windows (explicit upstream QUOTA_EXHAUSTED for one model while
  * the bucket may still show quota): model + upstream reset, compact. */
+function QuotaGroupLine({ id }: { id: string }) {
+  const api = useApi();
+  const q = useAsync(() => api.credentialQuotaGroups(id).catch(() => null), [id], 60000);
+  const groups = q.data?.groups ?? [];
+  if (!groups.length) return null;
+  const src: Record<string, string> = { override: "映射", learned: "学习", "learned-tier": "学习(同级)" };
+  return (
+    <div className="faint small" style={{ marginTop: 2 }} data-testid="quota-groups">
+      额度组{" "}
+      {groups.map((g, i) => (
+        <span key={g.group} className="mono" title={`${src[g.source] ?? g.source}：${g.models.join(", ")}${g.reset_at ? `\n重置 ${new Date(g.reset_at).toLocaleString()}` : ""}`}>
+          {i > 0 ? " · " : ""}
+          {g.group}
+          {g.remaining !== undefined ? ` ${Math.round(g.remaining * 100)}%` : ""}
+          {g.cooling > 0 ? <span style={{ color: "var(--warn, #b7791f)" }}>{` ❄${g.cooling}`}</span> : null}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function ModelQuotaLine({ c, inline }: { c: Credential; inline?: boolean }) {
   const list = coolingModels(c).filter((m) => m.model_quota || m.error_code === "model_quota_exhausted");
   if (!list.length) return null;
@@ -1504,6 +1525,7 @@ function CredentialDrawer({
           <h3 style={{ marginBottom: 8 }}>{t("quota")}</h3>
           <QuotaWindows item={quota} />
           <ModelQuotaLine c={cred} />
+          {cred.provider === "antigravity" && <QuotaGroupLine id={cred.id} />}
         </div>
 
         <CallStatsPanel credentialId={cred.id} window={statsWindow} onWindow={onStatsWindow} />
