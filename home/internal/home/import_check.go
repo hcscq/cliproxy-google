@@ -51,6 +51,7 @@ type HealthProbeResult struct {
 	TierError       string `json:"tier_error,omitempty"`
 	Model           string `json:"model,omitempty"`
 	GenStatus       int    `json:"gen_status,omitempty"`
+	GenSkipped      bool   `json:"gen_skipped,omitempty"` // reserve without AI probe: no test request sent
 	GenBody         string `json:"gen_body,omitempty"`
 	GenError        string `json:"gen_error,omitempty"`
 	GenLatencyMilli int64  `json:"gen_latency_ms,omitempty"`
@@ -200,6 +201,7 @@ func ClassifyHealth(p HealthProbeResult, in HealthInputs, cfg config.ImportCheck
 	lowBody := strings.ToLower(body)
 	switch {
 	case p.NoEgress:
+	case p.GenSkipped:
 	case p.GenError != "":
 		add(HealthError, "测试请求失败："+clip(p.GenError, 120), p.GenError)
 	case p.GenStatus >= 200 && p.GenStatus < 300:
@@ -277,6 +279,13 @@ func (r *Runtime) HealthProbe(ctx context.Context, id, model string) HealthProbe
 		return out
 	}
 	r.healthLoadCodeAssist(ctx, full, &out)
+	if out.TierStatus == http.StatusForbidden {
+		r.disableForListBan(ctx, id, "loadCodeAssist", out.TierStatus, out.TierError, time.Now().UTC())
+	}
+	if r.reserveAIProbeBlocked(ctx, id) {
+		out.GenSkipped = true // reserve: no AI request (routing.reserve.ai-probe off)
+		return out
+	}
 	started := time.Now()
 	code, _, body, err := sendQuotaProbe(ctx, full, model)
 	out.GenLatencyMilli = time.Since(started).Milliseconds()

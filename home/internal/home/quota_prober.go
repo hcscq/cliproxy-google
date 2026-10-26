@@ -253,6 +253,7 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 	pairs := coolingQuotaPairs(r.coreManager.ListMatching(func(a *coreauth.Auth) bool { return hasCoolingQuotaPair(a, now) }), now)
 	pairs = r.dropUnavailableModelPairs(pairs)
+	pairs = r.dropReservedProbePairs(pairs)
 	r.syncQuotaGroupRules()
 	skipFar := r.quotaProbeSkipThreshold()
 	interval := r.quotaProbeInterval()
@@ -527,6 +528,31 @@ func filterUnavailableModelPairs(pairs []quotaProbeTarget, spec *string) []quota
 	for _, p := range pairs {
 		if cpaconfig.MatchUnavailableModel(pats, p.model) {
 			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// dropReservedProbePairs skips cooldown probes (generateContent) on reserved credentials
+// unless routing.reserve.ai-probe is on.
+func (r *Runtime) dropReservedProbePairs(pairs []quotaProbeTarget) []quotaProbeTarget {
+	if r.reserveSettings().AIProbe || len(pairs) == 0 {
+		return pairs
+	}
+	return filterReservedPairs(pairs, r.ReservedSince())
+}
+
+func filterReservedPairs(pairs []quotaProbeTarget, reserved map[string]time.Time) []quotaProbeTarget {
+	if len(reserved) == 0 {
+		return pairs
+	}
+	out := pairs[:0:0]
+	for _, p := range pairs {
+		if p.auth != nil {
+			if _, ok := reserved[p.auth.ID]; ok {
+				continue
+			}
 		}
 		out = append(out, p)
 	}

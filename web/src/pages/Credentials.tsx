@@ -579,7 +579,9 @@ export function CredentialsPage() {
         );
       } },
     { key: "quota", min: 140, weight: 1, sm: true, hideable: t("quota"), th: <SortTh k="quota" cur={sort} onSort={onSort}>{t("quota")}</SortTh>,
-      td: (c) => <div className="quota-cell"><QuotaInline item={quotaById.get(c.id)} showClaude={showClaude} error={quota.error} loading={!quota.data && !quota.error} /><ModelQuotaLine c={c} inline /></div> },
+      td: (c) => c.disabled
+        ? <div className="quota-cell muted small" data-testid="quota-stale-disabled" title={tr("凭据已停用，额度/模型目录为停用前采集的数据，不代表当前", "Credential disabled: quota/catalog were collected before it was disabled and are not current")}>{staleQuotaLabel(quotaById.get(c.id)?.observed_at, tr)}</div>
+        : <div className="quota-cell"><QuotaInline item={quotaById.get(c.id)} showClaude={showClaude} error={quota.error} loading={!quota.data && !quota.error} /><ModelQuotaLine c={c} inline /></div> },
     { key: "success", min: 100, sm: true, hideable: tr("成功率", "OK %"),
       th: <span className="nowrap"><SortTh k="success" cur={sort} onSort={onSort}>{tr("成功率", "OK %")}</SortTh><StatsWindowSelect value={statsWindow} onChange={setStatsWindow} /></span>,
       td: (c) => <CallStatsCell s={c.call_stats} window={statsWindow} /> },
@@ -1523,9 +1525,16 @@ function CredentialDrawer({
 
         <div>
           <h3 style={{ marginBottom: 8 }}>{t("quota")}</h3>
+          {cred.disabled && (
+            <div className="alert warn small" data-testid="quota-stale-disabled-detail">
+              {staleQuotaLabel(quota?.observed_at, tr)} · {tr("凭据已停用，以下额度与模型目录不代表当前状态", "credential disabled; quota and catalog below are not current")}
+            </div>
+          )}
+          <div style={cred.disabled ? { opacity: 0.5 } : undefined}>
           <QuotaWindows item={quota} />
           <ModelQuotaLine c={cred} />
           {cred.provider === "antigravity" && <QuotaGroupLine id={cred.id} />}
+          </div>
         </div>
 
         <CallStatsPanel credentialId={cred.id} window={statsWindow} onWindow={onStatsWindow} />
@@ -2198,4 +2207,8 @@ function EgressStrip({
       )}
     </div>
   );
+}
+
+function staleQuotaLabel(observedAt: string | null | undefined, tr: (zh: string, en: string) => string): string {
+  return observedAt ? `${tr("停用前数据", "pre-disable data")} · ${fmtTime(observedAt)}` : tr("停用前数据", "pre-disable data");
 }

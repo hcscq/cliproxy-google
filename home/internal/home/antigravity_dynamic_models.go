@@ -295,7 +295,7 @@ func fetchAntigravityCatalogRaw(ctx context.Context, auth *coreauth.Auth) ([]byt
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &antigravityHTTPError{status: resp.StatusCode}
+		return nil, &antigravityHTTPError{status: resp.StatusCode, body: clip(string(data), 4000)}
 	}
 	return data, nil
 }
@@ -335,7 +335,10 @@ func parseAntigravityCatalog(data []byte) (map[string]antigravityUpstreamModel, 
 	return out, nil
 }
 
-type antigravityHTTPError struct{ status int }
+type antigravityHTTPError struct {
+	status int
+	body   string
+}
 
 func (e *antigravityHTTPError) Error() string {
 	return "fetchAvailableModels returned HTTP " + http.StatusText(e.status)

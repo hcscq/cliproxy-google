@@ -199,6 +199,10 @@ func (r *Runtime) recheckAccountBlock(ctx context.Context, a *coreauth.Auth, now
 	if full == nil {
 		return
 	}
+	if r.reserveAIProbeBlocked(pctx, a.ID) {
+		log.Debugf("account block guard: recheck %s skipped (reserve, AI probe off)", a.ID)
+		return
+	}
 	model := "gemini-2.5-flash"
 	for _, info := range registry.GetGlobalRegistry().GetModelsForClient(a.ID) {
 		if info != nil && antigravityModelBucket(info.ID) == quotaBucketGemini {

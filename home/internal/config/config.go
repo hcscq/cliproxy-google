@@ -308,6 +308,11 @@ type Config struct {
 	ReserveBanProbeInterval string `yaml:"reserve-ban-probe-interval,omitempty" json:"reserve-ban-probe-interval,omitempty"`
 	// ReservePrePromoteCheck: probe each candidate right before promotion (default on).
 	ReservePrePromoteCheck *bool `yaml:"reserve-pre-promote-check,omitempty" json:"reserve-pre-promote-check,omitempty"`
+	// ReserveAIProbe: allow background generateContent probes on reserved credentials
+	// (ban probe, pre-promotion check, health check / re-checks, cooldown probes,
+	// account-block re-checks). Default off: reserves are checked with
+	// fetchAvailableModels + loadCodeAssist only.
+	ReserveAIProbe *bool `yaml:"reserve-ai-probe,omitempty" json:"reserve-ai-probe,omitempty"`
 	// ReserveModelRules: model-aware reserve minimums, "pattern:min" comma list
 	// (e.g. "gemini-4-argon-*:6"); "" = default rule, "off" = none.
 	ReserveModelRules string `yaml:"reserve-model-rules,omitempty" json:"reserve-model-rules,omitempty"`
@@ -1925,6 +1930,7 @@ type ReserveSettings struct {
 	CountCooled     bool          // wholly quota-cooled credentials count as available (default false)
 	BanProbeEvery   time.Duration // per-credential reserve ban probe interval (0 = off; default 12h)
 	PrePromoteCheck bool          // probe candidates right before promotion (default true)
+	AIProbe         bool          // background generateContent probes allowed on reserves (default false)
 	ModelRules      []ReserveModelRule
 }
 
@@ -1990,6 +1996,9 @@ func (c *Config) ReserveSettings() ReserveSettings {
 	out.ModelRules = ParseReserveModelRules(rules)
 	if c.ReservePrePromoteCheck != nil {
 		out.PrePromoteCheck = *c.ReservePrePromoteCheck
+	}
+	if c.ReserveAIProbe != nil {
+		out.AIProbe = *c.ReserveAIProbe
 	}
 	if v := strings.TrimSpace(c.ReserveBanProbeInterval); v == "0" || strings.EqualFold(v, "off") {
 		out.BanProbeEvery = 0

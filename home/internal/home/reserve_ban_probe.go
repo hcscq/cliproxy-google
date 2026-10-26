@@ -110,7 +110,17 @@ func (r *Runtime) probeReserveBan(ctx context.Context, id string, now time.Time)
 	case extractAccessToken(full) == "":
 		res.Result, res.Detail = "skipped", "no access token"
 	}
-	if res.Result != "skipped" {
+	if res.Result != "skipped" && !r.reserveSettings().AIProbe {
+		// No AI request: model list + loadCodeAssist (TOS 403 there = ban).
+		code, banned, detail := r.listBanCheck(pctx, full, now)
+		res.Status, res.Detail = code, detail
+		switch {
+		case banned:
+			res.Result = "banned"
+		case code == http.StatusOK:
+			res.Result = "ok"
+		}
+	} else if res.Result != "skipped" {
 		model := reserveProbeModel(id)
 		started := time.Now()
 		code, _, body, err := sendQuotaProbe(pctx, full, model)

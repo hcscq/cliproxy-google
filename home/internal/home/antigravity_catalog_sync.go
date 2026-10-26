@@ -449,6 +449,8 @@ func (r *Runtime) refreshAntigravityCatalogNow(ctx context.Context, authID, trig
 		var he *antigravityHTTPError
 		if errors.As(err, &he) {
 			row.HTTPStatus = he.status
+			// A TOS / suspended 403 on the model list is a ban (same as a generate 403).
+			r.disableForListBan(ctx, authID, "fetchAvailableModels", he.status, he.body, now)
 		}
 	} else {
 		var prevModels map[string]antigravityUpstreamModel
