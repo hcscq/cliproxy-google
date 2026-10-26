@@ -207,6 +207,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if authManager != nil {
 		authManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
 		authManager.SetMaxRetryDuration(time.Duration(cfg.MaxRetryDuration) * time.Second)
+		auth.SetNonStreamRequestDeadline(time.Duration(cfg.FirstByteDeadlineNonStream) * time.Second)
 		middleware.SetFirstByteDeadlineSeconds(cfg.FirstByteDeadline)
 		middleware.SetFirstByteDeadlineNonStreamSeconds(cfg.FirstByteDeadlineNonStream)
 		cache.SetHomeKVTimeoutMillis(cfg.HomeKVTimeoutMs)

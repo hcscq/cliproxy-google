@@ -123,7 +123,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 	if modelUnavailable(req.Model) {
 		return cliproxyexecutor.Response{}, newModelUnavailableError(req.Model)
 	}
-	ctx = m.withRetryBudget(ctx)
+	ctx = m.withNonStreamRetryBudget(ctx)
 	return withCapacityRetry(ctx, m.capacityRetrySettings(), req.Model, func() (cliproxyexecutor.Response, error) {
 		return m.executeAttempt(ctx, providers, req, opts)
 	})

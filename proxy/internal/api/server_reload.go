@@ -123,6 +123,7 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	if s.handlers != nil && s.handlers.AuthManager != nil {
 		s.handlers.AuthManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
 		s.handlers.AuthManager.SetMaxRetryDuration(time.Duration(cfg.MaxRetryDuration) * time.Second)
+		auth.SetNonStreamRequestDeadline(time.Duration(cfg.FirstByteDeadlineNonStream) * time.Second)
 		middleware.SetFirstByteDeadlineSeconds(cfg.FirstByteDeadline)
 		middleware.SetFirstByteDeadlineNonStreamSeconds(cfg.FirstByteDeadlineNonStream)
 		cache.SetHomeKVTimeoutMillis(cfg.HomeKVTimeoutMs)

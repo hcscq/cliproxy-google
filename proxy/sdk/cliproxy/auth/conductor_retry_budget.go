@@ -44,6 +44,31 @@ type retryBudget struct {
 	ttfbCount int
 	ttfbFinal bool
 	stopCause string
+	nonStream bool
+}
+
+// nonStreamRequestDeadline is the request-wide non-stream deadline
+// (routing.retry.first-byte-deadline-nonstream): 0 = unset (default 240s),
+// negative = off. Non-stream budgets use it instead of max-retry-duration,
+// because one non-stream attempt alone can exceed max-retry-duration.
+var nonStreamRequestDeadline atomic.Int64
+
+// DefaultNonStreamRequestDeadline mirrors the middleware default (240s).
+const DefaultNonStreamRequestDeadline = 240 * time.Second
+
+// SetNonStreamRequestDeadline applies first-byte-deadline-nonstream
+// (0 = default 240s, negative = off).
+func SetNonStreamRequestDeadline(d time.Duration) { nonStreamRequestDeadline.Store(int64(d)) }
+
+func nonStreamBudgetDuration() time.Duration {
+	d := time.Duration(nonStreamRequestDeadline.Load())
+	switch {
+	case d == 0:
+		return DefaultNonStreamRequestDeadline
+	case d < 0:
+		return -1 // unlimited
+	}
+	return d
 }
 
 // maxFirstByteTimeouts caps first-byte timeouts per request (set from the
@@ -114,6 +139,23 @@ func normalizeMaxRetryDuration(v time.Duration) time.Duration {
 		return -1 // unlimited
 	}
 	return v
+}
+
+// withNonStreamRetryBudget installs a request-wide budget for a non-streaming
+// request: its time bound is the non-stream request deadline, not
+// max-retry-duration (streaming behavior is unchanged).
+func (m *Manager) withNonStreamRetryBudget(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Value(retryBudgetKey{}).(*retryBudget); ok {
+		return ctx
+	}
+	ctx = m.withRetryBudget(ctx)
+	b := retryBudgetFrom(ctx)
+	b.nonStream = true
+	b.maxDur = nonStreamBudgetDuration()
+	return ctx
 }
 
 // withRetryBudget installs a request-wide budget unless one already exists.
@@ -285,4 +327,34 @@ func RetryBudgetFinalAttempt(ctx context.Context, limit time.Duration) bool {
 	}
 	rem, bounded := b.remaining()
 	return bounded && rem-limit < minUsefulRetry
+}
+
+// RetryBudgetRemaining returns the time left in the request budget
+// (ok=false when no budget is installed or it is unbounded).
+func RetryBudgetRemaining(ctx context.Context) (time.Duration, bool) {
+	b := retryBudgetFrom(ctx)
+	if b == nil {
+		return 0, false
+	}
+	return b.remaining()
+}
+
+// WithNonStreamRetryBudget is withNonStreamRetryBudget for callers outside
+// the package (tests, executors that own the request).
+func (m *Manager) WithNonStreamRetryBudget(ctx context.Context) context.Context {
+	return m.withNonStreamRetryBudget(ctx)
+}
+
+// WithRetryBudget is withRetryBudget for callers outside the package.
+func (m *Manager) WithRetryBudget(ctx context.Context) context.Context {
+	return m.withRetryBudget(ctx)
+}
+
+// AgeRetryBudgetForTest shifts the budget start back by d (tests only).
+func AgeRetryBudgetForTest(ctx context.Context, d time.Duration) {
+	if b := retryBudgetFrom(ctx); b != nil {
+		b.mu.Lock()
+		b.start = b.start.Add(-d)
+		b.mu.Unlock()
+	}
 }

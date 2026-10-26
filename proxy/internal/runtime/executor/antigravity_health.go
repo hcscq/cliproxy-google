@@ -132,9 +132,10 @@ const (
 )
 
 // defaultAntigravityNonStreamByFamily bounds a whole non-streaming 3.8
-// attempt (no first byte exists there). 120s sits above the observed p97 of
-// successful 3.8 non-stream responses, so only hung attempts are cut.
-const defaultAntigravityNonStreamByFamily = "3.8=120,4=300"
+// attempt (no first byte exists there). 150s sits above all but ~0.1% of
+// successful 3.8 non-stream responses, so only hung attempts are cut and the
+// request (240s non-stream deadline) still has time for one retry.
+const defaultAntigravityNonStreamByFamily = "3.8=150,4=300"
 
 type familyTTFBCache struct {
 	raw string
@@ -274,7 +275,13 @@ func (s antigravityHealthSettings) ttfbInputExtra(n int) time.Duration {
 // (headers arrive only after generation): the per-family limit when shorter
 // than the base, except for the last attempt the budget allows.
 func (s antigravityHealthSettings) nonStreamLimit(ctx context.Context, model string) time.Duration {
-	return familyAttemptLimit(ctx, s.nonStreamByFamily, model, s.nonStream)
+	limit := familyAttemptLimit(ctx, s.nonStreamByFamily, model, s.nonStream)
+	// Never run past the request's non-stream budget: the final attempt is
+	// bounded by what is left of the request deadline.
+	if rem, ok := cliproxyauth.RetryBudgetRemaining(ctx); ok && rem > 0 && (limit <= 0 || rem < limit) {
+		limit = rem
+	}
+	return limit
 }
 
 func familyAttemptLimit(ctx context.Context, byFamily map[string]time.Duration, model string, base time.Duration) time.Duration {

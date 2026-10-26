@@ -42,7 +42,7 @@ func TestAntigravityNonStreamLimitByFamily(t *testing.T) {
 	antigravityHealthLive.Store(nil)
 	ctx := context.Background()
 	s := antigravityHealthSettingsFrom(&config.Config{})
-	if got := s.nonStreamLimit(ctx, "gemini-3.8-flash-tiered"); got != 120*time.Second {
+	if got := s.nonStreamLimit(ctx, "gemini-3.8-flash-tiered"); got != 150*time.Second {
 		t.Fatalf("3.8 non-stream default = %s", got)
 	}
 	if got := s.nonStreamLimit(ctx, "gemini-2.5-flash"); got != 180*time.Second {
