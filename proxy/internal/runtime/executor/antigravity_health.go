@@ -118,6 +118,7 @@ func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 		maxTTFB = *h.TTFBTimeoutMaxRetries
 	}
 	cliproxyauth.SetMaxFirstByteTimeouts(maxTTFB)
+	cliproxyauth.SetUnavailableModels(h.UnavailableModels)
 }
 
 // defaultAntigravityTTFBByFamily: 3.8 (tiered/high/medium/low) gets 15s; a

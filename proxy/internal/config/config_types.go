@@ -228,6 +228,10 @@ type AntigravityHealthConfig struct {
 	// no visible parts, or no candidates without a block reason) on another
 	// credential, for stream and non-stream. nil = on.
 	RetryEmptyResponse *bool `yaml:"retry-empty-response,omitempty" json:"retry-empty-response,omitempty"`
+	// UnavailableModels lists models answered immediately with a local 503 +
+	// Retry-After (no credential tried, nothing cooled), comma / semicolon /
+	// newline separated, '*' wildcards. nil = "gemini-2.5-pro"; "" or "off" = none.
+	UnavailableModels *string `yaml:"unavailable-models,omitempty" json:"unavailable-models,omitempty"`
 	// TrailingModelTurnText is the user turn appended when a Gemini request
 	// ends with a model turn (assistant prefill), which upstream rejects with
 	// 400 "Requests ending with a model turn". An empty-text turn is dropped
