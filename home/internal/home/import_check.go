@@ -264,6 +264,13 @@ func classify403(body string, add func(cat, reason, evidence string)) {
 // HealthProbe runs the upstream part of a check for one credential: loadCodeAssist and
 // one generateContent with maxOutputTokens 1, both through the pinned egress only.
 func (r *Runtime) HealthProbe(ctx context.Context, id, model string) HealthProbeResult {
+	return r.HealthProbeWith(ctx, id, model, false)
+}
+
+// HealthProbeWith is HealthProbe; importCheck (the credential's first check) always
+// sends the test request, reserves included, and retries it once on a transient
+// failure (network error / 5xx), so the import verdict reflects the account.
+func (r *Runtime) HealthProbeWith(ctx context.Context, id, model string, importCheck bool) HealthProbeResult {
 	out := HealthProbeResult{Model: model}
 	full := r.fullAuth(ctx, id)
 	if full == nil {
@@ -282,12 +289,21 @@ func (r *Runtime) HealthProbe(ctx context.Context, id, model string) HealthProbe
 	if out.TierStatus == http.StatusForbidden {
 		r.disableForListBan(ctx, id, "loadCodeAssist", out.TierStatus, out.TierError, time.Now().UTC())
 	}
-	if r.reserveAIProbeBlocked(ctx, id) {
+	if !importCheck && r.reserveAIProbeBlocked(ctx, id) {
 		out.GenSkipped = true // reserve: no AI request (routing.reserve.ai-probe off)
 		return out
 	}
 	started := time.Now()
-	code, _, body, err := sendQuotaProbe(ctx, full, model)
+	code, _, body, err := healthSend(ctx, full, model)
+	if importCheck && (err != nil || code >= 500) && ctx.Err() == nil {
+		r.recordHealthCheckUsage(full, model, started, code, body, err)
+		select {
+		case <-ctx.Done():
+		case <-time.After(healthImportRetryDelay):
+		}
+		started = time.Now()
+		code, _, body, err = healthSend(ctx, full, model)
+	}
 	out.GenLatencyMilli = time.Since(started).Milliseconds()
 	out.GenStatus = code
 	if err != nil {
@@ -472,3 +488,9 @@ func (r *Runtime) regionScan(ctx context.Context) {
 		}
 	}()
 }
+
+// healthSend is the test request sender (swappable in tests).
+var healthSend = sendQuotaProbe
+
+// healthImportRetryDelay separates the single transient-failure retry at import.
+var healthImportRetryDelay = 3 * time.Second

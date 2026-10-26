@@ -82,19 +82,23 @@ func (h *Handler) runHealthChecks(ctx context.Context, ids []string) {
 		if p, ok := prev[id]; ok && p.Status == "fail" {
 			rec.RecheckCount = p.RecheckCount + 1 // consecutive failure if this one fails too
 		}
+		// First check of a credential (import time / never completed): always sends the
+		// one test request, reserves included, so VALIDATION_REQUIRED is caught at import.
+		p, seen := prev[id]
+		first := !seen || strings.TrimSpace(p.Probe) == ""
 		_ = h.repo.SaveHealthCheck(ctx, rec)
 		wg.Add(1)
-		go func(rec cluster.CredentialHealthCheck) {
+		go func(rec cluster.CredentialHealthCheck, first bool) {
 			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			h.checkOne(ctx, rec)
-		}(rec)
+			h.checkOne(ctx, rec, first)
+		}(rec, first)
 	}
 	wg.Wait()
 }
 
-func (h *Handler) checkOne(parent context.Context, rec cluster.CredentialHealthCheck) {
+func (h *Handler) checkOne(parent context.Context, rec cluster.CredentialHealthCheck, first bool) {
 	ctx, cancel := context.WithTimeout(parent, healthCheckDeadline)
 	defer cancel()
 	id := rec.AuthUUID
@@ -106,7 +110,7 @@ func (h *Handler) checkOne(parent context.Context, rec cluster.CredentialHealthC
 		}
 	}
 	h.runtime.RefreshAntigravityCatalogs(ctx, id)
-	probe := h.runtime.HealthProbe(ctx, id, cfg.Model)
+	probe := h.runtime.HealthProbeWith(ctx, id, cfg.Model, first)
 	var in home.HealthInputs
 	deadline := time.Now().Add(healthQuotaWait)
 	for {
