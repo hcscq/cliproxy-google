@@ -16,6 +16,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/agversion"
 
+	cpaconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -251,6 +252,7 @@ func coolingQuotaPairs(auths []*coreauth.Auth, now time.Time) []quotaProbeTarget
 
 func (r *Runtime) dueQuotaProbes(now time.Time) ([]quotaProbeTarget, int) {
 	pairs := coolingQuotaPairs(r.coreManager.ListMatching(func(a *coreauth.Auth) bool { return hasCoolingQuotaPair(a, now) }), now)
+	pairs = r.dropUnavailableModelPairs(pairs)
 	r.syncQuotaGroupRules()
 	skipFar := r.quotaProbeSkipThreshold()
 	interval := r.quotaProbeInterval()
@@ -502,4 +504,31 @@ func (r *Runtime) recordProbeUsage(t quotaProbeTarget, started time.Time, code i
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = r.PersistClusterUsagePayload(ctx, string(raw), time.Now().UTC())
+}
+
+// dropUnavailableModelPairs skips cooling pairs whose model is on the panel's
+// upstream-unavailable list (antigravity health.unavailable-models): proxies
+// answer those models locally with 503, so probing them only burns upstream
+// calls and keeps re-cooling credentials.
+func (r *Runtime) dropUnavailableModelPairs(pairs []quotaProbeTarget) []quotaProbeTarget {
+	var spec *string
+	if cfg := r.Config(); cfg != nil {
+		spec = cfg.Antigravity.Health.UnavailableModels
+	}
+	return filterUnavailableModelPairs(pairs, spec)
+}
+
+func filterUnavailableModelPairs(pairs []quotaProbeTarget, spec *string) []quotaProbeTarget {
+	pats := cpaconfig.ParseUnavailableModels(spec)
+	if len(pats) == 0 {
+		return pairs
+	}
+	out := pairs[:0:0]
+	for _, p := range pairs {
+		if cpaconfig.MatchUnavailableModel(pats, p.model) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

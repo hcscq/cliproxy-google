@@ -194,3 +194,15 @@ func TestQuotaTierCacheWithoutMetadata(t *testing.T) {
 		t.Fatalf("cached ultra tier: got %q", g)
 	}
 }
+
+func TestFilterUnavailableModelPairs(t *testing.T) {
+	pairs := []quotaProbeTarget{{model: "gemini-2.5-pro"}, {model: "gemini-2.5-flash"}, {model: "gemini-4-argon-high"}}
+	out := filterUnavailableModelPairs(pairs, nil)
+	if len(out) != 2 || out[0].model != "gemini-2.5-flash" {
+		t.Fatalf("default should drop gemini-2.5-pro: %+v", out)
+	}
+	off := "off"
+	if got := filterUnavailableModelPairs(pairs, &off); len(got) != 3 {
+		t.Fatalf("off should keep all: %+v", got)
+	}
+}

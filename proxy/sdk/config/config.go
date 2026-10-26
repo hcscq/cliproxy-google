@@ -75,3 +75,10 @@ func SaveConfigPreserveCommentsUpdateNestedScalar(configFile string, path []stri
 func NormalizeCommentIndentation(data []byte) []byte {
 	return internalconfig.NormalizeCommentIndentation(data)
 }
+
+// ParseUnavailableModels / MatchUnavailableModel expose the model-unavailable
+// list helpers to Home.
+var (
+	ParseUnavailableModels = internalconfig.ParseUnavailableModels
+	MatchUnavailableModel  = internalconfig.MatchUnavailableModel
+)
