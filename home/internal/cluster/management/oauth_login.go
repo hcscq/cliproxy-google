@@ -79,6 +79,7 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 		"redirect_uri":  redirectURI,
 		"egress_id":     strings.TrimSpace(c.Query("egress_id")),
 		"allow_primary": strings.TrimSpace(c.Query("allow_primary")),
+		"reserve":       strings.TrimSpace(c.Query("reserve")),
 	}); errRegister != nil {
 		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
 		return
@@ -431,7 +432,27 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 		metadata[home.EgressIDKey] = egress.Name
 		metadata[home.EgressIPKey] = egress.IP
 	}
-	return h.storeOAuthMetadataWithContext(ctx, metadata, antigravityCredentialFileName(email))
+	raw, errMarshal := json.MarshalIndent(metadata, "", "  ")
+	if errMarshal != nil {
+		return errMarshal
+	}
+	stored, errStore := h.storeOAuthPayloadWithContext(ctx, append(raw, '\n'), antigravityCredentialFileName(email))
+	if errStore != nil {
+		return errStore
+	}
+	if parseBoolFlag(stringFromAny(data["reserve"])) && h.runtime != nil {
+		id := strings.TrimSuffix(stored, ".json")
+		if _, errRes := h.runtime.SetCredentialsReserved(ctx, []string{id}, true, "导入时设为储备"); errRes != nil {
+			log.Warnf("cluster oauth: set reserve for %s: %v", id, errRes)
+		}
+	}
+	return nil
+}
+
+// parseBoolFlag reads "1"/"true" (case-insensitive) as true.
+func parseBoolFlag(v string) bool {
+	v = strings.TrimSpace(v)
+	return v == "1" || strings.EqualFold(v, "true")
 }
 
 // completedOAuthResponse renders a completed session, including its non-secret result.

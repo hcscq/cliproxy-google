@@ -151,3 +151,30 @@ func (a *RuntimeAdapter) SaveAntigravityCatalog(ctx context.Context, row home.An
 	}
 	return a.repo.UpsertAntigravityCatalog(ctx, catalogRowToRecord(row))
 }
+
+// AntigravityCatalogContains reports, for each given auth with a fetched
+// catalog, whether its raw catalog mentions model. Auths without a fetched
+// catalog are absent from the result (unknown).
+func (r *Repository) AntigravityCatalogContains(ctx context.Context, ids []string, model string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if r == nil || r.db == nil || len(ids) == 0 || strings.TrimSpace(model) == "" {
+		return out, nil
+	}
+	if err := ensureAntigravityCatalogTable(ctx, r.db); err != nil {
+		return out, err
+	}
+	var rows []struct {
+		AuthID string
+		Has    bool
+	}
+	err := r.db.WithContext(contextOrBackground(ctx)).Model(&AntigravityCatalogRecord{}).
+		Select("auth_id, strpos(raw, ?) > 0 AS has", model).
+		Where("auth_id IN ? AND model_count > 0", ids).Scan(&rows).Error
+	if err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		out[row.AuthID] = row.Has
+	}
+	return out, nil
+}

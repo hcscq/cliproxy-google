@@ -162,16 +162,16 @@ export class ApiClient {
   credentialModels(name: string) {
     return this.get<{ models: ModelInfo[] }>('/credentials/models', { name });
   }
-  uploadCredentialFiles(files: File[], egressId?: string, allowPrimary?: boolean) {
+  uploadCredentialFiles(files: File[], egressId?: string, allowPrimary?: boolean, opts: ImportOpts = {}) {
     const form = new FormData();
     files.forEach((f, i) => form.append(`file${i}`, f, f.name));
-    return this.request<{ status: string; uploaded?: number; files?: string[] }>('POST', '/credentials', { form, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
+    return this.request<ImportResponse>('POST', '/credentials', { form, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary), ...importQuery(opts) } });
   }
   importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string; allow_primary?: boolean; reserve?: boolean; health_check?: boolean; batch_id?: string }) {
     return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[]; batch_id?: string; health_batch_id?: string }>('/credentials/import/refresh-tokens', body);
   }
-  uploadCredentialJSON(json: string, egressId?: string, allowPrimary?: boolean) {
-    return this.request<{ status: string; name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) } });
+  uploadCredentialJSON(json: string, egressId?: string, allowPrimary?: boolean, opts: ImportOpts = {}) {
+    return this.request<ImportResponse & { name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary), ...importQuery(opts) } });
   }
   setCredentialDisabled(name: string, disabled: boolean) {
     return this.patch<{ status: string; disabled: boolean; requested_disabled?: boolean; applied?: boolean; state?: string; status_message?: string; reserved?: boolean }>('/credentials/status', { name, disabled });
@@ -271,8 +271,8 @@ export class ApiClient {
   }
 
   // ---- OAuth -----------------------------------------------------------------
-  oauthStart(provider: string, egressId?: string, allowPrimary?: boolean) {
-    return this.get<{ status: string; url: string; state: string; user_code?: string }>('/oauth/auth-url', { provider, egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary) });
+  oauthStart(provider: string, egressId?: string, allowPrimary?: boolean, reserve?: boolean) {
+    return this.get<{ status: string; url: string; state: string; user_code?: string }>('/oauth/auth-url', { provider, egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary), reserve: reserve ? 'true' : undefined });
   }
   oauthStatus(state: string) {
     return this.get<OAuthResult & { status: 'ok' | 'wait' | 'error'; error?: string }>('/oauth/status', { state });
@@ -364,8 +364,8 @@ export class ApiClient {
   startHealthCheck(ids: string[]) {
     return this.post<{ status: string; accepted: number; failed: string[] }>('/credentials/health-check', { ids });
   }
-  healthBatch(batchId: string) {
-    return this.get<{ batch_id: string; imported: number; summary: HealthSummary; items: HealthItem[] }>('/credentials/health-check/batch', { batch_id: batchId });
+  healthBatch(batchId: string, all?: boolean) {
+    return this.get<{ batch_id: string; imported: number; summary: HealthSummary; items: HealthItem[] }>('/credentials/health-check/batch', { batch_id: batchId, all: all ? '1' : undefined });
   }
   exportHealth(q: { batch_id?: string; status?: 'fail' | 'all'; ids?: string; format?: 'csv' | 'text' }) {
     return q.format === 'text'
@@ -1432,7 +1432,7 @@ export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at:
 
 export interface HealthInfo { status: 'pass' | 'fail' | 'running' | string; categories: string[]; reasons?: string[]; checked_at?: string; tier?: string; evidence?: string; verify_url?: string }
 export interface HealthSummary { total: number; pass: number; fail: number; running: number; by_category: Record<string, number> }
-export interface HealthItem extends HealthInfo { auth_id: string; seq?: number; email?: string; batch_id?: string; imported_at?: string; model?: string }
+export interface HealthItem extends HealthInfo { auth_id: string; seq?: number; email?: string; batch_id?: string; imported_at?: string; model?: string; argon?: boolean }
 
 export interface ErrorSampleType {
   type: string;
@@ -1466,4 +1466,10 @@ export interface CredentialQuotaGroup {
   remaining?: number;
   reset_at?: string;
   cooling: number;
+}
+
+export interface ImportOpts { reserve?: boolean; health_check?: boolean; batch_id?: string }
+export interface ImportResponse { status: string; uploaded?: number; files?: string[]; summary?: RTImportSummary; results?: RTImportResult[]; result?: RTImportResult; batch_id?: string; health_batch_id?: string }
+function importQuery(o: ImportOpts): Record<string, string | undefined> {
+  return { reserve: o.reserve ? 'true' : undefined, health_check: o.health_check === undefined ? undefined : String(o.health_check), batch_id: o.batch_id };
 }

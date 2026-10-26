@@ -727,32 +727,7 @@ func (h *Handler) ImportRefreshTokens(c *gin.Context) {
 	}
 	resp := gin.H{"status": "ok", "dry_run": body.DryRun, "summary": summary, "results": results}
 	if !body.DryRun {
-		// Record the import batch of every newly created credential (warranty evidence),
-		// then health-check them in the background; the dialog polls the batch summary.
-		batch := strings.TrimSpace(body.BatchID)
-		if batch == "" || len(batch) > 64 {
-			batch = newHealthBatchID()
-		}
-		var created []string
-		for _, res := range results {
-			if res.Status == "created" && res.CredentialID != "" {
-				created = append(created, res.CredentialID)
-			}
-		}
-		if len(created) > 0 {
-			if err := h.repo.RecordCredentialImports(ctx, created, batch, time.Now(), "refresh_token"); err != nil {
-				log.Warnf("rt import: record batch %s: %v", batch, err)
-			}
-			check := h.runtime != nil && h.runtime.ImportCheckSettings().OnImport
-			if body.HealthCheck != nil {
-				check = *body.HealthCheck && h.runtime != nil
-			}
-			if check {
-				h.startHealthChecks(created)
-				resp["health_batch_id"] = batch
-			}
-		}
-		resp["batch_id"] = batch
+		h.afterImport(ctx, resp, results, body.BatchID, body.HealthCheck, "refresh_token")
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -890,4 +865,34 @@ func assignableEgressStatuses(items []home.EgressStatus, settings home.EgressSet
 		}
 	}
 	return out
+}
+
+// afterImport records the import batch of newly created credentials (warranty
+// evidence) and starts background health checks (tier, model catalog, probe);
+// the dialog polls the batch summary via health_batch_id.
+func (h *Handler) afterImport(ctx context.Context, resp gin.H, results []RTImportResult, batchID string, healthCheck *bool, source string) {
+	batch := strings.TrimSpace(batchID)
+	if batch == "" || len(batch) > 64 {
+		batch = newHealthBatchID()
+	}
+	var created []string
+	for _, res := range results {
+		if res.Status == "created" && res.CredentialID != "" {
+			created = append(created, res.CredentialID)
+		}
+	}
+	if len(created) > 0 {
+		if err := h.repo.RecordCredentialImports(ctx, created, batch, time.Now(), source); err != nil {
+			log.Warnf("import: record batch %s: %v", batch, err)
+		}
+		check := h.runtime != nil && h.runtime.ImportCheckSettings().OnImport
+		if healthCheck != nil {
+			check = *healthCheck && h.runtime != nil
+		}
+		if check {
+			h.startHealthChecks(created)
+			resp["health_batch_id"] = batch
+		}
+	}
+	resp["batch_id"] = batch
 }

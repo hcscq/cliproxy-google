@@ -257,10 +257,23 @@ func (h *Handler) HealthCheckBatch(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	recs, emails, seqs := h.healthRecords(ctx, batch, nil)
+	all := parseBoolFlag(c.Query("all"))
+	var argon map[string]bool
+	if all {
+		ids := make([]string, 0, len(recs))
+		for _, r := range recs {
+			ids = append(ids, r.AuthUUID)
+		}
+		argon, _ = h.repo.AntigravityCatalogContains(ctx, ids, "gemini-4-argon")
+	}
 	items := make([]gin.H, 0)
 	for _, r := range recs {
-		if r.Status != "pass" {
-			items = append(items, healthItem(r, emails[r.AuthUUID], seqs[r.AuthUUID]))
+		if all || r.Status != "pass" {
+			item := healthItem(r, emails[r.AuthUUID], seqs[r.AuthUUID])
+			if has, ok := argon[r.AuthUUID]; ok {
+				item["argon"] = has
+			}
+			items = append(items, item)
 		}
 	}
 	imports, _ := h.repo.ListCredentialImports(ctx)

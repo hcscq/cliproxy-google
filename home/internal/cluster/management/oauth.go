@@ -105,6 +105,12 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 	// other payloads are stored as before. Multi-file uploads continue past bad
 	// files and return a per-file report.
 	dryRun := strings.EqualFold(strings.TrimSpace(c.Query("dry_run")), "true") || strings.TrimSpace(c.Query("dry_run")) == "1"
+	uploadOpts := rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id"), AllowPrimary: parseAllowPrimary(c.Query("allow_primary")), Reserve: parseBoolFlag(c.Query("reserve"))}
+	var healthCheck *bool
+	if hc := strings.TrimSpace(c.Query("health_check")); hc != "" {
+		v := parseBoolFlag(hc)
+		healthCheck = &v
+	}
 	if strings.HasPrefix(strings.ToLower(c.ContentType()), "multipart/form-data") {
 		headers, errHeaders := multipartHeaders(c)
 		if errHeaders != nil {
@@ -164,7 +170,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 			results = append(results, res)
 		}
 		if len(agEntries) > 0 {
-			agResults, _, errImport := h.importAntigravityEntries(ctx, agEntries, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id"), AllowPrimary: parseAllowPrimary(c.Query("allow_primary"))})
+			agResults, _, errImport := h.importAntigravityEntries(ctx, agEntries, uploadOpts)
 			if errImport != nil {
 				respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 				return
@@ -196,7 +202,11 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 				status, code = "failed", http.StatusBadRequest
 			}
 		}
-		c.JSON(code, gin.H{"status": status, "dry_run": dryRun, "uploaded": len(uploaded), "files": uploaded, "summary": summary, "results": results})
+		resp := gin.H{"status": status, "dry_run": dryRun, "uploaded": len(uploaded), "files": uploaded, "summary": summary, "results": results}
+		if !dryRun {
+			h.afterImport(ctx, resp, results, c.Query("batch_id"), healthCheck, "upload")
+		}
+		c.JSON(code, resp)
 		return
 	}
 	body, errRead := io.ReadAll(c.Request.Body)
@@ -211,18 +221,22 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		}
 		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
 		defer cancel()
-		results, summary, errImport := h.importAntigravityEntries(ctx, many, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id"), AllowPrimary: parseAllowPrimary(c.Query("allow_primary"))})
+		results, summary, errImport := h.importAntigravityEntries(ctx, many, uploadOpts)
 		if errImport != nil {
 			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": dryRun, "summary": summary, "results": results})
+		resp := gin.H{"status": "ok", "dry_run": dryRun, "summary": summary, "results": results}
+		if !dryRun {
+			h.afterImport(ctx, resp, results, c.Query("batch_id"), healthCheck, "paste")
+		}
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 	if entry, ok := antigravityPayloadNeedsImport(bytes.TrimSpace(body)); ok {
 		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 2*time.Minute)
 		defer cancel()
-		results, _, errImport := h.importAntigravityEntries(ctx, []rtImportEntry{entry}, rtImportOptions{DryRun: dryRun, Egress: c.Query("egress_id"), AllowPrimary: parseAllowPrimary(c.Query("allow_primary"))})
+		results, _, errImport := h.importAntigravityEntries(ctx, []rtImportEntry{entry}, uploadOpts)
 		if errImport != nil {
 			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
 			return
@@ -232,7 +246,11 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "upload_failed", "code": r.Code, "message": r.Reason, "result": r})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": dryRun, "name": r.CredentialID + ".json", "result": r})
+		resp := gin.H{"status": "ok", "dry_run": dryRun, "name": r.CredentialID + ".json", "result": r, "results": results}
+		if !dryRun {
+			h.afterImport(ctx, resp, results, c.Query("batch_id"), healthCheck, "paste")
+		}
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 	if dryRun {

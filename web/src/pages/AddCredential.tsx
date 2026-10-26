@@ -42,22 +42,22 @@ export function AddCredentialModal({ onClose, onAdded }: { onClose: () => void; 
           {egress === 'auto' && <AllowPrimaryToggle value={allowPrimary} onChange={setAllowPrimary} testId="add-allow-primary" />}
         </div>
       )}
-      {tab === 'oauth' && <OAuthFlow allowPrimary={allowPrimary} onDone={onAdded} egress={egress} />}
-      {tab === 'tokens' && (
+      {tab !== 'vertex' && (
         <label className="row gap-sm small" style={{ marginBottom: 8 }} title={tr('新建的凭据进入储备：不参与调度，仍保活刷新；可用数不足时自动启用', 'New credentials go to reserve: not scheduled, kept alive, auto-promoted on shortfall')}>
           <input type="checkbox" checked={reserve} onChange={(e) => setReserve(e.target.checked)} data-testid="add-reserve" />
-          {tr('导入为储备', 'Import as reserve')}
+          {tr('设为储备', 'Import as reserve')}
         </label>
       )}
+      {tab === 'oauth' && <OAuthFlow allowPrimary={allowPrimary} reserve={reserve} onDone={onAdded} egress={egress} />}
       {tab === 'tokens' && <RefreshTokenImport allowPrimary={allowPrimary} reserve={reserve} key={rtPrefill} initialText={rtPrefill} onDone={onAdded} egress={egress} />}
-      {tab === 'upload' && <UploadFiles allowPrimary={allowPrimary} onDone={onAdded} egress={egress} />}
-      {tab === 'paste' && <PasteJson allowPrimary={allowPrimary} onDone={onAdded} egress={egress} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
+      {tab === 'upload' && <UploadFiles allowPrimary={allowPrimary} reserve={reserve} onDone={onAdded} egress={egress} />}
+      {tab === 'paste' && <PasteJson allowPrimary={allowPrimary} reserve={reserve} onDone={onAdded} egress={egress} onUseTokens={(t) => { setRtPrefill(t); setTab('tokens'); }} />}
       {tab === 'vertex' && <VertexImport onDone={onAdded} />}
     </Modal>
   );
 }
 
-function OAuthFlow({ onDone, egress, allowPrimary }: { onDone: () => void; egress: string; allowPrimary?: boolean }) {
+function OAuthFlow({ onDone, egress, allowPrimary, reserve }: { onDone: () => void; egress: string; allowPrimary?: boolean; reserve?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -113,7 +113,7 @@ function OAuthFlow({ onDone, egress, allowPrimary }: { onDone: () => void; egres
     setStarting(true);
     setError(undefined);
     try {
-      const res = await api.oauthStart('antigravity', egress, allowPrimary);
+      const res = await api.oauthStart('antigravity', egress, allowPrimary, reserve);
       setSession({ url: res.url, state: res.state });
       setPhase('waiting');
       startPoll(res.state);
@@ -215,13 +215,15 @@ function OAuthFlow({ onDone, egress, allowPrimary }: { onDone: () => void; egres
   );
 }
 
-function UploadFiles({ onDone, egress, allowPrimary }: { onDone: () => void; egress: string; allowPrimary?: boolean }) {
+function UploadFiles({ onDone, egress, allowPrimary, reserve }: { onDone: () => void; egress: string; allowPrimary?: boolean; reserve?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
+  const [results, setResults] = useState<RTImportResult[] | null>(null);
+  const [healthBatch, setHealthBatch] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const add = (list: FileList | null) => {
     if (!list) return;
@@ -229,9 +231,14 @@ function UploadFiles({ onDone, egress, allowPrimary }: { onDone: () => void; egr
   };
   const upload = async () => {
     setBusy(true);
+    setResults(null);
+    setHealthBatch(null);
     try {
-      const res = await api.uploadCredentialFiles(files, egress, allowPrimary);
-      toast(tr(`已上传 ${res.uploaded ?? files.length} 个凭据`, `Uploaded ${res.uploaded ?? files.length} credential(s)`));
+      const res = await api.uploadCredentialFiles(files, egress, allowPrimary, { reserve, health_check: true, batch_id: newBatchId('up') });
+      const rs = res.results ?? [];
+      setResults(rs);
+      setHealthBatch(res.health_batch_id ?? null);
+      toast(importSummaryText(rs, tr), rs.some((r) => r.status === 'failed') ? 'err' : 'ok');
       setFiles([]);
       onDone();
     } catch (e) {
@@ -243,7 +250,7 @@ function UploadFiles({ onDone, egress, allowPrimary }: { onDone: () => void; egr
   return (
     <div className="stack">
       <p className="muted" style={{ margin: 0 }}>
-        {tr('上传 CLIProxyAPI 格式的凭据 JSON（如 antigravity-xxx.json），可多选。', 'Upload CLIProxyAPI-format credential JSON files (e.g. antigravity-xxx.json). Multiple files allowed.')}
+        {tr('上传凭据 JSON，可多选；文件可为单个对象或对象数组（完整凭据或 {email, refresh_token}）。同邮箱/同 token 只更新令牌。', 'Upload CLIProxyAPI-format credential JSON files (e.g. antigravity-xxx.json). Multiple files allowed.')}
       </p>
       <div
         className="card center"
@@ -284,6 +291,8 @@ function UploadFiles({ onDone, egress, allowPrimary }: { onDone: () => void; egr
           {tr(`上传 ${files.length || ''} 个文件`, `Upload ${files.length || ''} file(s)`)}
         </button>
       </div>
+      {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
+      {results && <ImportResultsTable results={results} />}
     </div>
   );
 }
@@ -295,39 +304,101 @@ export function looksLikeRefreshTokenText(text: string): boolean {
   return lines.every((l) => /^(\S+@\S+?\s*[-\u2010-\u2015\u2212\uff0d]{3,}\s*)?1\/\/\S+/.test(l));
 }
 
-function PasteJson({ onDone, onUseTokens, egress, allowPrimary }: { onDone: () => void; onUseTokens?: (text: string) => void; egress: string; allowPrimary?: boolean }) {
+/** Parse pasted credential JSON: one object, an array of objects, or newline-delimited objects. */
+export function parseCredentialJSON(text: string): { items: Record<string, unknown>[]; error?: string } {
+  const t = text.replace(/[\u200b-\u200d\u2060\ufeff]/g, '').trim();
+  if (!t) return { items: [] };
+  const check = (v: unknown): Record<string, unknown>[] | string => {
+    const arr = Array.isArray(v) ? v : [v];
+    if (!arr.length) return '数组为空';
+    for (let i = 0; i < arr.length; i++) {
+      const x = arr[i];
+      if (!x || typeof x !== 'object' || Array.isArray(x)) return Array.isArray(v) ? `第 ${i + 1} 项不是对象` : '必须是 JSON 对象或对象数组';
+    }
+    return arr as Record<string, unknown>[];
+  };
+  try {
+    const r = check(JSON.parse(t));
+    return typeof r === 'string' ? { items: [], error: r } : { items: r };
+  } catch (e) {
+    const lines = t.split(/\r\n?|\n/).map((l) => l.trim().replace(/,$/, '')).filter(Boolean);
+    if (lines.length > 1 && lines.every((l) => l.startsWith('{'))) {
+      const out: Record<string, unknown>[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          const r = check(JSON.parse(lines[i]));
+          if (typeof r === 'string') return { items: [], error: `第 ${i + 1} 行：${r}` };
+          out.push(...r);
+        } catch (e2) {
+          return { items: [], error: `第 ${i + 1} 行：${(e2 as Error).message}` };
+        }
+      }
+      return { items: out };
+    }
+    return { items: [], error: (e as Error).message };
+  }
+}
+
+function newBatchId(prefix: string) {
+  return `${prefix}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function importSummaryText(rs: RTImportResult[], tr: (zh: string, en: string) => string) {
+  const n = (s: string) => rs.filter((r) => r.status === s).length;
+  return tr(`导入完成：新建 ${n('created')}，已存在更新 ${n('updated')}，失败 ${n('failed')}`, `Imported: ${n('created')} new, ${n('updated')} updated, ${n('failed')} failed`);
+}
+
+const PASTE_CHUNK = 200;
+
+function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onDone: () => void; onUseTokens?: (text: string) => void; egress: string; allowPrimary?: boolean; reserve?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  let parseError: string | undefined;
-  let provider: string | undefined;
-  if (text.trim()) {
-    try {
-      const v = JSON.parse(text);
-      if (!v || typeof v !== 'object' || Array.isArray(v)) parseError = tr('必须是 JSON 对象', 'Must be a JSON object');
-      else provider = typeof v.type === 'string' ? v.type : typeof v.provider === 'string' ? v.provider : undefined;
-    } catch (e) {
-      parseError = (e as Error).message;
-    }
-  }
+  const [progress, setProgress] = useState('');
+  const [results, setResults] = useState<RTImportResult[] | null>(null);
+  const [healthBatch, setHealthBatch] = useState<string | null>(null);
+  const parsed = parseCredentialJSON(text);
+  const parseError = text.trim() ? parsed.error : undefined;
+  const items = parsed.items;
+  const first = items[0];
+  const provider = items.length === 1 && first ? (typeof first.type === 'string' ? first.type : typeof first.provider === 'string' ? first.provider : undefined) : undefined;
   const submit = async () => {
     setBusy(true);
+    setResults(null);
+    setHealthBatch(null);
+    const batchId = newBatchId('paste');
+    const all: RTImportResult[] = [];
+    let checking = false;
     try {
-      const res = await api.uploadCredentialJSON(text, egress, allowPrimary);
-      toast(tr(`已导入 ${res.name ?? ''}`, `Imported ${res.name ?? ''}`));
-      setText('');
-      onDone();
+      for (let i = 0; i < items.length; i += PASTE_CHUNK) {
+        if (items.length > PASTE_CHUNK) setProgress(`${i / PASTE_CHUNK + 1} / ${Math.ceil(items.length / PASTE_CHUNK)}`);
+        const chunk = items.slice(i, i + PASTE_CHUNK);
+        const body = JSON.stringify(items.length === 1 ? chunk[0] : chunk);
+        const res = await api.uploadCredentialJSON(body, egress, allowPrimary, { reserve, health_check: true, batch_id: batchId });
+        if (res.health_batch_id) checking = true;
+        const rs = res.results ?? (res.result ? [res.result] : [{ index: 0, status: 'created', token_hint: '', reason: res.name } as RTImportResult]);
+        rs.forEach((r, k) => all.push({ ...r, index: i + k }));
+        setResults([...all]);
+      }
+      toast(importSummaryText(all, tr), all.some((r) => r.status === 'failed') ? 'err' : 'ok');
+      setHealthBatch(checking ? batchId : null);
+      if (all.some((r) => r.status === 'created' || r.status === 'updated')) {
+        setText('');
+        onDone();
+      }
     } catch (e) {
+      if (all.length) setResults([...all]);
       toastError(e);
     } finally {
       setBusy(false);
+      setProgress('');
     }
   };
   return (
     <div className="stack">
-      <textarea className="textarea" style={{ minHeight: 220 }} placeholder='{"type": "antigravity", "access_token": "...", "refresh_token": "...", ...}' value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} />
+      <textarea className="textarea" style={{ minHeight: 220 }} placeholder={'{"type": "antigravity", "refresh_token": "...", ...}\n或数组 [{"email":"...","refresh_token":"1//..."}, ...]，或每行一个对象'} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} data-testid="paste-json-text" />
       {parseError && looksLikeRefreshTokenText(text) ? (
         <div className="alert warn small" data-testid="paste-json-rt-hint">
           {tr('这看起来是 Refresh Token（email----token），请使用「Refresh Token 批量导入」页签。', 'This looks like refresh tokens (email----token); use the "Refresh Token batch import" tab.')}{' '}
@@ -338,19 +409,23 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary }: { onDone: () =
           )}
         </div>
       ) : (
-        parseError && <div className="alert err small">JSON: {parseError}</div>
+        parseError && <div className="alert err small" data-testid="paste-json-error">JSON: {parseError}</div>
       )}
-      {!parseError && provider && (
-        <div className="faint small">
-          {tr('检测到类型', 'Detected type')}: <b>{provider}</b>
+      {!parseError && items.length > 0 && (
+        <div className="faint small" data-testid="paste-json-count">
+          {tr(`识别到 ${items.length} 个凭据`, `${items.length} credential(s)`)}
+          {provider && <> · {tr('类型', 'type')}: <b>{provider}</b></>}
         </div>
       )}
-      <div>
-        <button className="btn btn-primary" disabled={!text.trim() || !!parseError || busy} onClick={submit}>
+      <div className="row">
+        <button className="btn btn-primary" disabled={!items.length || !!parseError || busy} onClick={submit} data-testid="paste-json-import">
           {busy && <Spinner />}
           {tr('导入', 'Import')}
         </button>
+        {progress && <span className="faint small">{tr('批次', 'Batch')} {progress}</span>}
       </div>
+      {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
+      {results && <ImportResultsTable results={results} />}
     </div>
   );
 }
@@ -530,7 +605,13 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
         </button>
       </div>
       {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
-      {results && (
+      {results && <ImportResultsTable results={results} />}
+    </div>
+  );
+}
+
+function ImportResultsTable({ results }: { results: RTImportResult[] }) {
+  return (
         <div className="table-wrap scroll-list" style={{ maxHeight: 280 }}>
           <table className="table compact">
             <thead>
@@ -564,13 +645,11 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
             </tbody>
           </table>
         </div>
-      )}
-    </div>
   );
 }
 
 /** Import batch health check progress + failures, with supplier-claim export. */
-function HealthBatchPanel({ batchId }: { batchId: string }) {
+function HealthBatchPanel({ batchId, showAll = true }: { batchId: string; showAll?: boolean }) {
   const api = useApi();
   const { toast, toastError } = useUi();
   const { tr } = useI18n();
@@ -581,7 +660,7 @@ function HealthBatchPanel({ batchId }: { batchId: string }) {
     const started = Date.now();
     const tick = async () => {
       try {
-        const r = await api.healthBatch(batchId);
+        const r = await api.healthBatch(batchId, showAll);
         if (stop) return;
         setData(r);
         const done = r.summary.total >= r.imported && r.summary.running === 0 && r.summary.total > 0;
@@ -596,7 +675,7 @@ function HealthBatchPanel({ batchId }: { batchId: string }) {
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [api, batchId]);
+  }, [api, batchId, showAll]);
   const s = data?.summary;
   const pending = data ? Math.max(0, data.imported - (s?.total ?? 0)) + (s?.running ?? 0) : 0;
   return (
@@ -650,7 +729,9 @@ function HealthBatchPanel({ batchId }: { batchId: string }) {
                 <tr key={it.auth_id}>
                   <td className="faint">{it.seq ? `#${it.seq}` : ''}</td>
                   <td className="ellipsis" style={{ maxWidth: 220 }}>{it.email}</td>
-                  <td>{it.status === 'running' ? tr('体检中', 'Checking') : (it.categories ?? []).map((c) => healthCategoryLabel(c, tr, it.tier)).join(' / ')}</td>
+                  <td>{it.tier ? <span className="badge">{it.tier}</span> : <span className="faint">—</span>}</td>
+                  <td title="gemini-4-argon">{it.argon === undefined ? <span className="faint">argon ?</span> : it.argon ? <span className="badge ok">argon ✓</span> : <span className="badge warn">无 argon</span>}</td>
+                  <td>{it.status === 'running' ? tr('体检中', 'Checking') : it.status === 'pass' ? <span className="badge ok">{tr('正常', 'OK')}</span> : (it.categories ?? []).map((c) => healthCategoryLabel(c, tr, it.tier)).join(' / ')}</td>
                   <td className="small ellipsis" style={{ maxWidth: 320 }} title={[...(it.reasons ?? []), it.evidence ?? ''].join('\n')}>
                     {(it.reasons ?? []).join('；')}
                   </td>
