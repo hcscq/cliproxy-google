@@ -7,7 +7,7 @@ import { IconExternal, IconUpload } from '../components/icons';
 import { AllowPrimaryToggle, EgressSelect } from '../components/EgressSelect';
 import { healthCategoryLabel, healthSummaryText } from '../components/HealthCheck';
 import { downloadBlob } from '../format';
-import type { HealthItem, HealthSummary } from '../api/client';
+import type { HealthItem, HealthSummary, ImportJob } from '../api/client';
 
 type Tab = 'oauth' | 'tokens' | 'upload' | 'paste' | 'vertex';
 
@@ -363,11 +363,33 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onD
   const parseError = text.trim() ? parsed.error : undefined;
   const items = parsed.items;
   const first = items[0];
+  const ij = useImportJob();
+  const notified = useRef<string | null>(null);
+  useEffect(() => {
+    if (ij.job && ij.job.status !== 'running' && notified.current !== ij.job.id) {
+      notified.current = ij.job.id;
+      if (ij.job.created || ij.job.updated) onDone();
+    }
+  }, [ij.job, onDone]);
+  const asJob = items.length > 1 && items.every((x) => typeof x.refresh_token === 'string' && (x.type === undefined || x.type === 'antigravity'));
   const provider = items.length === 1 && first ? (typeof first.type === 'string' ? first.type : typeof first.provider === 'string' ? first.provider : undefined) : undefined;
   const submit = async () => {
     setBusy(true);
     setResults(null);
     setHealthBatch(null);
+    if (asJob) {
+      try {
+        const res = await api.startImportJob({ items, egress_id: egress, allow_primary: allowPrimary, reserve: reserve || undefined, health_check: true, source: 'paste' });
+        ij.setJobId(res.job.id);
+        setText('');
+        toast(tr(`已开始导入 ${res.job.total} 个，切换页签或关闭窗口不影响进度`, `Import of ${res.job.total} started`));
+      } catch (e) {
+        toastError(e);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const batchId = newBatchId('paste');
     const all: RTImportResult[] = [];
     let checking = false;
@@ -418,7 +440,7 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onD
         </div>
       )}
       <div className="row">
-        <button className="btn btn-primary" disabled={!items.length || !!parseError || busy} onClick={submit} data-testid="paste-json-import">
+        <button className="btn btn-primary" disabled={!items.length || !!parseError || busy || (asJob && ij.running)} onClick={submit} data-testid="paste-json-import">
           {busy && <Spinner />}
           {tr('导入', 'Import')}
         </button>
@@ -426,6 +448,8 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onD
       </div>
       {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
       {results && <ImportResultsTable results={results} />}
+      {!results && <ImportJobPanel job={ij.job} results={ij.results} />}
+      <RecentImports current={ij.jobId} onOpen={(id) => { setResults(null); ij.setJobId(id); }} />
     </div>
   );
 }
@@ -503,6 +527,100 @@ export function chunkTokenInput(text: string): { text?: string; items?: unknown[
   return out;
 }
 
+const JOB_KEY = 'cpa.importJob';
+
+/** Attach to the current server-side import job (survives tab switch, dialog close and reload). */
+function useImportJob() {
+  const api = useApi();
+  const [jobId, setJobIdState] = useState<string | null>(() => localStorage.getItem(JOB_KEY));
+  const [job, setJob] = useState<ImportJob | null>(null);
+  const [results, setResults] = useState<RTImportResult[] | null>(null);
+  const setJobId = (id: string | null) => {
+    if (id) localStorage.setItem(JOB_KEY, id);
+    else localStorage.removeItem(JOB_KEY);
+    setJob(null);
+    setResults(null);
+    setJobIdState(id);
+  };
+  useEffect(() => {
+    if (!jobId) return;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      try {
+        const r = await api.importJob(jobId);
+        if (stop) return;
+        setJob(r.job);
+        setResults(r.results);
+        if (r.job.status !== 'running') return;
+      } catch {
+        /* keep polling */
+      }
+      if (!stop) timer = setTimeout(() => void tick(), 2000);
+    };
+    void tick();
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [api, jobId]);
+  return { jobId, job, results, setJobId, running: job?.status === 'running' || (!!jobId && !job) };
+}
+
+const JOB_STATUS: Record<string, string> = { running: '进行中', done: '完成', failed: '失败', interrupted: '中断' };
+
+function ImportJobPanel({ job, results }: { job: ImportJob | null; results: RTImportResult[] | null }) {
+  if (!job) return null;
+  return (
+    <div className="stack" data-testid="import-job">
+      <div className="alert small row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {job.status === 'running' && <Spinner />}
+        <b>导入任务 {JOB_STATUS[job.status] ?? job.status}</b>
+        <span>
+          {job.done} / {job.total} · 新建 {job.created} · 已存在更新 {job.updated} · 失败 {job.failed}
+          {job.reserve ? ' · 储备' : ''}
+        </span>
+        {job.error && <span className="err">{job.error}</span>}
+        {job.status === 'interrupted' && <span className="faint">（服务重启导致中断，已处理部分已保存，可重新导入剩余项，重复项只会更新）</span>}
+        <span className="spacer" />
+        <span className="faint mono">{job.id}</span>
+      </div>
+      {job.health_batch_id && <HealthBatchPanel batchId={job.health_batch_id} />}
+      {results && results.length > 0 && <ImportResultsTable results={results} />}
+    </div>
+  );
+}
+
+function RecentImports({ onOpen, current }: { onOpen: (id: string) => void; current?: string | null }) {
+  const api = useApi();
+  const [jobs, setJobs] = useState<ImportJob[] | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    api.importJobs().then((r) => setJobs(r.jobs)).catch(() => setJobs([]));
+  }, [api, open, current]);
+  return (
+    <details className="small" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)} data-testid="recent-imports">
+      <summary className="faint" style={{ cursor: 'pointer' }}>最近导入</summary>
+      {jobs && !jobs.length && <div className="faint">暂无</div>}
+      {jobs?.map((j) => (
+        <div className="list-row" key={j.id}>
+          <span className="faint">{new Date(j.started_at).toLocaleString()}</span>
+          <span className={`badge ${j.status === 'done' ? 'ok' : j.status === 'running' ? 'primary' : 'warn'}`}>{JOB_STATUS[j.status] ?? j.status}</span>
+          <span>
+            {j.done}/{j.total} · 新建 {j.created} · 更新 {j.updated} · 失败 {j.failed}
+            {j.reserve ? ' · 储备' : ''}
+          </span>
+          <span className="spacer" />
+          <button className="btn btn-sm" disabled={j.id === current} onClick={() => onOpen(j.id)}>
+            查看
+          </button>
+        </div>
+      ))}
+    </details>
+  );
+}
+
 const RT_STATUS: Record<string, [string, 'ok' | 'warn' | 'err' | 'primary']> = {
   created: ['新建', 'ok'],
   updated: ['已更新', 'primary'],
@@ -522,10 +640,35 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
   const [lastDry, setLastDry] = useState(true);
   const [healthCheck, setHealthCheck] = useState(true);
   const [healthBatch, setHealthBatch] = useState<string | null>(null);
+  const ij = useImportJob();
   const chunks = chunkTokenInput(text);
   const count = chunks.reduce((a, c) => a + (c.items?.length ?? c.text?.split('\n').length ?? 0), 0);
   const fileRef = useRef<HTMLInputElement>(null);
+  const notified = useRef<string | null>(null);
+  useEffect(() => {
+    if (ij.job && ij.job.status !== 'running' && notified.current !== ij.job.id) {
+      notified.current = ij.job.id;
+      if (ij.job.created || ij.job.updated) onDone();
+    }
+  }, [ij.job, onDone]);
   const run = async (dry: boolean) => {
+    if (!dry) {
+      setBusy(true);
+      setResults(null);
+      setHealthBatch(null);
+      try {
+        const body = text.trim().startsWith('[') && chunks.every((c) => c.items) ? { items: chunks.flatMap((c) => c.items ?? []) } : { text: chunks.map((c) => c.text ?? '').join('\n') };
+        const res = await api.startImportJob({ ...body, egress_id: egress, allow_primary: allowPrimary, reserve: reserve || undefined, health_check: healthCheck });
+        ij.setJobId(res.job.id);
+        setText('');
+        toast(`已开始导入 ${res.job.total} 条，切换页签或关闭窗口不影响进度`);
+      } catch (e) {
+        toastError(e);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setBusy(true);
     setResults(null);
     setLastDry(dry);
@@ -599,13 +742,15 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
           {busy && lastDry && <Spinner />}
           预检（不保存）
         </button>
-        <button className="btn btn-primary" disabled={!count || busy} onClick={() => void run(false)} data-testid="rt-import-run">
+        <button className="btn btn-primary" disabled={!count || busy || ij.running} title={ij.running ? '已有导入任务进行中' : undefined} onClick={() => void run(false)} data-testid="rt-import-run">
           {busy && !lastDry && <Spinner />}
           导入
         </button>
       </div>
       {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
       {results && <ImportResultsTable results={results} />}
+      {!results && <ImportJobPanel job={ij.job} results={ij.results} />}
+      <RecentImports current={ij.jobId} onOpen={(id) => { setResults(null); ij.setJobId(id); }} />
     </div>
   );
 }

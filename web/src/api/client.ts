@@ -170,6 +170,15 @@ export class ApiClient {
   importRefreshTokens(body: { text?: string; items?: unknown[]; dry_run?: boolean; egress_id?: string; allow_primary?: boolean; reserve?: boolean; health_check?: boolean; batch_id?: string }) {
     return this.post<{ status: string; dry_run: boolean; summary: RTImportSummary; results: RTImportResult[]; batch_id?: string; health_batch_id?: string }>('/credentials/import/refresh-tokens', body);
   }
+  startImportJob(body: { text?: string; items?: unknown[]; egress_id?: string; allow_primary?: boolean; reserve?: boolean; health_check?: boolean; source?: string }) {
+    return this.post<{ status: string; job: ImportJob }>('/credentials/import/jobs', body);
+  }
+  importJobs() {
+    return this.get<{ jobs: ImportJob[] }>('/credentials/import/jobs');
+  }
+  importJob(id: string) {
+    return this.get<{ job: ImportJob; results: RTImportResult[] }>('/credentials/import/job', { id });
+  }
   uploadCredentialJSON(json: string, egressId?: string, allowPrimary?: boolean, opts: ImportOpts = {}) {
     return this.request<ImportResponse & { name?: string }>('POST', '/credentials', { rawBody: json, query: { egress_id: egressId, allow_primary: allowPrimary === undefined ? undefined : String(allowPrimary), ...importQuery(opts) } });
   }
@@ -1473,3 +1482,4 @@ export interface ImportResponse { status: string; uploaded?: number; files?: str
 function importQuery(o: ImportOpts): Record<string, string | undefined> {
   return { reserve: o.reserve ? 'true' : undefined, health_check: o.health_check === undefined ? undefined : String(o.health_check), batch_id: o.batch_id };
 }
+export interface ImportJob { id: string; source: string; status: 'running' | 'done' | 'failed' | 'interrupted' | string; total: number; done: number; created: number; updated: number; failed: number; reserve: boolean; batch_id: string; health_batch_id?: string; error?: string; started_at: string; updated_at: string }
