@@ -94,7 +94,7 @@ export function QuotaWindows({ item, compact, error, loading }: { item?: QuotaIt
         return (
           <div key={w.id}>
             <div className="row small" style={{ marginBottom: 3, gap: 6 }}>
-              <span className="spacer ellipsis">{w.label ?? w.id}</span>
+              <span className="spacer ellipsis">{w.label ?? w.id}{windowPeriodTag(w) && !(w.label ?? '').match(/5h|week|周/i) ? ` · ${windowPeriodTag(w)}` : ''}</span>
               <b>{valueText}</b>
               {!compact && w.reset_at && <span className="faint">· {tr('重置', 'resets')} {fmtRelative(w.reset_at, lang)}</span>}
               {compact && w.reset_at && ratio !== undefined && ratio < LOW_QUOTA_RATIO && (
@@ -115,11 +115,25 @@ export function isClaudeWindow(w: QuotaWindow): boolean {
   return s.includes('third-party') || s.includes('claude') || /(^|-)3p(-|$)/.test(w.id.toLowerCase());
 }
 
-function windowShortLabel(w: QuotaWindow): string {
+/** "5h" / "周" for duration windows, '' when unknown. */
+export function windowPeriodTag(w: QuotaWindow): string {
+  const s = `${w.id} ${w.label ?? ''}`.toLowerCase();
+  if (/(^|[-\s])5h($|[-\s])|5-hour|5 hour/.test(s) || (w.window_seconds && w.window_seconds <= 6 * 3600)) return '5h';
+  if (s.includes('week') || (w.window_seconds && w.window_seconds >= 6 * 86400)) return '周';
+  return '';
+}
+
+function windowGroupLabel(w: QuotaWindow): string {
   if (isClaudeWindow(w)) return 'Claude';
   const s = `${w.scope_id ?? ''} ${w.id} ${w.label ?? ''}`.toLowerCase();
   if (s.includes('gemini')) return 'Gemini';
   return (w.label ?? w.id).replace(/ models?$/i, '').slice(0, 10);
+}
+
+function windowShortLabel(w: QuotaWindow, withGroup: boolean): string {
+  const tag = windowPeriodTag(w);
+  if (!withGroup) return tag || windowGroupLabel(w);
+  return tag ? `${windowGroupLabel(w)} ${tag}` : windowGroupLabel(w);
 }
 
 /** One-line quota for the list: "Gemini ▬ 94% · Claude ▬ 100%"; details in each segment's tooltip. */
@@ -131,7 +145,8 @@ export function QuotaInline({ item, showClaude, error, loading }: { item?: Quota
   const hidden = all.length - shown.length;
   return (
     <span className="quota-inline" data-testid="quota-inline">
-      {shown.map((w) => {
+      {shown.map((w, i) => {
+        const withGroup = i === 0 || windowGroupLabel(shown[i - 1]) !== windowGroupLabel(w);
         const ratio = w.is_unlimited ? 1 : w.remaining_ratio ?? (w.limit ? (w.remaining ?? 0) / w.limit : undefined);
         const value = w.is_unlimited ? '∞' : w.unit === 'percentage' ? `${fmtNum(w.remaining, 0)}%` : `${fmtNum(w.remaining)}/${fmtNum(w.limit)}`;
         const low = ratio !== undefined && ratio < LOW_QUOTA_RATIO;
@@ -139,7 +154,7 @@ export function QuotaInline({ item, showClaude, error, loading }: { item?: Quota
         const pct = ratio === undefined ? 0 : Math.max(0, Math.min(1, ratio)) * 100;
         return (
           <span key={w.id} className="qseg" title={title} data-testid={isClaudeWindow(w) ? 'quota-claude' : 'quota-window'}>
-            <span className="qlabel">{windowShortLabel(w)}</span>
+            <span className="qlabel">{windowShortLabel(w, withGroup)}</span>
             <span className="qbar"><span style={{ width: `${pct}%`, background: low ? 'var(--err)' : pct < 30 ? 'var(--warn)' : 'var(--ok)' }} /></span>
             <b className={low ? 'err-text' : undefined}>{value}</b>
           </span>

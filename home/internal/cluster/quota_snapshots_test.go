@@ -1015,7 +1015,7 @@ func TestAntigravitySnapshotUpgradeSuccessReplacesLegacyWindows(t *testing.T) {
 	if errGet != nil {
 		t.Fatalf("GetQuotaCredential() error = %v", errGet)
 	}
-	if item.QuotaStatus != "healthy" || item.Freshness != "fresh" || len(item.PrimaryWindows) != 2 || item.PrimaryWindows[0].ID != "antigravity-gemini-5h" || item.PrimaryWindows[1].ID != "antigravity-3p-weekly" {
+	if item.QuotaStatus != "healthy" || item.Freshness != "fresh" || len(item.PrimaryWindows) != 3 || item.PrimaryWindows[0].ID != "antigravity-gemini-5h" || item.PrimaryWindows[1].ID != "antigravity-gemini-weekly" || item.PrimaryWindows[2].ID != "antigravity-3p-weekly" {
 		t.Fatalf("upgraded Antigravity presentation = %+v", item)
 	}
 }

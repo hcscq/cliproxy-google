@@ -176,7 +176,7 @@ func TestCollectorSupportsClaudeAntigravityKimiAndXAI(t *testing.T) {
 	}{
 		{id: "claude-probe", provider: "claude", status: "healthy", windows: 3},
 		{id: "antigravity-probe", provider: "antigravity", status: "healthy", windows: 4, assert: func(t *testing.T, item *cluster.QuotaCredentialSnapshot) {
-			if len(item.PrimaryWindows) != 2 || item.PrimaryWindows[0].ScopeID == nil || item.PrimaryWindows[1].ScopeID == nil || *item.PrimaryWindows[0].ScopeID != "gemini" || *item.PrimaryWindows[1].ScopeID != "third-party" {
+			if len(item.PrimaryWindows) != 4 || item.PrimaryWindows[0].ID != "antigravity-gemini-5h" || item.PrimaryWindows[1].ID != "antigravity-gemini-weekly" || item.PrimaryWindows[2].ID != "antigravity-3p-5h" || item.PrimaryWindows[3].ID != "antigravity-3p-weekly" {
 				t.Fatalf("unexpected antigravity primary windows: %+v", item.PrimaryWindows)
 			}
 		}},

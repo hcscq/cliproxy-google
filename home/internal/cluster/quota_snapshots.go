@@ -1569,15 +1569,21 @@ func quotaPrimaryWindows(provider string, windows []QuotaWindow) []QuotaWindow {
 	return items
 }
 
+// antigravityPrimaryWindows keeps every window (5h and weekly) per group,
+// Gemini first, shortest window first within a group.
 func antigravityPrimaryWindows(items []QuotaWindow) []QuotaWindow {
-	selected := make([]QuotaWindow, 0, 2)
+	selected := make([]QuotaWindow, 0, 4)
 	for _, scopeID := range []string{"gemini", "third-party"} {
+		group := make([]QuotaWindow, 0, 2)
 		for _, window := range items {
 			if window.ScopeID != nil && strings.EqualFold(strings.TrimSpace(*window.ScopeID), scopeID) {
-				selected = append(selected, window)
-				break
+				group = append(group, window)
 			}
 		}
+		sort.SliceStable(group, func(i, j int) bool {
+			return quotaWindowDurationRank(group[i]) < quotaWindowDurationRank(group[j])
+		})
+		selected = append(selected, group...)
 	}
 	return selected
 }

@@ -154,10 +154,10 @@ func TestCollectorAntigravityPrimaryWindowsStayDistinctWhenFiveHourBucketsDiffer
 	if errGet != nil {
 		t.Fatalf("GetQuotaCredential() error = %v", errGet)
 	}
-	if item.CollectionStatus != "success" || len(item.Windows) != 3 || len(item.PrimaryWindows) != 2 {
+	if item.CollectionStatus != "success" || len(item.Windows) != 3 || len(item.PrimaryWindows) != 3 {
 		t.Fatalf("unexpected asymmetric quota snapshot: %+v", item)
 	}
-	if item.PrimaryWindows[0].ID != "antigravity-gemini-5h" || item.PrimaryWindows[1].ID != "antigravity-3p-weekly" {
+	if item.PrimaryWindows[0].ID != "antigravity-gemini-5h" || item.PrimaryWindows[1].ID != "antigravity-gemini-weekly" || item.PrimaryWindows[2].ID != "antigravity-3p-weekly" {
 		t.Fatalf("primary windows did not retain both groups: %+v", item.PrimaryWindows)
 	}
 }

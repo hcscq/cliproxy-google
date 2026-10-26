@@ -752,6 +752,7 @@ export interface QuotaWindow {
   used_ratio?: number;
   is_unlimited?: boolean;
   reset_at?: string | null;
+  window_seconds?: number | null;
 }
 
 export interface QuotaItem {
