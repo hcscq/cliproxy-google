@@ -31,7 +31,7 @@ const (
 	// QuotaGroupLowCode marks a soft skip of a credential whose group quota is nearly used up.
 	QuotaGroupLowCode = "quota_group_low"
 
-	defaultQuotaGroupOverrides = "pro: gemini-4-argon*=argon; *: claude-*|gpt-oss-*=3p; *: gemini-*=gemini"
+	defaultQuotaGroupOverrides = "ultra: gemini-*=gemini; *: gemini-4-argon*=argon; *: claude-*|gpt-oss-*=3p; *: gemini-*=gemini"
 	quotaGroupMinQuotaCooldown = 10 * time.Minute
 	quotaGroupLowMinHealthy    = 3
 )
@@ -139,8 +139,62 @@ func currentQuotaGroupRules() []quotaGroupRule {
 	return rules
 }
 
+// Tier cache: the scheduler's auth copies do not always carry the subscription tier, so
+// it is loaded once per credential from the full record in the background (unknown tier
+// keeps argon in its own group, the safe side) and refreshed by every subscription check.
+var (
+	quotaTierCache   sync.Map // authID -> tier class
+	quotaTierLoading sync.Map // authID -> time.Time of last attempt
+	quotaTierRuntime atomic.Pointer[Runtime]
+	quotaTierSem     = make(chan struct{}, 4)
+)
+
+func setQuotaTier(authID, tier string) {
+	if authID != "" && tier != "" {
+		quotaTierCache.Store(authID, reserveTierClass(tier))
+	}
+}
+
+func quotaTierOf(auth *coreauth.Auth) string {
+	if auth == nil {
+		return "unknown"
+	}
+	if t := stringMeta(auth, SubscriptionTierKey); t != "" {
+		return reserveTierClass(t)
+	}
+	if v, ok := quotaTierCache.Load(auth.ID); ok {
+		return v.(string)
+	}
+	rt := quotaTierRuntime.Load()
+	if rt == nil {
+		return "unknown"
+	}
+	now := time.Now()
+	if v, ok := quotaTierLoading.Load(auth.ID); ok && now.Sub(v.(time.Time)) < 5*time.Minute {
+		return "unknown"
+	}
+	quotaTierLoading.Store(auth.ID, now)
+	id := auth.ID
+	go func() {
+		quotaTierSem <- struct{}{}
+		defer func() { <-quotaTierSem }()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if full := rt.fullAuth(ctx, id); full != nil {
+			if t := stringMeta(full, SubscriptionTierKey); t != "" {
+				setQuotaTier(id, t)
+				quotaTierLoading.Delete(id)
+			}
+		}
+	}()
+	return "unknown"
+}
+
 // syncQuotaGroupRules re-parses the override setting when it changed.
 func (r *Runtime) syncQuotaGroupRules() {
+	if r != nil && quotaTierRuntime.Load() != r {
+		quotaTierRuntime.Store(r)
+	}
 	raw := ""
 	if r != nil {
 		if cfg := r.Config(); cfg != nil {
@@ -200,7 +254,7 @@ func (r *Runtime) recordLearnedQuotaGroups(auth *coreauth.Auth, h *antigravityCa
 	}
 	learned := learnQuotaGroups(h)
 	learnedQuotaGroupsByAuth.Store(auth.ID, learned)
-	tier := reqCapTier(auth)
+	tier := quotaTierOf(auth)
 	// Tier pattern: only multi-member groups say something about other credentials.
 	size := map[string]int{}
 	for _, g := range learned {
@@ -218,7 +272,7 @@ func QuotaGroupFor(auth *coreauth.Auth, model string) (string, string) {
 	if auth == nil {
 		return "", ""
 	}
-	tier := reqCapTier(auth)
+	tier := quotaTierOf(auth)
 	m := normQuotaModel(model)
 	if ignoredQuotaModel(m) {
 		return "", ""

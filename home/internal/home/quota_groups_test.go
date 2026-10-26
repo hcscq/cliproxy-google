@@ -18,7 +18,7 @@ func tierAuth(id, tier string) *coreauth.Auth {
 
 func TestQuotaGroupOverridesDefaults(t *testing.T) {
 	rules, errs := parseQuotaGroupOverrides("")
-	if len(errs) != 0 || len(rules) != 3 {
+	if len(errs) != 0 || len(rules) != 4 {
 		t.Fatalf("rules=%+v errs=%v", rules, errs)
 	}
 	cases := []struct{ tier, model, want string }{
@@ -29,6 +29,7 @@ func TestQuotaGroupOverridesDefaults(t *testing.T) {
 		{"free", "claude-opus-4-6-thinking", "3p"},
 		{"ultra", "models/gpt-oss-120b-medium", "3p"},
 		{"pro", "chat_20706", ""},
+		{"unknown", "gemini-4-argon-high", "argon"},
 	}
 	for _, c := range cases {
 		if got := matchQuotaGroupRules(rules, c.tier, c.model); got != c.want {
@@ -178,5 +179,18 @@ func TestLowHealthyCounts(t *testing.T) {
 	updateLowHealthy("lh-a", map[string]bool{})
 	if n := lowHealthyCount("lh-m"); n != 1 {
 		t.Fatalf("count=%d", n)
+	}
+}
+
+func TestQuotaTierCacheWithoutMetadata(t *testing.T) {
+	quotaGroupRulesCur.Store(nil)
+	a := &coreauth.Auth{ID: "tier-cache-a", Provider: "antigravity"}
+	if g, _ := QuotaGroupFor(a, "gemini-4-argon-high"); g != "argon" {
+		t.Fatalf("unknown tier must keep argon separate, got %q", g)
+	}
+	setQuotaTier(a.ID, "g1-ultra-tier")
+	t.Cleanup(func() { quotaTierCache.Delete(a.ID) })
+	if g, _ := QuotaGroupFor(a, "gemini-4-argon-high"); g != "gemini" {
+		t.Fatalf("cached ultra tier: got %q", g)
 	}
 }

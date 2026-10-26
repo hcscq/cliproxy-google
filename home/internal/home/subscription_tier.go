@@ -322,6 +322,7 @@ func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now ti
 		log.WithError(err).Warnf("subscription tier: update %s failed", id)
 		return false
 	}
+	setQuotaTier(id, tier)
 	if changed {
 		log.Infof("subscription tier: %s (%s) -> %s (%s)", id, full.Label, tier, name)
 	}
