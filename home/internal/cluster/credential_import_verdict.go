@@ -54,7 +54,7 @@ func recordImportVerdict(ctx context.Context, db *gorm.DB, rec CredentialHealthC
 		Categories: rec.Categories, Reasons: rec.Reasons, Tier: rec.Tier, Sticky: rec.Status == "fail"}
 	tx := db.WithContext(contextOrBackground(ctx))
 	var rows []struct{ Has bool }
-	if err := tx.Model(&AntigravityCatalogRecord{}).Select("strpos(raw, 'gemini-4-argon') > 0 AS has").Where("auth_id = ? AND model_count > 0", rec.AuthUUID).Limit(1).Scan(&rows).Error; err == nil && len(rows) > 0 {
+	if err := tx.Model(&AntigravityCatalogRecord{}).Select(ArgonCatalogSQL + " AS has").Where("auth_id = ? AND model_count > 0", rec.AuthUUID).Limit(1).Scan(&rows).Error; err == nil && len(rows) > 0 {
 		has := rows[0].Has
 		v.Argon = &has
 	}

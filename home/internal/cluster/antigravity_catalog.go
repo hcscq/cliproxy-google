@@ -168,7 +168,36 @@ func (r *Repository) AntigravityCatalogContains(ctx context.Context, ids []strin
 		Has    bool
 	}
 	err := r.db.WithContext(contextOrBackground(ctx)).Model(&AntigravityCatalogRecord{}).
-		Select("auth_id, strpos(raw, ?) > 0 AS has", model).
+		Select("auth_id, strpos(raw, ?) > 0 AS has", `"`+strings.TrimSpace(model)+`"`).
+		Where("auth_id IN ? AND model_count > 0", ids).Scan(&rows).Error
+	if err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		out[row.AuthID] = row.Has
+	}
+	return out, nil
+}
+
+// ArgonCatalogSQL matches only real Gemini 4 argon variants as exact JSON keys;
+// the Pro placeholder "gemini-4-argon-disabled" does not count.
+const ArgonCatalogSQL = `(strpos(raw, '"gemini-4-argon-high"') > 0 OR strpos(raw, '"gemini-4-argon-medium"') > 0 OR strpos(raw, '"gemini-4-argon-low"') > 0)`
+
+// AntigravityCatalogHasArgon reports, per auth, whether the latest catalog lists a real argon variant.
+func (r *Repository) AntigravityCatalogHasArgon(ctx context.Context, ids []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if r == nil || r.db == nil || len(ids) == 0 {
+		return out, nil
+	}
+	if err := ensureAntigravityCatalogTable(ctx, r.db); err != nil {
+		return out, err
+	}
+	var rows []struct {
+		AuthID string
+		Has    bool
+	}
+	err := r.db.WithContext(contextOrBackground(ctx)).Model(&AntigravityCatalogRecord{}).
+		Select("auth_id, " + ArgonCatalogSQL + " AS has").
 		Where("auth_id IN ? AND model_count > 0", ids).Scan(&rows).Error
 	if err != nil {
 		return out, err

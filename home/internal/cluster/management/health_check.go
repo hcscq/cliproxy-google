@@ -264,7 +264,7 @@ func (h *Handler) HealthCheckBatch(c *gin.Context) {
 		for _, r := range recs {
 			ids = append(ids, r.AuthUUID)
 		}
-		argon, _ = h.repo.AntigravityCatalogContains(ctx, ids, "gemini-4-argon")
+		argon, _ = h.repo.AntigravityCatalogHasArgon(ctx, ids)
 	}
 	verdicts, _ := h.repo.ListImportVerdicts(ctx)
 	items := make([]gin.H, 0)
