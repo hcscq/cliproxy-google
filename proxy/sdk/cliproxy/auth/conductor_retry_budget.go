@@ -261,7 +261,8 @@ const minUsefulRetry = 10 * time.Second
 
 // RetryBudgetFinalAttempt reports whether the attempt now running is the last
 // one the request budget allows if it were cut after limit: no credential
-// switch left, or too little time after limit for another useful attempt.
+// switch left, the first-byte timeout cap would be reached by one more
+// timeout, or too little time after limit for another useful attempt.
 // Executors use it to avoid cutting the last attempt short. False when no
 // budget is installed.
 func RetryBudgetFinalAttempt(ctx context.Context, limit time.Duration) bool {
@@ -272,8 +273,14 @@ func RetryBudgetFinalAttempt(ctx context.Context, limit time.Duration) bool {
 	b.mu.Lock()
 	distinct := len(b.distinct)
 	stopped := b.stopCause != ""
+	ttfb := b.ttfbCount
 	b.mu.Unlock()
 	if stopped || (b.maxCreds > 0 && distinct >= b.maxCreds) {
+		return true
+	}
+	// One more first-byte timeout would hit the per-request cap and end the
+	// request, so this attempt is the last one: don't cut it short.
+	if limitCap := firstByteTimeoutCap(); limitCap > 0 && ttfb >= limitCap-1 {
 		return true
 	}
 	rem, bounded := b.remaining()
