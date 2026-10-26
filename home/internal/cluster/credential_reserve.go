@@ -314,3 +314,53 @@ func (a *RuntimeAdapter) RecordReserveBans(ctx context.Context) (int, error) {
 	}
 	return r.RecordReserveBans(ctx)
 }
+
+// ReserveModelCapacity reports, for credentials whose latest Antigravity catalog lists
+// a model matching pattern (glob; "-disabled" placeholders excluded), which can serve
+// it now: not exhausted per catalog quotaInfo and not cooling for that model. Active
+// (non-reserved) rows also need the CountActiveCredentials filters with wholly cooled
+// credentials excluded. Postgres only.
+func (r *Repository) ReserveModelCapacity(ctx context.Context, pattern string) ([]home.ModelCapacityRow, error) {
+	db, err := r.database()
+	if err != nil {
+		return nil, err
+	}
+	if db.Dialector.Name() != "postgres" {
+		return nil, nil
+	}
+	like, prefix := home.GlobToLike(pattern)
+	q := `WITH m AS (
+		SELECT a.uuid AS id, COALESCE(rv.reserved,false) AS reserved,
+			COALESCE((k.value->'quotaInfo'->>'remainingFraction')::float8, CASE WHEN jsonb_exists(k.value, 'quotaInfo') THEN 0 ELSE 1 END) AS rem,
+			NULLIF(k.value->'quotaInfo'->>'resetTime','')::timestamptz AS reset_at,
+			a.auth_json->'model_states'->k.key AS ms
+		FROM auth a
+		JOIN antigravity_catalogs c ON c.auth_id = a.uuid AND c.model_count > 0 AND strpos(c.raw, ?) > 0
+		LEFT JOIN credential_reserve rv ON rv.auth_uuid = a.uuid
+		CROSS JOIN LATERAL jsonb_each(c.raw::jsonb->'models') k
+		WHERE a.deleted_at IS NULL AND COALESCE(a.disabled,false) = false
+			AND k.key LIKE ? ESCAPE '\' AND k.key NOT LIKE '%-disabled'
+			AND (COALESCE(rv.reserved,false) OR (
+				COALESCE(a.status,'') <> 'error'
+				AND COALESCE(a.auth_json->'metadata'->>'refresh_token','') <> ''
+				AND a.uuid NOT IN (SELECT auth_uuid FROM credential_health_check WHERE status = 'fail')
+				AND NOT (COALESCE(a.unavailable,false) AND a.next_retry_after IS NOT NULL AND a.next_retry_after > CURRENT_TIMESTAMP)))
+	), x AS (
+		SELECT id, reserved, rem,
+			NOT (rem <= 0 AND (reset_at IS NULL OR reset_at > now()))
+			AND NOT (COALESCE((ms->>'unavailable')::bool,false) AND NULLIF(ms->>'next_retry_after','')::timestamptz > now()) AS ok
+		FROM m
+	)
+	SELECT id, reserved, bool_or(ok) AS usable, COALESCE(MAX(rem) FILTER (WHERE ok), 0) AS remaining FROM x GROUP BY id, reserved`
+	var rows []home.ModelCapacityRow
+	err = db.WithContext(contextOrBackground(ctx)).Raw(q, `"`+prefix, like).Scan(&rows).Error
+	return rows, err
+}
+
+func (a *RuntimeAdapter) ReserveModelCapacity(ctx context.Context, pattern string) ([]home.ModelCapacityRow, error) {
+	r, err := a.reserveRepo()
+	if err != nil {
+		return nil, err
+	}
+	return r.ReserveModelCapacity(ctx, pattern)
+}

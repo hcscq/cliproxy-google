@@ -308,6 +308,9 @@ type Config struct {
 	ReserveBanProbeInterval string `yaml:"reserve-ban-probe-interval,omitempty" json:"reserve-ban-probe-interval,omitempty"`
 	// ReservePrePromoteCheck: probe each candidate right before promotion (default on).
 	ReservePrePromoteCheck *bool `yaml:"reserve-pre-promote-check,omitempty" json:"reserve-pre-promote-check,omitempty"`
+	// ReserveModelRules: model-aware reserve minimums, "pattern:min" comma list
+	// (e.g. "gemini-4-argon-*:6"); "" = default rule, "off" = none.
+	ReserveModelRules string `yaml:"reserve-model-rules,omitempty" json:"reserve-model-rules,omitempty"`
 	// Import health check (导入体检).
 	ImportCheckOnImport     *bool  `yaml:"import-check-on-import,omitempty" json:"import-check-on-import,omitempty"`
 	ImportCheckExpectedTier string `yaml:"import-check-expected-tier,omitempty" json:"import-check-expected-tier,omitempty"`
@@ -1919,9 +1922,39 @@ type ReserveSettings struct {
 	MaxPromotions   int
 	PromotionWindow time.Duration
 	Tiers           []string      // ultra | pro | free | unknown; empty = any
-	CountCooled     bool          // quota-cooled credentials count as available (default true)
+	CountCooled     bool          // wholly quota-cooled credentials count as available (default false)
 	BanProbeEvery   time.Duration // per-credential reserve ban probe interval (0 = off; default 12h)
 	PrePromoteCheck bool          // probe candidates right before promotion (default true)
+	ModelRules      []ReserveModelRule
+}
+
+// ReserveModelRule keeps at least Min usable non-reserved credentials able to serve a
+// model matching Pattern (glob, * = any; "-disabled" placeholders never match).
+type ReserveModelRule struct {
+	Pattern string
+	Min     int
+}
+
+// DefaultReserveModelRules is used when routing.reserve.model-rules is unset.
+const DefaultReserveModelRules = "gemini-4-argon-*:6"
+
+// ParseReserveModelRules parses "pattern:min,pattern:min"; invalid entries are skipped.
+func ParseReserveModelRules(raw string) []ReserveModelRule {
+	var out []ReserveModelRule
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		i := strings.LastIndex(part, ":")
+		if i <= 0 {
+			continue
+		}
+		pat := strings.TrimSpace(part[:i])
+		n, err := strconv.Atoi(strings.TrimSpace(part[i+1:]))
+		if err != nil || n <= 0 || pat == "" {
+			continue
+		}
+		out = append(out, ReserveModelRule{Pattern: pat, Min: n})
+	}
+	return out
 }
 
 func parseDurationOr(s string, def, lo, hi time.Duration) time.Duration {
@@ -1941,11 +1974,20 @@ func parseDurationOr(s string, def, lo, hi time.Duration) time.Duration {
 // ReserveSettings returns the credential reserve settings with defaults applied:
 // delay 5m (0..24h), at most 3 promotions per 1h window (window 1m..7d).
 func (c *Config) ReserveSettings() ReserveSettings {
-	out := ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour, CountCooled: true,
+	if c == nil {
+		return ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour,
+			BanProbeEvery: 12 * time.Hour, PrePromoteCheck: true, ModelRules: ParseReserveModelRules(DefaultReserveModelRules)}
+	}
+	out := ReserveSettings{ActivationDelay: 5 * time.Minute, MaxPromotions: 3, PromotionWindow: time.Hour, CountCooled: false,
 		BanProbeEvery: 12 * time.Hour, PrePromoteCheck: true}
 	if c == nil {
 		return out
 	}
+	rules := DefaultReserveModelRules
+	if v := strings.TrimSpace(c.ReserveModelRules); v != "" {
+		rules = v
+	}
+	out.ModelRules = ParseReserveModelRules(rules)
 	if c.ReservePrePromoteCheck != nil {
 		out.PrePromoteCheck = *c.ReservePrePromoteCheck
 	}

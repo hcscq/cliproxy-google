@@ -222,14 +222,14 @@ func TestReserveCountCooledSetting(t *testing.T) {
 	store := &fakeReserveStore{reserved: map[string]time.Time{}, active: 50}
 	r := reserveTestRuntime(store, &config.Config{ReserveMinActive: 10})
 	r.reserveControl(context.Background(), time.Now())
-	if !store.lastCountCooled {
-		t.Fatal("quota-cooled must count as available by default")
-	}
-	off := false
-	r.reserveCfgOverride = &config.Config{ReserveMinActive: 10, ReserveCountCooled: &off}
-	r.reserveControl(context.Background(), time.Now())
 	if store.lastCountCooled {
-		t.Fatal("setting off must exclude quota-cooled")
+		t.Fatal("quota-cooled must not count as available by default")
+	}
+	on := true
+	r.reserveCfgOverride = &config.Config{ReserveMinActive: 10, ReserveCountCooled: &on}
+	r.reserveControl(context.Background(), time.Now())
+	if !store.lastCountCooled {
+		t.Fatal("setting on must count quota-cooled")
 	}
 }
 

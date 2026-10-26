@@ -24,8 +24,10 @@ import (
 //
 // Active count = available credentials: enabled (bans/egress or error pauses disable),
 // not reserved, not in error, with a refresh token and not failed by the import
-// health check. Quota-cooled credentials count by default (routing.reserve.count-cooled)
-// since cooldowns are temporary and would cause promotion churn.
+// health check. Wholly quota-cooled credentials do not count by default
+// (routing.reserve.count-cooled=false); per-model cooldowns never remove a credential.
+// Model rules (routing.reserve.model-rules) also keep a minimum of usable credentials
+// per model pattern, e.g. gemini-4-argon-*:6.
 
 const (
 	reserveSyncEvery    = 10 * time.Second
@@ -57,11 +59,12 @@ type ReserveStats struct {
 	// Enabled / Usable exclude Free-tier credentials (as the promoter counts):
 	// enabled = schedulable and not in reserve; usable = enabled and not cooling.
 	// Active is whichever of the two the promoter compares with MinActive.
-	Enabled            int   `json:"enabled"`
-	Usable             int   `json:"usable"`
-	CountCooled        bool  `json:"count_cooled"`
-	LastPromotionUnix  int64 `json:"last_promotion,omitempty"`
-	ShortfallSinceUnix int64 `json:"shortfall_since,omitempty"`
+	Enabled            int                `json:"enabled"`
+	Usable             int                `json:"usable"`
+	CountCooled        bool               `json:"count_cooled"`
+	LastPromotionUnix  int64              `json:"last_promotion,omitempty"`
+	ShortfallSinceUnix int64              `json:"shortfall_since,omitempty"`
+	ModelRules         []ReserveModelStat `json:"model_rules,omitempty"`
 }
 
 // ReserveStore is the persistence used by the reserve controller.
@@ -79,8 +82,9 @@ type credentialReserve struct {
 	mu             sync.Mutex
 	shortfallSince time.Time
 	lastActive     atomic.Int64
-	state          string       // last logged shortfall state (ok|waiting|limited|empty|promoted)
-	eligible       atomic.Int64 // eligible reserves at the last check (-1 = unknown)
+	state          string               // last logged shortfall state (ok|waiting|limited|empty|promoted)
+	eligible       atomic.Int64         // eligible reserves at the last check (-1 = unknown)
+	modelSince     map[string]time.Time // model rule pattern -> shortfall start (guarded by mu)
 }
 
 func (r *Runtime) reserveStore() ReserveStore {
@@ -175,13 +179,26 @@ func (r *Runtime) ReserveStatus(ctx context.Context, st *ReserveStats) {
 			st.Active = st.Usable
 		}
 		if c, err := s.ListReserveCandidates(ctx); err == nil {
-			st.Eligible = len(orderReserveCandidates(c, cfg.Tiers, r.ImportCheckSettings().Promote))
+			ordered := orderReserveCandidates(c, cfg.Tiers, r.ImportCheckSettings().Promote)
+			st.Eligible = len(ordered)
+			for _, ev := range evalModelRules(ctx, s, cfg.ModelRules, ordered) {
+				st.ModelRules = append(st.ModelRules, ReserveModelStat{Pattern: ev.rule.Pattern, Min: ev.rule.Min,
+					Usable: ev.usable, Reserves: len(ev.cands), Short: ev.usable < ev.rule.Min && len(ev.cands) == 0})
+			}
 		}
 	}
 	st.Short = st.MinActive > 0 && st.Active >= 0 && st.Active < st.MinActive && st.Eligible == 0
+	for _, m := range st.ModelRules {
+		st.Short = st.Short || m.Short
+	}
 	r.reserve.mu.Lock()
 	if !r.reserve.shortfallSince.IsZero() {
 		st.ShortfallSinceUnix = r.reserve.shortfallSince.Unix()
+	}
+	for i := range st.ModelRules {
+		if t, ok := r.reserve.modelSince[st.ModelRules[i].Pattern]; ok {
+			st.ModelRules[i].Since = t.Unix()
+		}
 	}
 	r.reserve.mu.Unlock()
 }
@@ -287,7 +304,9 @@ func orderReserveCandidates(in []ReserveCandidate, tiers []string, healthPolicy 
 }
 
 // reserveControl runs on the leader: audits bans, then promotes reserves when the
-// active count has stayed below the minimum for the activation delay, rate-limited.
+// active count (or a model rule's usable count) has stayed below its minimum for the
+// activation delay, rate-limited. Model-rule shortages promote rule-capable reserves
+// (most remaining quota first); a generic shortage prefers them while a rule is short.
 func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	s := r.reserveStore()
 	if s == nil {
@@ -309,61 +328,106 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	r.reserve.lastActive.Store(int64(active))
 	r.reserve.mu.Lock()
 	defer r.reserve.mu.Unlock()
-	if cfg.MinActive <= 0 || active >= cfg.MinActive {
-		r.reserve.eligible.Store(-1)
+	genericShort := cfg.MinActive > 0 && active < cfg.MinActive
+	if !genericShort {
 		if !r.reserve.shortfallSince.IsZero() {
 			log.Infof("credential reserve: active %d >= minimum %d, shortfall cleared", active, cfg.MinActive)
 		}
 		r.reserve.shortfallSince = time.Time{}
+	} else if r.reserve.shortfallSince.IsZero() {
+		r.reserve.shortfallSince = now
+	}
+	var cands []ReserveCandidate
+	if genericShort || len(cfg.ModelRules) > 0 {
+		all, err := s.ListReserveCandidates(cctx)
+		if err != nil {
+			log.WithError(err).Debug("credential reserve: candidate lookup failed")
+			return
+		}
+		cands = orderReserveCandidates(all, cfg.Tiers, r.ImportCheckSettings().Promote)
+	}
+	evals := evalModelRules(cctx, s, cfg.ModelRules, cands)
+	// Rule shortages: sustained ones get their own promotions.
+	var shortRules []string
+	var priority []ReserveCandidate // rule-capable reserves of short rules, rule order
+	seen := map[string]bool{}
+	nRule := 0
+	for _, ev := range evals {
+		short := ev.usable < ev.rule.Min
+		since := r.modelShortSince(ev.rule.Pattern, short, now)
+		if !short {
+			continue
+		}
+		shortRules = append(shortRules, fmt.Sprintf("%s 可用 %d < %d", ev.rule.Pattern, ev.usable, ev.rule.Min))
+		need := 0
+		if now.Sub(since) >= cfg.ActivationDelay {
+			need = ev.rule.Min - ev.usable
+		}
+		for _, c := range ev.cands {
+			if seen[c.ID] {
+				continue
+			}
+			seen[c.ID] = true
+			priority = append(priority, c)
+			if need > 0 {
+				need--
+				nRule++
+			}
+		}
+	}
+	if !genericShort && len(shortRules) == 0 {
+		r.reserve.eligible.Store(-1)
 		r.reserve.state = "ok"
 		return
 	}
-	// Short: count eligible reserves every check so the panel can warn even before
-	// the activation delay; with none, nothing below runs (no promotion, no errors).
-	cands, err := s.ListReserveCandidates(cctx)
-	if err != nil {
-		log.WithError(err).Debug("credential reserve: candidate lookup failed")
-		return
-	}
-	cands = orderReserveCandidates(cands, cfg.Tiers, r.ImportCheckSettings().Promote)
 	r.reserve.eligible.Store(int64(len(cands)))
-	if r.reserve.shortfallSince.IsZero() {
-		r.reserve.shortfallSince = now
-	}
 	if len(cands) == 0 {
 		r.logReserveState("empty", func() {
-			log.Warnf("credential reserve: 储备不足 — active %d (excl. Free tier) < minimum %d and no eligible reserve credential (tier filter %v)", active, cfg.MinActive, cfg.Tiers)
+			log.Warnf("credential reserve: 储备不足 — active %d (excl. Free tier) < minimum %d / %v and no eligible reserve credential (tier filter %v)", active, cfg.MinActive, shortRules, cfg.Tiers)
 		})
 		return
 	}
-	if now.Sub(r.reserve.shortfallSince) < cfg.ActivationDelay {
+	nGeneric := 0
+	if genericShort && now.Sub(r.reserve.shortfallSince) >= cfg.ActivationDelay {
+		nGeneric = cfg.MinActive - active - nRule
+		if nGeneric < 0 {
+			nGeneric = 0
+		}
+	}
+	n := nRule + nGeneric
+	if n <= 0 {
 		r.logReserveState("waiting", func() {
-			log.Infof("credential reserve: active %d (excl. Free tier) < minimum %d; promoting after %s if it persists (%d eligible)", active, cfg.MinActive, cfg.ActivationDelay, len(cands))
+			log.Infof("credential reserve: active %d / minimum %d, model rules short %v; promoting after %s if it persists (%d eligible)", active, cfg.MinActive, shortRules, cfg.ActivationDelay, len(cands))
 		})
+		return
+	}
+	list := priority
+	if nGeneric > 0 {
+		list = append(append([]ReserveCandidate(nil), priority...), excludeCandidates(cands, seen)...)
+	}
+	if n > len(list) {
+		n = len(list)
+	}
+	if n <= 0 {
 		return
 	}
 	used, err := s.CountReserveEvents(cctx, "promote", now.Add(-cfg.PromotionWindow))
 	if err != nil {
 		return
 	}
-	n := cfg.MinActive - active
 	if budget := cfg.MaxPromotions - used; n > budget {
 		n = budget
 	}
 	if n <= 0 {
 		r.logReserveState("limited", func() {
-			log.Warnf("credential reserve: active %d < minimum %d but promotion limit %d per %s reached", active, cfg.MinActive, cfg.MaxPromotions, cfg.PromotionWindow)
+			log.Warnf("credential reserve: active %d / minimum %d, model rules short %v, but promotion limit %d per %s reached", active, cfg.MinActive, shortRules, cfg.MaxPromotions, cfg.PromotionWindow)
 		})
 		return
 	}
-	picked := cands
-	if n > len(picked) {
-		n = len(picked)
-	}
-	picked = picked[:n]
+	picked := list[:n]
 	if cfg.PrePromoteCheck {
 		var banned int
-		picked, banned = r.prePromoteFilter(ctx, cands, n, now.UTC())
+		picked, banned = r.prePromoteFilter(ctx, list, n, now.UTC())
 		if banned > 0 {
 			log.Warnf("credential reserve: pre-promotion probe found %d banned reserve(s); skipped", banned)
 			r.syncReserve(ctx)
@@ -379,7 +443,12 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	for _, c := range picked {
 		ids = append(ids, c.ID)
 	}
-	detail := fmt.Sprintf("自动启用：可用 %d < 最低 %d（持续 %s）", active, cfg.MinActive, now.Sub(r.reserve.shortfallSince).Round(time.Second))
+	var why []string
+	if genericShort {
+		why = append(why, fmt.Sprintf("可用 %d < 最低 %d（持续 %s）", active, cfg.MinActive, now.Sub(r.reserve.shortfallSince).Round(time.Second)))
+	}
+	why = append(why, shortRules...)
+	detail := "自动启用：" + strings.Join(why, "；")
 	sctx, scancel := context.WithTimeout(ctx, 15*time.Second) // probes may have used cctx's budget
 	defer scancel()
 	done, err := s.SetCredentialsReserved(sctx, ids, false, "promote", detail)
@@ -388,10 +457,20 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 		return
 	}
 	for _, c := range picked {
-		log.Infof("credential reserve: promoted %s (seq %d, tier %s, healthy %v): %s", c.ID, c.Seq, reserveTierClass(c.Tier), c.Healthy, detail)
+		log.Infof("credential reserve: promoted %s (seq %d, tier %s, healthy %v, model-rule %v): %s", c.ID, c.Seq, reserveTierClass(c.Tier), c.Healthy, seen[c.ID], detail)
 	}
 	if done > 0 {
 		r.syncReserve(ctx)
 		publishQuotaSync(quotaSyncMsg{Kind: "reserve"})
 	}
+}
+
+func excludeCandidates(in []ReserveCandidate, skip map[string]bool) []ReserveCandidate {
+	out := make([]ReserveCandidate, 0, len(in))
+	for _, c := range in {
+		if !skip[c.ID] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
