@@ -303,6 +303,10 @@ func SafeResponseHeaders(err error) http.Header {
 		}
 		return safeRetryAfterHeader(*retryAfter)
 	}
+	var modelUnavail *modelUnavailableError
+	if errors.As(err, &modelUnavail) && modelUnavail != nil {
+		return modelUnavail.Headers()
+	}
 	var modelCooldown *modelCooldownError
 	if errors.As(err, &modelCooldown) && modelCooldown != nil {
 		return modelCooldown.Headers()

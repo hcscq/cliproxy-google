@@ -53,6 +53,9 @@ func TestModelUnavailableShortCircuitsExecute(t *testing.T) {
 			t.Fatalf("want 503, got %v", err)
 		}
 		h := err.(interface{ Headers() http.Header }).Headers()
+		if SafeResponseHeaders(err).Get("Retry-After") != "600" {
+			t.Fatalf("SafeResponseHeaders Retry-After = %q", SafeResponseHeaders(err).Get("Retry-After"))
+		}
 		if h.Get("Retry-After") == "" {
 			t.Fatal("missing Retry-After")
 		}
