@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { HealthInfo, HealthSummary } from '../api/client';
+import type { HealthInfo, HealthSummary, ImportVerdict } from '../api/client';
 import { useApi, useUi } from '../app-context';
 import { useI18n } from '../i18n';
 import { Badge } from './ui';
@@ -79,6 +79,7 @@ export function HealthBadge({ h, id, onRechecked }: { h?: HealthInfo; id?: strin
         `${tr('体检', 'Check')} ${h.checked_at ? new Date(h.checked_at).toLocaleString() : ''}${h.tier ? ` · ${h.tier}` : ''}`,
         ...(h.reasons ?? []),
         h.evidence ? `${tr('上游原文', 'Upstream')}: ${h.evidence}` : '',
+        h.import ? importVerdictText(h.import, tr) : '',
       ]
         .filter(Boolean)
         .join('\n')
@@ -94,6 +95,7 @@ export function HealthBadge({ h, id, onRechecked }: { h?: HealthInfo; id?: strin
           {tr('去验证', 'Verify')}
         </a>
       )}
+      {h?.import?.sticky && h.import.status === 'fail' && <StickyImportFlag v={h.import} id={id} onCleared={onRechecked} />}
       {recheck && h?.status !== 'running' && (
         <button className="btn btn-sm btn-link" disabled={busy} onClick={recheck} data-testid="health-recheck">
           {tr('重新体检', 'Re-check')}
@@ -112,5 +114,47 @@ export function healthSummaryText(s: HealthSummary | undefined, tr: (zh: string,
   return tr(
     `体检：通过 ${s.pass} · 失败 ${s.fail}${parts.length ? `（${parts.join('，')}）` : ''}${s.running ? ` · 进行中 ${s.running}` : ''}`,
     `Check: pass ${s.pass} · fail ${s.fail}${parts.length ? ` (${parts.join(', ')})` : ''}${s.running ? ` · running ${s.running}` : ''}`,
+  );
+}
+
+/** Import-time snapshot (never overwritten by later re-checks). */
+export function importVerdictText(v: ImportVerdict, tr: (zh: string, en: string) => string): string {
+  const cats = v.status === 'pass' ? tr('通过', 'pass') : v.categories.map((c) => healthCategoryLabel(c, tr, v.tier)).join(' / ');
+  const argon = v.argon === undefined ? '' : v.argon ? ' · argon ✓' : tr(' · 无 argon', ' · no argon');
+  return [`${tr('导入体检', 'Import check')} ${new Date(v.checked_at).toLocaleString()}${v.tier ? ` · ${v.tier}` : ''}${argon}: ${cats}`, ...(v.reasons ?? []), v.note ?? '', v.cleared_at ? tr(`标记已清除 ${new Date(v.cleared_at).toLocaleString()}`, `flag cleared ${new Date(v.cleared_at).toLocaleString()}`) : '']
+    .filter(Boolean)
+    .join('\n');
+}
+
+function StickyImportFlag({ v, id, onCleared }: { v: ImportVerdict; id?: string; onCleared?: () => void }) {
+  const { tr } = useI18n();
+  const { toast } = useUi();
+  const api = useApi();
+  const [gone, setGone] = useState(false);
+  if (gone) return null;
+  return (
+    <span className="badge warn small" title={importVerdictText(v, tr)} data-testid="import-flag">
+      {tr('导入', 'Import')}: {v.categories.map((c) => healthCategoryLabel(c, tr, v.tier)).join('/')}
+      {id && (
+        <button
+          className="btn btn-sm btn-link"
+          style={{ padding: '0 2px' }}
+          title={tr('清除此标记（保留导入快照）', 'Clear flag (snapshot kept)')}
+          onClick={async (e) => {
+            e.stopPropagation();
+            try {
+              await api.clearImportVerdict([id]);
+              setGone(true);
+              onCleared?.();
+            } catch (err) {
+              toast(String((err as Error)?.message ?? err), 'err');
+            }
+          }}
+          data-testid="import-flag-clear"
+        >
+          ✕
+        </button>
+      )}
+    </span>
   );
 }

@@ -299,6 +299,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPost, "/credentials/import/jobs", handler.StartImportJob)
 	r.Set(http.MethodGet, "/credentials/import/jobs", handler.ListImportJobs)
 	r.Set(http.MethodGet, "/credentials/import/job", handler.GetImportJob)
+	r.Set(http.MethodPost, "/credentials/import-verdict/clear", handler.ClearImportVerdict)
 	r.Set(http.MethodPost, "/credentials/health-check", handler.StartHealthCheck)
 	r.Set(http.MethodGet, "/credentials/health-check/batch", handler.HealthCheckBatch)
 	r.Set(http.MethodGet, "/credentials/health-check/export", handler.ExportHealthCheck)

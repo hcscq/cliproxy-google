@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	log "github.com/sirupsen/logrus"
 	"strings"
 	"time"
 
@@ -125,7 +126,13 @@ func (r *Repository) SaveHealthCheck(ctx context.Context, rec CredentialHealthCh
 		return err
 	}
 	rec.CheckedAt = rec.CheckedAt.UTC()
-	return db.WithContext(contextOrBackground(ctx)).Save(&rec).Error
+	if err := db.WithContext(contextOrBackground(ctx)).Save(&rec).Error; err != nil {
+		return err
+	}
+	if err := recordImportVerdict(ctx, db, rec); err != nil {
+		log.Warnf("import verdict %s: %v", rec.AuthUUID, err)
+	}
+	return nil
 }
 
 // GetHealthCheck returns the latest check of one credential (ok=false when none).

@@ -266,10 +266,14 @@ func (h *Handler) HealthCheckBatch(c *gin.Context) {
 		}
 		argon, _ = h.repo.AntigravityCatalogContains(ctx, ids, "gemini-4-argon")
 	}
+	verdicts, _ := h.repo.ListImportVerdicts(ctx)
 	items := make([]gin.H, 0)
 	for _, r := range recs {
 		if all || r.Status != "pass" {
 			item := healthItem(r, emails[r.AuthUUID], seqs[r.AuthUUID])
+			if v, ok := verdicts[r.AuthUUID]; ok {
+				item["import"] = importVerdictJSON(v)
+			}
 			if has, ok := argon[r.AuthUUID]; ok {
 				item["argon"] = has
 			}
@@ -366,11 +370,15 @@ func (h *Handler) healthAnnotations(ctx context.Context) map[string]gin.H {
 	if err != nil {
 		return nil
 	}
+	verdicts, _ := h.repo.ListImportVerdicts(ctx)
 	out := make(map[string]gin.H, len(all))
 	for id, r := range all {
 		item := gin.H{"status": r.Status, "categories": r.CategoryList(), "reasons": r.ReasonList(), "checked_at": r.CheckedAt, "tier": r.Tier, "evidence": clipString(r.Evidence, 600)}
 		if r.VerifyURL != "" {
 			item["verify_url"] = r.VerifyURL
+		}
+		if v, ok := verdicts[id]; ok {
+			item["import"] = importVerdictJSON(v)
 		}
 		out[id] = item
 	}
@@ -382,4 +390,37 @@ func clipString(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+func importVerdictJSON(v cluster.CredentialImportVerdict) gin.H {
+	out := gin.H{"status": v.Status, "categories": v.CategoryList(), "reasons": v.ReasonList(), "checked_at": v.CheckedAt, "tier": v.Tier, "sticky": v.Sticky}
+	if v.Argon != nil {
+		out["argon"] = *v.Argon
+	}
+	if v.ClearedAt != nil {
+		out["cleared_at"] = v.ClearedAt
+	}
+	if v.Note != "" {
+		out["note"] = v.Note
+	}
+	return out
+}
+
+// ClearImportVerdict: POST /credentials/import-verdict/clear {ids} — clears the sticky import flag (snapshot is kept).
+func (h *Handler) ClearImportVerdict(c *gin.Context) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 {
+		respondError(c, http.StatusBadRequest, "ids is required", err)
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	n, err := h.repo.ClearImportVerdictSticky(ctx, body.IDs)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "clear_failed", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "cleared": n})
 }

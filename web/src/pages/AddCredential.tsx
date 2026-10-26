@@ -5,7 +5,7 @@ import { useI18n } from '../i18n';
 import { CopyButton, Modal, Spinner } from '../components/ui';
 import { IconExternal, IconUpload } from '../components/icons';
 import { AllowPrimaryToggle, EgressSelect } from '../components/EgressSelect';
-import { healthCategoryLabel, healthSummaryText } from '../components/HealthCheck';
+import { healthCategoryLabel, healthSummaryText, importVerdictText } from '../components/HealthCheck';
 import { downloadBlob } from '../format';
 import type { HealthItem, HealthSummary, ImportJob } from '../api/client';
 
@@ -876,6 +876,7 @@ function HealthBatchPanel({ batchId, showAll = true }: { batchId: string; showAl
                   <td className="ellipsis" style={{ maxWidth: 220 }}>{it.email}</td>
                   <td>{it.tier ? <span className="badge">{it.tier}</span> : <span className="faint">—</span>}</td>
                   <td title="gemini-4-argon">{it.argon === undefined ? <span className="faint">argon ?</span> : it.argon ? <span className="badge ok">argon ✓</span> : <span className="badge warn">无 argon</span>}</td>
+                  <td title={it.import ? importVerdictText(it.import, tr) : undefined}>{it.import ? (it.import.status === 'pass' ? <span className="faint">{tr('导入:通过', 'Import: pass')}</span> : <span className="badge warn">{tr('导入', 'Import')}: {it.import.categories.map((c) => healthCategoryLabel(c, tr, it.import?.tier)).join('/')}</span>) : null}</td>
                   <td>{it.status === 'running' ? tr('体检中', 'Checking') : it.status === 'pass' ? <span className="badge ok">{tr('正常', 'OK')}</span> : (it.categories ?? []).map((c) => healthCategoryLabel(c, tr, it.tier)).join(' / ')}</td>
                   <td className="small ellipsis" style={{ maxWidth: 320 }} title={[...(it.reasons ?? []), it.evidence ?? ''].join('\n')}>
                     {(it.reasons ?? []).join('；')}

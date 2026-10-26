@@ -173,6 +173,9 @@ export class ApiClient {
   startImportJob(body: { text?: string; items?: unknown[]; egress_id?: string; allow_primary?: boolean; reserve?: boolean; health_check?: boolean; source?: string }) {
     return this.post<{ status: string; job: ImportJob }>('/credentials/import/jobs', body);
   }
+  clearImportVerdict(ids: string[]) {
+    return this.post<{ status: string; cleared: number }>('/credentials/import-verdict/clear', { ids });
+  }
   importJobs() {
     return this.get<{ jobs: ImportJob[] }>('/credentials/import/jobs');
   }
@@ -1439,7 +1442,8 @@ export interface ReserveStats {
 }
 export interface ReserveEvent { auth_id: string; seq?: number; kind: string; at: string; was_reserved: boolean; reserved_since?: string; detail?: string }
 
-export interface HealthInfo { status: 'pass' | 'fail' | 'running' | string; categories: string[]; reasons?: string[]; checked_at?: string; tier?: string; evidence?: string; verify_url?: string }
+export interface ImportVerdict { status: string; categories: string[]; reasons?: string[]; checked_at: string; tier?: string; argon?: boolean; sticky: boolean; cleared_at?: string; note?: string }
+export interface HealthInfo { status: 'pass' | 'fail' | 'running' | string; categories: string[]; reasons?: string[]; checked_at?: string; tier?: string; evidence?: string; verify_url?: string; import?: ImportVerdict }
 export interface HealthSummary { total: number; pass: number; fail: number; running: number; by_category: Record<string, number> }
 export interface HealthItem extends HealthInfo { auth_id: string; seq?: number; email?: string; batch_id?: string; imported_at?: string; model?: string; argon?: boolean }
 
