@@ -4556,11 +4556,40 @@ func usageObservabilityResolveAuthKeys(scope *gorm.DB, cond string, args ...any)
 // usageObservabilityResolveSearchAPIKeys returns raw api keys whose owner's
 // username or whose masked form matches the search term.
 func usageObservabilityResolveSearchAPIKeys(scope *gorm.DB, matcher string) []string {
-	var keys []string
+	term := strings.Trim(matcher, "%")
 	db := scope.Session(&gorm.Session{NewDB: true})
-	userIDs := db.Table(`"user"`).Select(`"id"`).Where(`"username" LIKE ?`, matcher)
-	if err := db.Table("api_key").Where(`"user_id" IN (?) OR EXISTS (SELECT 1 FROM (SELECT "api_key_masked" FROM "billing_charge" WHERE "billing_charge"."api_key_id" = "api_key"."id" LIMIT 1) AS "m" WHERE "m"."api_key_masked" LIKE ?)`, userIDs, matcher).Limit(5000).Pluck("api_key", &keys).Error; err != nil {
+	var userIDs []uint
+	if err := db.Table(`"user"`).Where(`"username" LIKE ?`, matcher).Limit(5000).Pluck("id", &userIDs).Error; err != nil {
+		userIDs = nil
+	}
+	users := make(map[uint]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		users[id] = struct{}{}
+	}
+	type row struct {
+		APIKey string `gorm:"column:api_key"`
+		UserID *uint  `gorm:"column:user_id"`
+	}
+	var rows []row
+	if err := db.Table("api_key").Select(`"api_key", "user_id"`).Limit(10000).Scan(&rows).Error; err != nil {
 		return nil
 	}
+	keys := make([]string, 0)
+	for _, r := range rows {
+		if r.APIKey == "" {
+			continue
+		}
+		_, userMatch := users[derefUint(r.UserID)]
+		if (r.UserID != nil && userMatch) || (term != "" && strings.Contains(maskBillingAPIKey(r.APIKey), term)) {
+			keys = append(keys, r.APIKey)
+		}
+	}
 	return keys
+}
+
+func derefUint(v *uint) uint {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
