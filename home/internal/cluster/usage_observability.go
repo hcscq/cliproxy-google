@@ -2198,18 +2198,12 @@ func usageObservabilityRecordQueryDependenciesFor(query UsageObservabilityRecord
 		dependencies.Billing = true
 		dependencies.APIKey = true
 	}
-	if strings.TrimSpace(query.CredentialID) != "" || strings.TrimSpace(query.AuthIndex) != "" {
-		dependencies.Auth = true
-	}
 	if query.MinAmount != nil || query.MaxAmount != nil {
 		dependencies.Billing = true
 	}
-	if strings.TrimSpace(query.Search) != "" {
-		dependencies.Billing = true
-		dependencies.APIKey = true
-		dependencies.User = true
-		dependencies.Auth = true
-	}
+	// Search, CredentialID and AuthIndex are resolved against the small
+	// auth/user/api_key tables up front and applied as usage-only predicates,
+	// so they never force the related-record joins over the usage range.
 	return dependencies
 }
 
@@ -2374,10 +2368,12 @@ func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabili
 		scope = scope.Where(`COALESCE("billing_charge"."api_key_id", "api_key"."id") = ?`, *clientKeyID)
 	}
 	if credentialID := strings.TrimSpace(query.CredentialID); credentialID != "" {
-		scope = scope.Where(`"usage"."auth_index" = ? OR COALESCE("auth_uuid"."uuid", "auth_by_index"."uuid", "auth_by_id"."uuid") = ? OR COALESCE("auth_uuid"."id", "auth_by_index"."id", "auth_by_id"."id") = ? OR COALESCE("auth_uuid"."index", "auth_by_index"."index", "auth_by_id"."index") = ?`, credentialID, credentialID, credentialID, credentialID)
+		keys := usageObservabilityResolveAuthKeys(scope, `"uuid" = ? OR "id" = ? OR "index" = ?`, credentialID, credentialID, credentialID)
+		scope = scope.Where(`"usage"."auth_index" IN ?`, append(keys, credentialID))
 	}
 	if authIndex := strings.TrimSpace(query.AuthIndex); authIndex != "" {
-		scope = scope.Where(`"usage"."auth_index" = ? OR COALESCE("auth_uuid"."index", "auth_by_index"."index", "auth_by_id"."index") = ?`, authIndex, authIndex)
+		keys := usageObservabilityResolveAuthKeys(scope, `"index" = ?`, authIndex)
+		scope = scope.Where(`"usage"."auth_index" IN ?`, append(keys, authIndex))
 	}
 	if executorType := strings.TrimSpace(query.ExecutorType); executorType != "" {
 		scope = scope.Where(`"usage"."executor_type" = ?`, executorType)
@@ -2411,11 +2407,12 @@ func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabili
 			"usage"."cpa_node_id" LIKE ? OR
 			"usage"."cpa_ip" LIKE ? OR
 			"usage"."cpa_label" LIKE ? OR
-			"user"."username" LIKE ? OR
-			"billing_charge"."api_key_masked" LIKE ? OR
-			COALESCE("auth_uuid"."label", "auth_by_index"."label", "auth_by_id"."label") LIKE ? OR
-			"usage"."auth_index" LIKE ?)`,
-			matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher)
+			"usage"."auth_index" LIKE ? OR
+			"usage"."auth_index" IN ? OR
+			"usage"."api_key" IN ?)`,
+			matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher,
+			append(usageObservabilityResolveAuthKeys(scope, `"label" LIKE ?`, matcher), ""),
+			append(usageObservabilityResolveSearchAPIKeys(scope, matcher), ""))
 	}
 	if search := strings.TrimSpace(query.RequestLogSearch); search != "" {
 		matcher := "%" + search + "%"
@@ -4528,4 +4525,42 @@ func (r *Repository) UsageRetrySuccesses(ctx context.Context, requestIDs []strin
 		}
 	}
 	return out, nil
+}
+
+// usageObservabilityResolveAuthKeys returns every auth_index value (uuid, id,
+// index) of live auth rows matching cond. The auth table is small.
+func usageObservabilityResolveAuthKeys(scope *gorm.DB, cond string, args ...any) []string {
+	type row struct {
+		UUID  string  `gorm:"column:uuid"`
+		ID    *string `gorm:"column:id"`
+		Index *string `gorm:"column:index"`
+	}
+	var rows []row
+	db := scope.Session(&gorm.Session{NewDB: true})
+	if err := db.Table("auth").Select(`"uuid", "id", "index"`).Where(`"deleted_at" IS NULL`).Where(cond, args...).Limit(5000).Scan(&rows).Error; err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(rows)*3)
+	for _, r := range rows {
+		keys = append(keys, r.UUID)
+		if r.ID != nil && *r.ID != "" {
+			keys = append(keys, *r.ID)
+		}
+		if r.Index != nil && *r.Index != "" {
+			keys = append(keys, *r.Index)
+		}
+	}
+	return keys
+}
+
+// usageObservabilityResolveSearchAPIKeys returns raw api keys whose owner's
+// username or whose masked form matches the search term.
+func usageObservabilityResolveSearchAPIKeys(scope *gorm.DB, matcher string) []string {
+	var keys []string
+	db := scope.Session(&gorm.Session{NewDB: true})
+	userIDs := db.Table(`"user"`).Select(`"id"`).Where(`"username" LIKE ?`, matcher)
+	if err := db.Table("api_key").Where(`"user_id" IN (?) OR EXISTS (SELECT 1 FROM (SELECT "api_key_masked" FROM "billing_charge" WHERE "billing_charge"."api_key_id" = "api_key"."id" LIMIT 1) AS "m" WHERE "m"."api_key_masked" LIKE ?)`, userIDs, matcher).Limit(5000).Pluck("api_key", &keys).Error; err != nil {
+		return nil
+	}
+	return keys
 }

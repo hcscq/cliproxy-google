@@ -86,12 +86,12 @@ func TestUsageObservabilityRecordQueryDependencies(t *testing.T) {
 		{
 			name:  "credential id",
 			query: UsageObservabilityRecordQuery{CredentialID: "credential-1"},
-			want:  usageObservabilityRecordQueryDependencies{Auth: true},
+			want:  usageObservabilityRecordQueryDependencies{},
 		},
 		{
 			name:  "auth index",
 			query: UsageObservabilityRecordQuery{AuthIndex: "auth-1"},
-			want:  usageObservabilityRecordQueryDependencies{Auth: true},
+			want:  usageObservabilityRecordQueryDependencies{},
 		},
 		{
 			name:  "minimum amount",
@@ -106,7 +106,7 @@ func TestUsageObservabilityRecordQueryDependencies(t *testing.T) {
 		{
 			name:  "global search",
 			query: UsageObservabilityRecordQuery{Search: "needle"},
-			want:  usageObservabilityRecordQueryDependencies{Billing: true, APIKey: true, User: true, Auth: true},
+			want:  usageObservabilityRecordQueryDependencies{},
 		},
 	}
 
@@ -173,11 +173,13 @@ func TestUsageObservabilityExactScopesPruneOnlyUnneededJoins(t *testing.T) {
 		{name: "user id", query: UsageObservabilityRecordQuery{UserID: &userID}},
 		{name: "client key", query: UsageObservabilityRecordQuery{ClientKey: "client-key"}},
 		{name: "client key id", query: UsageObservabilityRecordQuery{ClientKeyID: &clientKeyID}},
-		{name: "credential id", query: UsageObservabilityRecordQuery{CredentialID: "credential-1"}},
-		{name: "auth index", query: UsageObservabilityRecordQuery{AuthIndex: "auth-1"}},
 		{name: "minimum amount", query: UsageObservabilityRecordQuery{MinAmount: &amount}},
 		{name: "maximum amount", query: UsageObservabilityRecordQuery{MaxAmount: &amount}},
-		{name: "global search", query: UsageObservabilityRecordQuery{Search: "needle"}},
+	}
+	// Credential/auth filters and global search resolve against small tables
+	// first and must stay join-free over the usage range.
+	for _, q := range []UsageObservabilityRecordQuery{{CredentialID: "credential-1"}, {AuthIndex: "auth-1"}, {Search: "needle"}} {
+		assertUsageObservabilitySQLHasNoJoins(t, usageObservabilityDryRunCountSQL(t, db, q))
 	}
 	for _, test := range relatedQueries {
 		t.Run(test.name, func(t *testing.T) {
