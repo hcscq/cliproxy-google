@@ -662,7 +662,21 @@ func (r *Repository) ListUsageObservabilityRecords(ctx context.Context, query Us
 	if !usageObservabilityRecordQueryDependenciesFor(query).requiresRelatedRecords() && sortValue != "cost_desc" && sortValue != "cost_asc" {
 		var ids []uint
 		idScope := usageObservabilityApplyRecordFilters(db.WithContext(contextOrBackground(ctx)).Table("usage"), query)
-		if errIDs := idScope.Select(`"usage"."id"`).Order(usageObservabilityRecordOrder(query.Sort)).Limit(query.Limit).Offset(query.Offset).Pluck("id", &ids).Error; errIDs != nil {
+		idOrder := usageObservabilityRecordOrder(query.Sort)
+		// A free-text search is an OR of non-indexable LIKEs. Walking the
+		// timestamp index backwards and filtering row by row is very slow for
+		// rare matches (e.g. one account), so order by an expression the index
+		// cannot serve: Postgres then filters with one sequential pass (the
+		// same cost as the COUNT) and top-N sorts only the matches.
+		if strings.TrimSpace(query.Search) != "" && db.Dialector.Name() == "postgres" {
+			switch sortValue {
+			case "", "timestamp_desc":
+				idOrder = `("usage"."timestamp" + INTERVAL '0 second') DESC, "usage"."id" DESC`
+			case "timestamp_asc":
+				idOrder = `("usage"."timestamp" + INTERVAL '0 second') ASC, "usage"."id" ASC`
+			}
+		}
+		if errIDs := idScope.Select(`"usage"."id"`).Order(idOrder).Limit(query.Limit).Offset(query.Offset).Pluck("id", &ids).Error; errIDs != nil {
 			return UsageObservabilityRecordListResult{}, errIDs
 		}
 		if len(ids) == 0 {
