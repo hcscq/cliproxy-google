@@ -112,7 +112,8 @@ function RequestEvents({ from }: { from: string }) {
   const limit = 25;
   const query = { from, status, model, search: applied.search, limit, offset };
   const events = useAsync(() => api.requestEvents(query), [from, status, model, applied.search, offset]);
-  const options = useAsync(() => api.requestEventFilterOptions({ from }), [from]);
+  // Filter options are best-effort: a failure must never block the list.
+  const options = useAsync(() => api.requestEventFilterOptions({ from }).catch(() => ({}) as Record<string, string[]>), [from]);
 
   return (
     <Card

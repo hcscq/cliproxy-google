@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -249,12 +250,26 @@ func (c *Coordinator) Start(ctx context.Context) error {
 				c.setMaster(false)
 				return nil
 			}
-			// Fencing is final. Anything else (slow DB, pool pressure, a
-			// dropped connection) is retried until the lease would have
-			// expired anyway; one slow heartbeat must not kill the process.
-			if !heartbeatErrorTransient(errBeat) || time.Since(lastOK) >= c.heartbeatTimeout {
+			// Fencing is final. Anything else (slow DB, host fsfreeze, pool
+			// pressure, a dropped connection) never kills the process: once
+			// the lease would have expired we give up the master role and
+			// keep serving in degraded mode, retrying every tick.
+			if !heartbeatErrorTransient(errBeat) {
 				c.setMaster(false)
+				// Stagger fatal exits so two Homes fenced by the same event
+				// never restart at the same instant.
+				if !sleepCtx(ctx, fatalExitJitter()) {
+					return nil
+				}
 				return errBeat
+			}
+			if time.Since(lastOK) >= c.heartbeatTimeout {
+				if c.IsMaster() {
+					log.WithError(errBeat).Warn("cluster heartbeat stalled past lease; relinquishing master and serving degraded")
+				}
+				c.setMaster(false)
+				log.WithError(errBeat).Warnf("cluster heartbeat failing for %s; degraded, retrying", time.Since(lastOK).Truncate(time.Second))
+				continue
 			}
 			log.WithError(errBeat).Warn("cluster heartbeat failed; retrying")
 		}
@@ -422,6 +437,9 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 	var elected ClusterNodeRecord
 	var seenAt time.Time
 	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if errLT := setLocalLockTimeout(tx); errLT != nil {
+			return errLT
+		}
 		gate := ClusterMasterGateRecord{ID: 1}
 		if errCreate := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&gate).Error; errCreate != nil {
 			return errCreate
@@ -615,4 +633,24 @@ func nodeSecretHash(secret string) string {
 	}
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
+}
+
+// fatalExitJitter returns a random 0-10s delay used before a fatal
+// coordinator exit so sibling Homes do not exit together.
+var fatalExitJitter = func() time.Duration {
+	return time.Duration(rand.Int63n(int64(10 * time.Second)))
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }

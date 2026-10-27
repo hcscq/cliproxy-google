@@ -204,6 +204,9 @@ func (r *Repository) RecordParticipation(ctx context.Context, lifetime Connectio
 		return fmt.Errorf("membership participation lifetime is invalid")
 	}
 	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if errLT := setLocalLockTimeout(tx); errLT != nil {
+			return errLT
+		}
 		member := CPANodeMembershipRecord{}
 		errMember := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("certificate_fingerprint = ?", fingerprint).

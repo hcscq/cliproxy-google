@@ -201,6 +201,9 @@ func (r *Repository) updateHomeIncarnation(ctx context.Context, id HomeIncarnati
 		return errDB
 	}
 	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if errLT := setLocalLockTimeout(tx); errLT != nil {
+			return errLT
+		}
 		record := HomeProcessIncarnationRecord{}
 		errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&record, "home_ip = ? AND home_port = ? AND started_at = ?", strings.TrimSpace(id.IP), id.Port, id.StartedAt).Error
 		if errors.Is(errFirst, gorm.ErrRecordNotFound) {

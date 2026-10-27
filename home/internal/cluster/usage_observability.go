@@ -694,35 +694,6 @@ func (r *Repository) GetUsageObservabilityRecord(ctx context.Context, id string)
 	return &record, nil
 }
 
-func (r *Repository) UsageObservabilityFilterOptions(ctx context.Context, query UsageObservabilityRecordQuery) (UsageObservabilityFilterOptions, error) {
-	db, errDB := r.database()
-	if errDB != nil {
-		return UsageObservabilityFilterOptions{}, errDB
-	}
-	ctx = contextOrBackground(ctx)
-	options := UsageObservabilityFilterOptions{}
-	var errOptions error
-	if options.EventTypes, errOptions = usageObservabilityDistinctStrings(ctx, db, query, `"usage"."event_type"`); errOptions != nil {
-		return UsageObservabilityFilterOptions{}, errOptions
-	}
-	if options.Providers, errOptions = usageObservabilityDistinctStrings(ctx, db, query, `"usage"."provider"`); errOptions != nil {
-		return UsageObservabilityFilterOptions{}, errOptions
-	}
-	if options.Models, errOptions = usageObservabilityDistinctStrings(ctx, db, query, `"usage"."model"`); errOptions != nil {
-		return UsageObservabilityFilterOptions{}, errOptions
-	}
-	if options.HomeIPs, errOptions = usageObservabilityDistinctStrings(ctx, db, query, `"usage"."home_ip"`); errOptions != nil {
-		return UsageObservabilityFilterOptions{}, errOptions
-	}
-	if options.CPANodes, errOptions = usageObservabilityDistinctStrings(ctx, db, query, `COALESCE(NULLIF("usage"."cpa_label", ''), NULLIF("usage"."cpa_node_id", ''), NULLIF("usage"."cpa_ip", ''))`); errOptions != nil {
-		return UsageObservabilityFilterOptions{}, errOptions
-	}
-	if options.StatusCodes, errOptions = usageObservabilityDistinctStatusCodes(ctx, db, query); errOptions != nil {
-		return UsageObservabilityFilterOptions{}, errOptions
-	}
-	return options, nil
-}
-
 func (r *Repository) GetUsageObservabilityPayloadSummary(ctx context.Context, id string) (*UsageObservabilityPayloadSummary, error) {
 	db, errDB := r.database()
 	if errDB != nil {
