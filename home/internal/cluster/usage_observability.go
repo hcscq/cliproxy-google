@@ -651,7 +651,26 @@ func (r *Repository) ListUsageObservabilityRecords(ctx context.Context, query Us
 		return UsageObservabilityRecordListResult{}, errCount
 	}
 
+	if total == 0 || int64(query.Offset) >= total {
+		return UsageObservabilityRecordListResult{Records: []UsageObservabilityRecord{}, Total: total}, nil
+	}
+
 	scope := usageObservabilityRecordScope(db.WithContext(contextOrBackground(ctx)).Table("usage"), query)
+	// When every filter is usage-only, page over usage alone first (cheap,
+	// index-friendly) and join related records only for the page's rows.
+	sortValue := strings.TrimSpace(query.Sort)
+	if !usageObservabilityRecordQueryDependenciesFor(query).requiresRelatedRecords() && sortValue != "cost_desc" && sortValue != "cost_asc" {
+		var ids []uint
+		idScope := usageObservabilityApplyRecordFilters(db.WithContext(contextOrBackground(ctx)).Table("usage"), query)
+		if errIDs := idScope.Select(`"usage"."id"`).Order(usageObservabilityRecordOrder(query.Sort)).Limit(query.Limit).Offset(query.Offset).Pluck("id", &ids).Error; errIDs != nil {
+			return UsageObservabilityRecordListResult{}, errIDs
+		}
+		if len(ids) == 0 {
+			return UsageObservabilityRecordListResult{Records: []UsageObservabilityRecord{}, Total: total}, nil
+		}
+		query.Offset = 0
+		scope = scope.Where(`"usage"."id" IN ?`, ids)
+	}
 	var rows []usageObservabilityRecordRow
 	if errFind := scope.Session(&gorm.Session{}).
 		Select(usageObservabilityRecordSelect()).
@@ -2411,8 +2430,8 @@ func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabili
 			"usage"."auth_index" IN ? OR
 			"usage"."api_key" IN ?)`,
 			matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher,
-			append(usageObservabilityResolveAuthKeys(scope, `"label" LIKE ?`, matcher), ""),
-			append(usageObservabilityResolveSearchAPIKeys(scope, matcher), ""))
+			usageObservabilityNonEmptyIn(usageObservabilityResolveAuthKeys(scope, `"label" LIKE ?`, matcher)),
+			usageObservabilityNonEmptyIn(usageObservabilityResolveSearchAPIKeys(scope, matcher)))
 	}
 	if search := strings.TrimSpace(query.RequestLogSearch); search != "" {
 		matcher := "%" + search + "%"
@@ -4592,4 +4611,20 @@ func derefUint(v *uint) uint {
 		return 0
 	}
 	return *v
+}
+
+// usageObservabilityNonEmptyIn drops empty values and, when nothing is left,
+// returns a sentinel that cannot match a real key (so IN () stays valid and
+// rows with an empty auth_index/api_key never match a search).
+func usageObservabilityNonEmptyIn(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, "\x01no-match\x01")
+	}
+	return out
 }
