@@ -881,7 +881,7 @@ func TestUnsupportedRefreshBackoffDoesNotBlockDispatch(t *testing.T) {
 		t.Fatal("unsupported refresh backoff blocked an otherwise dispatchable model")
 	}
 
-	NewManager(nil, nil, nil).applyResultTransition(auth, Result{AuthID: auth.ID, Model: "new-model", Success: true}, "new-model", now, false)
+	NewManager(nil, nil, nil).applyResultTransition(auth, Result{AuthID: auth.ID, Model: "new-model", Success: true}, "new-model", now, false, 0)
 	if auth.Unavailable || auth.RuntimeRefreshBlocked || RefreshBlocksDispatch(auth) {
 		t.Fatalf("successful result preserved an unsupported refresh as a dispatch block: %#v", auth)
 	}
@@ -1150,7 +1150,7 @@ func TestExecutionResultsPreserveNonBlockingRefreshDiagnostic(t *testing.T) {
 				Upstream:   &UpstreamResponse{Status: http.StatusServiceUnavailable, Body: body},
 			}
 			ApplyRefreshFailureState(auth, errRefresh, now)
-			NewManager(nil, nil, nil).applyResultTransition(auth, test.result, test.result.Model, now.Add(time.Second), false)
+			NewManager(nil, nil, nil).applyResultTransition(auth, test.result, test.result.Model, now.Add(time.Second), false, 0)
 
 			if auth.LastRefreshError == nil || auth.LastRefreshError.Code != refreshTransientErrorCode || auth.LastRefreshError.Diagnostic == "" || auth.LastRefreshError.Upstream == nil || string(auth.LastRefreshError.Upstream.Body) != string(body) {
 				t.Fatalf("LastRefreshError = %#v, want retained structured refresh diagnostic", auth.LastRefreshError)
@@ -1480,7 +1480,7 @@ func TestApplyResultTransitionPreservesRefreshAcquisitionState(t *testing.T) {
 				},
 			}
 
-			NewManager(nil, nil, nil).applyResultTransition(auth, test.result, test.result.Model, now, false)
+			NewManager(nil, nil, nil).applyResultTransition(auth, test.result, test.result.Model, now, false, 0)
 
 			if auth.Status != StatusError || !auth.Unavailable || auth.StatusMessage != providerMessage || auth.LastError == nil || auth.LastError.Code != refreshTransientErrorCode || auth.LastError.Message != providerMessage || !auth.NextRetryAfter.Equal(retryAt) {
 				t.Fatalf("result replaced refresh acquisition state: %#v", auth)

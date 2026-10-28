@@ -174,6 +174,12 @@ func (r *Runtime) handleQuotaSync(raw string) {
 	case "stall":
 		applied := coreauth.MarkStallBlocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS))
 		log.Debugf("stall block (remote): %s %s applied=%v", msg.AuthID, msg.Model, applied)
+	case "empty502":
+		if coreauth.MarkEmpty502Blocked(msg.AuthID, msg.Model, time.UnixMilli(msg.UntilMS)) {
+			quotaSyncApplied.Add(1)
+		}
+	case "empty502-clear":
+		coreauth.ClearEmpty502Block(msg.AuthID, msg.Model)
 	case "clear":
 		coreauth.ClearQuotaBlock(msg.AuthID, msg.Model)
 	case "hold":
@@ -187,6 +193,11 @@ func (r *Runtime) handleQuotaSync(raw string) {
 }
 
 func (r *Runtime) startQuotaSync(ctx context.Context) {
+	coreauth.SetEmpty502CoolNotify(func(authID, model string, until time.Time) {
+		publishQuotaSync(quotaSyncMsg{Kind: "empty502", AuthID: authID, Model: model, UntilMS: until.UnixMilli()})
+	}, func(authID, model string) {
+		publishQuotaSync(quotaSyncMsg{Kind: "empty502-clear", AuthID: authID, Model: model})
+	})
 	coreauth.QuotaBlockClearHook.Store(func(authID, model string) {
 		publishQuotaSync(quotaSyncMsg{Kind: "clear", AuthID: authID, Model: model})
 	})

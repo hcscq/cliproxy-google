@@ -45,6 +45,8 @@ type markResultTransition struct {
 	suspendReason      string
 	clearModelQuota    bool
 	setModelQuota      bool
+	empty502Entered    bool
+	empty502Cleared    bool
 }
 
 // MarkResult records a downstream execution result and updates auth cooldown state.
@@ -101,9 +103,10 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if localOnlyDisabledQuota {
 		localAvailabilityBefore = availabilityFingerprint(auth, resultModel)
 	}
+	empty502Streak := m.noteEmpty502Streak(resultAuthID, resultModel, result, disableCooling)
 	if stateMutator, ok := m.store.(StateMutator); ok {
 		stateMutatorAvailable = true
-		if m.resultNeedsGlobalTransition(auth, result, resultModel, now, disableCooling) {
+		if m.resultNeedsGlobalTransition(auth, result, resultModel, now, disableCooling, empty502Streak) {
 			mutator = stateMutator
 		}
 	}
@@ -111,7 +114,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	// transition rather than enqueue a stale row or read the database per success;
 	// cluster events reconcile any newer authoritative state.
 	if mutator == nil && !(stateMutatorAvailable && isTokenVersionedSuccessResult(result)) {
-		transition = m.applyResultTransition(auth, result, resultModel, now, disableCooling)
+		transition = m.applyResultTransition(auth, result, resultModel, now, disableCooling, empty502Streak)
 		if localOnlyDisabledQuota {
 			skipResultPersist = availabilityFingerprint(auth, resultModel) == localAvailabilityBefore
 		}
@@ -126,7 +129,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		persisted, errMutate := mutator.MutateAuthState(ctx, resultAuthID, func(persisted *Auth) bool {
 			before := availabilityFingerprint(persisted, resultModel)
 			baseVersion := persisted.StateVersion
-			transition = m.applyResultTransition(persisted, result, resultModel, now, disableCooling)
+			transition = m.applyResultTransition(persisted, result, resultModel, now, disableCooling, empty502Streak)
 			changed := availabilityFingerprint(persisted, resultModel) != before
 			if baseVersion > 0 {
 				transitionVersion = baseVersion
@@ -159,6 +162,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		}
 	}
 
+	m.applyEmpty502Scheduling(resultAuthID, resultModel, transition, authSnapshot)
 	m.RefreshSchedulerEntry(resultAuthID)
 	if authSnapshot != nil && authRefreshDisabled(authSnapshot) {
 		m.queueRefreshReschedule(authSnapshot.ID)
@@ -177,7 +181,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 // and reports the derived registry side effects. The auth may be the manager's
 // in-memory copy or a persisted copy loaded by a StateMutator; the function
 // uses the caller's captured cooling policy and does not read manager state.
-func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel string, now time.Time, disableCooling bool) markResultTransition {
+func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel string, now time.Time, disableCooling bool, empty502Streak int) markResultTransition {
 	transition := markResultTransition{}
 	if auth == nil {
 		return transition
@@ -193,6 +197,9 @@ func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel s
 	refreshRuntimeBlocked := auth.RuntimeRefreshBlocked
 
 	if result.Success {
+		if prev := auth.ModelStates[resultModel]; prev != nil && !prev.Quota.Exceeded && IsEmptyResponse502(prev) && prev.Unavailable && !prev.NextRetryAfter.IsZero() {
+			transition.empty502Cleared = true
+		}
 		state := ensureModelState(auth, resultModel)
 		resetModelState(state, now)
 		updateAggregatedAvailability(auth, now)
@@ -246,6 +253,20 @@ func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel s
 		state.NextRetryAfter = next
 		transition.suspendReason = "model_not_supported"
 		transition.shouldSuspendModel = true
+	} else if empty502Streak > 0 && resultIsEmptyResponse502(result.Error) {
+		// Status may live only on the upstream response (HTTPStatus 0). Counted
+		// empty 502s stay selectable until the streak threshold, then this model
+		// alone takes the configured short backoff.
+		if Empty502CoolingEnabled() && empty502Streak >= Empty502StreakThreshold() {
+			state.Unavailable = true
+			if !state.NextRetryAfter.After(now) {
+				state.NextRetryAfter = now.Add(Empty502Backoff())
+				transition.empty502Entered = true
+			}
+		} else {
+			state.NextRetryAfter = time.Time{}
+			state.Unavailable = false
+		}
 	} else {
 		switch statusCode {
 		case http.StatusUnauthorized:
@@ -325,9 +346,15 @@ func (m *Manager) applyResultTransition(auth *Auth, result Result, resultModel s
 // atomic across Home nodes. Unauthorized transitions must preserve credentials
 // that may be refreshed concurrently, while quota (429) and clearing successes
 // need shared availability state. Other failures stay on the local path.
-func (m *Manager) resultNeedsGlobalTransition(auth *Auth, result Result, resultModel string, now time.Time, disableCooling bool) bool {
+func (m *Manager) resultNeedsGlobalTransition(auth *Auth, result Result, resultModel string, now time.Time, disableCooling bool, empty502Streak int) bool {
 	if auth == nil {
 		return false
+	}
+	// Persist the empty-502 backoff on the shared row so every Home, and the
+	// usable count, stop selecting this (credential, model). Below the threshold
+	// there is nothing to write, so the request path takes no row lock.
+	if empty502NeedsPersist(auth, result, resultModel, now, disableCooling, empty502Streak) {
+		return true
 	}
 	if result.Success {
 		return authHasClearableAvailabilityState(auth, resultModel, now)
@@ -752,7 +779,10 @@ func updateAggregatedAvailability(auth *Auth, now time.Time) {
 		if state.Status == StatusDisabled {
 			stateUnavailable = true
 		} else if state.Unavailable {
-			if state.NextRetryAfter.IsZero() {
+			if IsEmptyResponse502(state) && !state.Quota.Exceeded && state.NextRetryAfter.After(now) {
+				// Empty-502 backoff is per model. It must not mark the credential unavailable.
+				stateUnavailable = false
+			} else if state.NextRetryAfter.IsZero() {
 				stateUnavailable = false
 			} else if state.NextRetryAfter.After(now) {
 				stateUnavailable = true

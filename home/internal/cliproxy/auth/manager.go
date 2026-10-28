@@ -139,6 +139,11 @@ type Manager struct {
 	resultPersistTimeout      time.Duration
 	resultPersistRetryBackoff time.Duration
 	cooldownFencePending      map[string]struct{}
+
+	// empty502 counts consecutive empty-body 502s per (credential, model).
+	// It is process-local: the persisted signal is model next_retry_after.
+	empty502Mu sync.Mutex
+	empty502   map[string]int
 }
 
 // NewManager creates a new manager.
@@ -237,6 +242,7 @@ func (m *Manager) SetConfig(cfg *internalconfig.Config) {
 	}
 	m.runtimeConfig.Store(cfg)
 	SetQuotaShortCooldown(cfg.QuotaShortCooldown())
+	SetEmpty502Policy(cfg.Empty502StreakThreshold(), cfg.Empty502Backoff())
 	if m.scheduler != nil {
 		m.scheduler.resetModelShards()
 	}
@@ -677,6 +683,7 @@ func (m *Manager) removeAuthLocked(authID string) {
 	delete(m.auths, authID)
 	loop := m.refreshLoop
 	m.mu.Unlock()
+	m.dropEmpty502Auth(authID)
 	if m.scheduler != nil {
 		m.scheduler.removeAuth(authID)
 	}

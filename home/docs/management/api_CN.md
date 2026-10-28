@@ -3965,6 +3965,8 @@ Query 参数：
 | `observability.usage.usage-statistics-enabled` | boolean | 启用内存 usage aggregation。Home 在 v8 写入及下游 CPA 配置中将其规范化为 `true`。 |
 | `observability.usage.redis-usage-queue-retention-seconds` | integer | Usage queue 保留窗口；默认 `60`，最大 `3600`。 |
 | `routing.cooldown.disable-cooling` | boolean | 全局禁用 Home 的请求错误及 quota cooldown 调度（402/403/404、408/500/502/503/504 和模型级 429）；仅在凭证/provider 未显式设置同名字段时生效。凭证/provider 的 `true` 或 `false` 均优先于全局值。HTTP 401 与 model-not-supported 的恢复逻辑不受影响。该值仅作用于 Home，会持久化并在重载时生效；发送给下游 CPA 的配置会独立强制为 `true`。 |
+| `routing.cooldown.empty-502-streak` | integer | 同一凭据对同一模型连续空响应 502 达到此次数后，只对该（凭据, 模型）设置短退避。判定与凭据模型筛选相同：HTTP 502 且 body 为空、状态文本为 `Bad Gateway`，或消息含 `empty response` / `no output`（状态只记在 upstream 响应上时同样算）。`0` 或省略为默认 `3`。负数关闭该功能，空 502 仍走普通瞬时 502 冷却。不会丢弃模型，也不会冷却该凭据的其他模型。 |
+| `routing.cooldown.empty-502-backoff-seconds` | integer | 达到次数后写入该（凭据, 模型）的 `next_retry_after`（秒）。本次请求改派到其他可用凭据。到期后的下一笔真实请求作为探测：成功则恢复可用，再次空 502 则重新退避。`0` 或省略为默认 `90`，有效范围 `5`..`3600`。 |
 | `oauth.auth-auto-refresh-workers` | integer | 覆盖 auth auto-refresh worker 数量。 |
 | `routing.retry.request-retry` | integer | 由 CPA 执行层使用：首轮凭证遍历因 HTTP 403、408、429、500、502、503 或 504 耗尽后允许的额外重试轮数。第 `0` 轮是首轮；第 `r` 个额外轮只允许有效 `request-retry` 至少为 `r` 的凭证。凭证/provider 的显式非负覆盖优先；未设置或负值继承全局值，显式 `0` 只允许第 `0` 轮。Home 返回的 `request_retry` 是当前候选集合的最大值，仅作为 CPA 请求级外层上限；每轮凭证资格由 Home 单独过滤。新的 CPA-to-Home RESP payload 在首轮显式携带 `retry_round: 0`，额外轮次依次递增，并排除当前轮已尝试凭证；未携带这些字段的旧 payload 为兼容旧 CPA，仍使用 count 上限。 |
 | `routing.retry.max-retry-credentials` | integer | 完成轮次过滤后，每个凭证重试轮最多尝试的不同凭证数；`<=0` 表示该轮尝试所有可用凭证。因该上限跳过的凭证仍按其有效重试窗口老化，因此该设置不保证每个凭证实际获得配置的重试次数。 |
@@ -4025,6 +4027,8 @@ Query 参数：
 | `routing.session-affinity-subagents` | optional boolean | CPA 的父会话凭证继承兼容选项；Home 继续管理自己的会话层级。 |
 | `routing.cooldown.save-cooldown-status` | boolean | CPA 兼容设置；Home 运行时冷却状态由数据库持久化。 |
 | `routing.cooldown.transient-error-cooldown-seconds` | integer | 随配置携带的 CPA 临时错误冷却设置。 |
+| `routing.cooldown.empty-502-streak` | integer | 连续空响应 502 达到此次数后，对（凭据, 模型）短退避。默认 `3`，负数关闭。详见上文。 |
+| `routing.cooldown.empty-502-backoff-seconds` | integer | 该对的退避秒数。默认 `90`，限制在 `5`..`3600`。 |
 | `oauth.providers.aistudio.ws-auth` | boolean | Home 规范化为 `false`。 |
 | `oauth.request-scoped-errors` | provider 到 rule array 的对象 | OAuth 请求级错误覆盖规则。 |
 | `upstream.codex.disable-codex-cloaking` | boolean | 不再强制注入 Codex OAuth 和 API Key 请求的官方身份请求头。 |
