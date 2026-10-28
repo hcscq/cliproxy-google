@@ -34,7 +34,7 @@ func TestStallCooldownScopedToModel(t *testing.T) {
 	a := &Auth{ID: "c1", Provider: "antigravity", Status: StatusActive}
 	cd := 45 * time.Second
 	m.applyResultTransition(a, Result{AuthID: "c1", Provider: "antigravity", Model: "gemini-3.8-flash-tiered", RetryAfter: &cd,
-		Error: &Error{HTTPStatus: http.StatusGatewayTimeout, Message: `{"error":{"code":504,"message":"3.8 慢: no first byte from upstream within 15s"}}`}}, "gemini-3.8-flash-tiered", now, false)
+		Error: &Error{HTTPStatus: http.StatusGatewayTimeout, Message: `{"error":{"code":504,"message":"3.8 慢: no first byte from upstream within 15s"}}`}}, "gemini-3.8-flash-tiered", now, false, 0)
 	st := a.ModelStates["gemini-3.8-flash-tiered"]
 	if st == nil || !st.Unavailable || st.NextRetryAfter.Sub(now) != cd {
 		t.Fatalf("tiered state: %+v", st)

@@ -77,42 +77,10 @@ func uncooledModelError(st *coreauth.ModelState, now time.Time) bool {
 	return true
 }
 
-// isEmptyResponse502 reports an empty upstream body surfaced as 502, including
-// the proxy message "upstream returned an empty response (no output)" and the
-// status text stored when the body itself is empty.
+// isEmptyResponse502 reports an empty upstream body surfaced as 502.
+// The predicate lives in cliproxy/auth so scheduling and this filter cannot drift.
 func isEmptyResponse502(st *coreauth.ModelState) bool {
-	if st == nil {
-		return false
-	}
-	status, msg := modelErrorParts(st)
-	if strings.TrimSpace(msg) == "" {
-		msg = st.StatusMessage
-	}
-	msg = strings.TrimSpace(msg)
-	lower := strings.ToLower(msg)
-	empty := msg == "" || strings.EqualFold(msg, http.StatusText(http.StatusBadGateway)) ||
-		strings.Contains(lower, "empty response") || strings.Contains(lower, "no output")
-	if status == http.StatusBadGateway && empty {
-		return true
-	}
-	return status == 0 && (strings.Contains(lower, "empty response") || strings.Contains(lower, "no output"))
-}
-
-func modelErrorParts(st *coreauth.ModelState) (int, string) {
-	if st == nil || st.LastError == nil {
-		return 0, ""
-	}
-	status := st.LastError.HTTPStatus
-	msg := st.LastError.Message
-	if st.LastError.Upstream != nil {
-		if status == 0 {
-			status = st.LastError.Upstream.Status
-		}
-		if strings.TrimSpace(msg) == "" {
-			msg = string(st.LastError.Upstream.Body)
-		}
-	}
-	return status, msg
+	return coreauth.IsEmptyResponse502(st)
 }
 
 // modelStateFor finds the per-model state for an id. The query is not

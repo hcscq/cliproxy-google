@@ -560,10 +560,10 @@ func TestResultRoutingAndTransitionUseCapturedDisableCooling(t *testing.T) {
 			},
 		}
 
-		if needsGlobal := manager.resultNeedsGlobalTransition(auth, result, model, now, true); needsGlobal {
+		if needsGlobal := manager.resultNeedsGlobalTransition(auth, result, model, now, true, 0); needsGlobal {
 			t.Fatal("captured disable-cooling result unexpectedly required a repeated global transition")
 		}
-		manager.applyResultTransition(auth, result, model, now, true)
+		manager.applyResultTransition(auth, result, model, now, true, 0)
 		state := auth.ModelStates[model]
 		if state.Unavailable || state.Quota.Exceeded || !state.NextRetryAfter.IsZero() || !state.Quota.NextRecoverAt.IsZero() {
 			t.Fatalf("captured disabled state = %#v, want dispatchable", state)
@@ -575,10 +575,10 @@ func TestResultRoutingAndTransitionUseCapturedDisableCooling(t *testing.T) {
 		manager.SetConfig(&config.Config{DisableCooling: true})
 		auth := &Auth{ID: result.AuthID, Index: result.AuthID, Provider: result.Provider, Status: StatusActive}
 
-		if needsGlobal := manager.resultNeedsGlobalTransition(auth, result, model, now, false); !needsGlobal {
+		if needsGlobal := manager.resultNeedsGlobalTransition(auth, result, model, now, false, 0); !needsGlobal {
 			t.Fatal("captured cooling-enabled result skipped its first global transition")
 		}
-		manager.applyResultTransition(auth, result, model, now, false)
+		manager.applyResultTransition(auth, result, model, now, false, 0)
 		state := auth.ModelStates[model]
 		if state == nil || !state.Unavailable || !state.Quota.Exceeded || !state.NextRetryAfter.After(now) || !state.Quota.NextRecoverAt.After(now) {
 			t.Fatalf("captured cooling-enabled state = %#v, want active quota cooldown", state)

@@ -273,6 +273,11 @@ type Config struct {
 	// QuotaShortCooldownSeconds is the fixed per-model cooldown for a 429 that carries no
 	// upstream reset hint (0 = env QUOTA_SHORT_COOLDOWN_SECONDS or 60).
 	QuotaShortCooldownSeconds int `yaml:"quota-short-cooldown-seconds" json:"quota-short-cooldown-seconds"`
+	// Empty502Streak is how many consecutive empty-body 502s on one (credential, model)
+	// start a short backoff. 0 uses the default (3). Negative disables the feature.
+	Empty502Streak int `yaml:"empty-502-streak" json:"empty-502-streak"`
+	// Empty502BackoffSeconds is that backoff. 0 uses the default (90). Clamped to 5..3600.
+	Empty502BackoffSeconds int `yaml:"empty-502-backoff-seconds" json:"empty-502-backoff-seconds"`
 	// QuotaProbeIntervalSeconds is how often the Home leader probes cooling (credential, model)
 	// pairs (0 = env QUOTA_PROBE_INTERVAL_SECONDS or 60).
 	QuotaProbeIntervalSeconds int `yaml:"quota-probe-interval-seconds" json:"quota-probe-interval-seconds"`
@@ -1809,6 +1814,38 @@ func (c *Config) QuotaShortCooldown() time.Duration {
 		return time.Duration(c.QuotaShortCooldownSeconds) * time.Second
 	}
 	return time.Duration(envSeconds("QUOTA_SHORT_COOLDOWN_SECONDS", 60)) * time.Second
+}
+
+// Empty502StreakThreshold is the consecutive empty-body 502 count that cools one
+// (credential, model). Zero in config means the default 3. Negative disables it.
+func (c *Config) Empty502StreakThreshold() int {
+	n := 3
+	if c != nil && c.Empty502Streak != 0 {
+		n = c.Empty502Streak
+	}
+	if n < 0 {
+		return 0
+	}
+	if n > 100 {
+		return 100
+	}
+	return n
+}
+
+// Empty502Backoff is the per-(credential, model) backoff after that streak.
+// Zero in config means 90s. Values are clamped to 5s..1h.
+func (c *Config) Empty502Backoff() time.Duration {
+	secs := 90
+	if c != nil && c.Empty502BackoffSeconds > 0 {
+		secs = c.Empty502BackoffSeconds
+	}
+	if secs < 5 {
+		secs = 5
+	}
+	if secs > 3600 {
+		secs = 3600
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // QuotaBucketReprobeInterval returns the re-probe interval for credentials whose quota

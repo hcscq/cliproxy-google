@@ -82,6 +82,8 @@ func buildV8Paths() []configPath {
 		{"disable-cooling", "routing.cooldown.disable-cooling"}, {"save-cooldown-status", "routing.cooldown.save-cooldown-status"},
 		{"transient-error-cooldown-seconds", "routing.cooldown.transient-error-cooldown-seconds"},
 		{"quota-short-cooldown-seconds", "routing.cooldown.quota-short-cooldown-seconds"},
+		{"empty-502-streak", "routing.cooldown.empty-502-streak"},
+		{"empty-502-backoff-seconds", "routing.cooldown.empty-502-backoff-seconds"},
 		{"quota-probe-interval-seconds", "routing.cooldown.quota-probe-interval-seconds"},
 		{"quota-probe-backoff", "routing.cooldown.quota-probe-backoff"},
 		{"quota-canary", "routing.cooldown.quota-canary"},

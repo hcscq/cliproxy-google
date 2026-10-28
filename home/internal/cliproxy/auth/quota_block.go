@@ -29,8 +29,16 @@ const (
 	canaryClaimed
 )
 
+const (
+	// blockReasonQuota is a 429 / canary block. Zero keeps older in-process blocks.
+	blockReasonQuota int = iota
+	blockReasonStall
+	blockReasonEmpty502
+)
+
 type quotaBlock struct {
 	until     time.Time
+	reason    int
 	canary    atomic.Int32
 	claimedAt atomic.Int64 // unix nanos
 }
@@ -84,7 +92,41 @@ func MarkStallBlocked(authID, model string, until time.Time) bool {
 	if prev, ok := quotaBlocks[key]; ok && prev.until.After(time.Now()) {
 		return false
 	}
-	setQuotaBlockLocked(key, &quotaBlock{until: until})
+	setQuotaBlockLocked(key, &quotaBlock{until: until, reason: blockReasonStall})
+	return true
+}
+
+// MarkEmpty502Blocked excludes (authID, model) until the empty-502 backoff ends.
+// A live quota block is left alone. A shorter non-quota block is extended.
+func MarkEmpty502Blocked(authID, model string, until time.Time) bool {
+	if strings.TrimSpace(authID) == "" || canonicalModelKey(model) == "" || !until.After(time.Now()) {
+		return false
+	}
+	key := quotaBlockKey(authID, model)
+	quotaBlockMu.Lock()
+	defer quotaBlockMu.Unlock()
+	if prev, ok := quotaBlocks[key]; ok && prev.until.After(time.Now()) {
+		if prev.reason == blockReasonQuota || !prev.until.Before(until) {
+			return false
+		}
+	}
+	setQuotaBlockLocked(key, &quotaBlock{until: until, reason: blockReasonEmpty502})
+	return true
+}
+
+// ClearEmpty502Block removes only an empty-502 fast block. Quota and stall blocks stay.
+func ClearEmpty502Block(authID, model string) bool {
+	if quotaBlockActive.Load() == 0 {
+		return false
+	}
+	key := quotaBlockKey(authID, model)
+	quotaBlockMu.Lock()
+	defer quotaBlockMu.Unlock()
+	prev, ok := quotaBlocks[key]
+	if !ok || prev.reason != blockReasonEmpty502 {
+		return false
+	}
+	deleteQuotaBlockLocked(key)
 	return true
 }
 
