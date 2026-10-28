@@ -337,8 +337,8 @@ tr.row-muted td { opacity: .62; }
 .mini-bar.removed > span { background: var(--err); }
 
 /* ---- scale: filters, selection, bulk ---- */
-.filter-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.filter-bar .select, .filter-bar .input { width: auto; min-width: 120px; max-width: 220px; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; max-width: 100%; }
+.filter-bar .select, .filter-bar .input { width: auto; min-width: min(120px, 100%); max-width: min(220px, 100%); }
 .selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); min-height: 40px; }
 .selection-bar.active { background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .modal-body .selection-bar, .drawer .selection-bar { border: 1px solid var(--border); border-radius: 8px; }
@@ -402,8 +402,12 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .reserve-chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .reserve-chip { border: 1px solid var(--border); background: var(--bg-sunken); color: var(--text-2); border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reserve-chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
-.filter-bar .select { width: auto; max-width: 112px; }
-.filter-bar .select.select-model { max-width: 240px; }
+.filter-bar .select { width: auto; max-width: min(112px, 100%); }
+/* Model id can be long; per-model state label stays short. Both shrink and wrap instead of overflowing the row. */
+.filter-bar .select.select-model,
+.filter-bar .select.select-model-status { min-width: 0; flex: 0 1 auto; max-width: 100%; }
+.filter-bar .select.select-model { max-width: min(180px, 100%); }
+.filter-bar .select.select-model-status { max-width: min(120px, 100%); }
 .quota-inline { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; white-space: nowrap; }
 .quota-inline .qseg { display: inline-flex; align-items: center; gap: 4px; }
 .quota-inline .qlabel { color: var(--text-2); }
