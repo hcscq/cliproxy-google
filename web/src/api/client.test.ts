@@ -22,6 +22,15 @@ describe('ApiClient', () => {
     expect(calls[0].init?.method).toBe('GET');
   });
 
+  it('passes model and model_status through credential search unchanged', async () => {
+    const { fn, calls } = mockFetch(200, { items: [], total: 0, all: 0, page: 1, page_size: 50, facets: {} });
+    const c = new ApiClient('k', { fetch: fn });
+    await c.searchCredentials({ model: 'gemini-4-argon-medium', model_status: 'error', page: 1, page_size: 50 });
+    expect(calls[0].url).toBe('/v8/management/credentials/search?model=gemini-4-argon-medium&model_status=error&page=1&page_size=50');
+    await c.searchCredentials({ model: '', model_status: undefined, q: 'a@b.c' });
+    expect(calls[1].url).toBe('/v8/management/credentials/search?q=a%40b.c');
+  });
+
   it('encodes query parameters and skips empty ones', async () => {
     const { fn, calls } = mockFetch(200, { items: [], total: 0, limit: 50, offset: 0 });
     const c = new ApiClient('k', { fetch: fn });

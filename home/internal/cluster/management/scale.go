@@ -98,6 +98,12 @@ type credFilter struct {
 	providers, statuses   map[string]bool
 	tiers                 map[string]bool // subscription tier buckets (credentialTierBucket)
 	exclude               uint            // credential group id whose effective members are excluded
+	// model is the catalog model id as given (trimmed only). modelStatus is
+	// ready|exhausted|cooling|error and applies only when model is set.
+	// modelQuota is auth id → cached catalog quota for that model.
+	model, modelStatus string
+	modelQuota         map[string]home.CatalogModelQuota
+	now                time.Time
 }
 
 func credFilterFromQuery(c *gin.Context) credFilter {
@@ -106,6 +112,8 @@ func credFilterFromQuery(c *gin.Context) credFilter {
 		tag: strings.ToLower(strings.TrimSpace(c.Query("tag"))), group: strings.TrimSpace(c.Query("group")),
 		providers: csvSet(c.Query("provider")), statuses: csvSet(c.Query("status")), tiers: csvSet(c.Query("tier")),
 		egress: strings.TrimSpace(c.Query("egress")),
+		// Keep the model id intact: trim only, no case fold, suffix strip, or truncation.
+		model: strings.TrimSpace(c.Query("model")), modelStatus: strings.ToLower(strings.TrimSpace(c.Query("model_status"))),
 	}
 	if v, err := strconv.ParseUint(c.Query("exclude_group"), 10, 64); err == nil {
 		f.exclude = uint(v)
@@ -158,6 +166,9 @@ func (f credFilter) match(a *coreauth.Auth, status string, groups []uint, exclud
 	if excluded != nil && excluded[a.ID] {
 		return false
 	}
+	if !f.modelMatch(a) {
+		return false
+	}
 	if f.q != "" {
 		hay := strings.ToLower(strings.Join([]string{a.ID, a.Label, email, noteFromAuth(a), prefixFromAuth(a), authFileName(a)}, " "))
 		if !strings.Contains(hay, f.q) {
@@ -177,6 +188,13 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		return
 	}
 	f := credFilterFromQuery(c)
+	now := time.Now()
+	f.now = now
+	if f.model != "" {
+		// One model's quota map, copied from the incremental catalog index.
+		// Credential state (cooldown / last error) is already on the auth row.
+		f.modelQuota = home.AntigravityModelCatalogQuotas(f.model)
+	}
 	groupsOf := snap.GroupsOfAuth()
 	var excluded map[string]bool
 	if f.exclude != 0 {
@@ -185,8 +203,10 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 			excluded[a] = true
 		}
 	}
-	now := time.Now()
-	facets := map[string]map[string]int{"provider": {}, "status": {}, "domain": {}, "tag": {}, "tier": {}}
+	facets := map[string]map[string]int{"provider": {}, "status": {}, "domain": {}, "tag": {}, "tier": {}, "model": credentialModelFacets()}
+	if f.model != "" {
+		facets["model_status"] = map[string]int{modelStateReady: 0, modelStateExhausted: 0, modelStateCooling: 0, modelStateError: 0}
+	}
 	var matched []*coreauth.Auth
 	statusOf := map[string]string{}
 	all := h.liveAuths(ctx)
@@ -218,6 +238,11 @@ func (h *Handler) SearchCredentials(c *gin.Context) {
 		}
 		for _, t := range cluster.CredentialTags(a) {
 			facets["tag"][t]++
+		}
+		if f.model != "" {
+			if q, ok := f.modelQuota[a.ID]; ok {
+				facets["model_status"][classifySupportedModel(q, modelStateFor(a, f.model), now)]++
+			}
 		}
 		fa := f
 		if seqQ > 0 && seqs[a.ID] == seqQ {

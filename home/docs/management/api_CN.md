@@ -173,6 +173,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/credentials/quota/providers` |
 | `POST` | `/credentials/quota/reset` |
 | `POST` | `/credentials/refresh` |
+| `GET` | `/credentials/search` |
 | `PATCH` | `/credentials/status` |
 | `GET` | `/model-group-details` |
 | `POST` | `/model-group-details` |
@@ -2075,6 +2076,26 @@ Thinking levels 会去除首尾空白、转小写并去重。`none` 启用零预
 | `websockets` | boolean | 实际生效的运行时 WebSocket 标志。 |
 | `disable-cooling` | boolean | 可选凭证级冷却覆盖。`true` 禁用冷却，`false` 显式启用；未设置时省略该字段并继承全局设置。 |
 | `request-retry` | integer | 可选凭证级额外重试轮次覆盖。`0` 禁用额外轮次；未设置时省略该字段并继承全局设置。 |
+
+### GET `/credentials/search`
+
+管理面板使用的分页凭证列表。原有筛选（`q`、`provider`、`status`、`health`、`tier`、`domain`、`tag`、`group`、`egress`、`exclude_group`）不变。
+
+`model` 与 `model_status` 按某一个目录模型筛选：
+
+| Query | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 否 | 目录中的模型 ID。只去掉首尾空白，不改大小写、不截断、不替换成别的模型；比较时忽略大小写。最新缓存的 Antigravity 目录列出该 ID 才算支持。以 `-disabled` 结尾的占位项不算。 |
+| `model_status` | string | 否 | `ready`（可用）、`exhausted`（额度用完）、`cooling`（冷却）或 `error`（错误）。未同时给出 `model` 时忽略。 |
+
+支持该模型时的状态，按下面顺序取第一个成立的：
+
+- `exhausted`：目录 `quotaInfo` 剩余比例 ≤ 0，且重置时间缺失或仍在未来（与储备模型容量的判断相同）。没有 `quotaInfo` 视为仍有剩余，不是额度用完。
+- `cooling`：`model_states` 将该模型标为不可用，且 `next_retry_after` 在未来。
+- `error`：模型当前不在冷却，并且最近一次失败是空响应 502（含 `upstream returned an empty response (no output)` 和空 body 记成的 `Bad Gateway`）且未处于冷却，或者模型状态为 `error` 但没有记录冷却截止时间。额度类失败不归到这里。
+- `ready`：目录列出该模型，且以上都不成立。
+
+`facets.model` 是模型 ID → 有多少份缓存目录列出它（还没有任何目录缓存时，退回静态 Antigravity 模型元数据，数量为 0）。带了 `model` 时响应包含 `facets.model_status`，为上述四种状态的数量。这些数量与其他 facets 一样，不会被其余筛选条件再缩小。模型列表和该模型的额度来自目录写入时维护的内存索引，搜索不会重新解析每一份目录原文。
 
 ### GET `/credentials/models?name=<name-or-id>`
 

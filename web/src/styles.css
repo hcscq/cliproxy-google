@@ -403,6 +403,7 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .reserve-chip { border: 1px solid var(--border); background: var(--bg-sunken); color: var(--text-2); border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reserve-chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .filter-bar .select { width: auto; max-width: 112px; }
+.filter-bar .select.select-model { max-width: 240px; }
 .quota-inline { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; white-space: nowrap; }
 .quota-inline .qseg { display: inline-flex; align-items: center; gap: 4px; }
 .quota-inline .qlabel { color: var(--text-2); }

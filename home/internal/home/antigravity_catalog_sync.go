@@ -319,13 +319,18 @@ func (r *Runtime) pruneCatalogState(auths []*coreauth.Auth) {
 	}
 	// Forget the in-memory catalog of removed/disabled credentials so a later
 	// re-enable fetches fresh instead of reusing a frozen model list.
+	var dropped []string
 	antigravityCatalogMu.Lock()
 	for id := range antigravityCatalog {
 		if _, ok := live[id]; !ok && !r.agCatalog.inFlight[id] {
 			delete(antigravityCatalog, id)
+			dropped = append(dropped, id)
 		}
 	}
 	antigravityCatalogMu.Unlock()
+	for _, id := range dropped {
+		forgetAntigravityModelCatalog(id)
+	}
 }
 
 // catalogDue decides whether the leader should fetch a credential's catalog.
@@ -565,6 +570,7 @@ func (r *Runtime) applyCatalogRow(authID string, row AntigravityCatalogRow) {
 	changed := !sameAntigravityCatalog(entry.models, models)
 	entry.models, entry.health, entry.fetchedAt = models, health, row.FetchedAt
 	antigravityCatalogMu.Unlock()
+	noteAntigravityModelCatalog(authID, health)
 	r.applyCatalogQuotaGroups(authID, health)
 	if changed && r.coreManager != nil {
 		if auth, ok := r.coreManager.GetByID(authID); ok && auth != nil {
