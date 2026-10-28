@@ -132,14 +132,14 @@ export function CredentialFilterBar({
         ))}
       </select>
       <select
-        className="select input-sm"
+        className="select input-sm select-model-status"
         value={value.model_status ?? ''}
         disabled={!value.model}
         title={value.model ? undefined : tr('先选择模型', 'Pick a model first')}
         onChange={(e) => set('model_status', e.target.value)}
         data-testid="cred-filter-model-status"
       >
-        <option value="">{value.model ? tr('该模型全部状态', 'Any state for this model') : tr('模型状态', 'Model state')}</option>
+        <option value="">{value.model ? tr('全部状态', 'All states') : tr('模型状态', 'Model state')}</option>
         {MODEL_STATUS_FILTER.map(([k, zh, en]) => (
           <option key={k} value={k}>
             {tr(zh, en)} ({facets?.model_status?.[k] ?? 0})
