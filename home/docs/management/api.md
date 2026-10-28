@@ -173,6 +173,7 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `GET` | `/credentials/quota/providers` |
 | `POST` | `/credentials/quota/reset` |
 | `POST` | `/credentials/refresh` |
+| `GET` | `/credentials/search` |
 | `PATCH` | `/credentials/status` |
 | `GET` | `/model-group-details` |
 | `POST` | `/model-group-details` |
@@ -2077,6 +2078,26 @@ the current value without downloading the credential JSON:
 | `websockets` | boolean | Effective runtime websocket flag. |
 | `disable-cooling` | boolean | Optional credential cooling override. `true` disables cooling, `false` explicitly enables it, and the field is omitted when unset so the credential inherits the global setting. |
 | `request-retry` | integer | Optional credential override for additional retry rounds. `0` disables additional rounds, and the field is omitted when unset so the credential inherits the global setting. |
+
+### GET `/credentials/search`
+
+Paged credential list used by the management panel. Existing filters (`q`, `provider`, `status`, `health`, `tier`, `domain`, `tag`, `group`, `egress`, `exclude_group`) are unchanged.
+
+`model` and `model_status` select credentials by one catalog model:
+
+| Query | Type | Required | Description |
+| --- | --- | --- | --- |
+| `model` | string | no | Catalog model id, matched case-insensitively after trimming. The value is not aliased, suffixed, or truncated. A credential matches when its latest cached Antigravity catalog lists that id. Keys ending in `-disabled` are placeholders and do not count. |
+| `model_status` | string | no | `ready`, `exhausted`, `cooling`, or `error`. Ignored unless `model` is set. |
+
+Status for a supported model, first match:
+
+- `exhausted` — catalog `quotaInfo` remaining fraction is ≤ 0 and the reset time is absent or still in the future (same rule as reserve model capacity). Missing `quotaInfo` counts as remaining, not exhausted.
+- `cooling` — `model_states` marks the model unavailable with `next_retry_after` in the future.
+- `error` — the model is not cooling, and either the latest failure is an empty-body 502 (including `upstream returned an empty response (no output)` and a bare `Bad Gateway`) that is not in cooldown, or model status is `error` and no cooldown deadline was recorded. Quota failures are not this bucket.
+- `ready` — the catalog lists the model and none of the above apply.
+
+`facets.model` maps model id → how many cached catalogs list it (static Antigravity model metadata, counts 0, when no catalog is cached yet). `facets.model_status` is included when `model` is set and counts the four statuses above. Like the other facets, those counts are not narrowed by the rest of the query. The model list and per-model quota come from the in-memory catalog index updated as catalogs are stored; search does not re-parse every catalog blob.
 
 ### GET `/credentials/models?name=<name-or-id>`
 

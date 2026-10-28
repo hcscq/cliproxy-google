@@ -1102,6 +1102,10 @@ export interface CredentialQuery {
   exclude_group?: number;
   /** pinned egress id */
   egress?: string;
+  /** catalog model id; credentials whose latest Antigravity catalog lists it */
+  model?: string;
+  /** ready | exhausted | cooling | error; applied with model */
+  model_status?: string;
   /** created (default, newest first) | name | status | quota | last_used | egress */
   sort?: CredentialSortKey;
   order?: 'asc' | 'desc';
@@ -1124,7 +1128,7 @@ export interface CredentialSearch {
   all: number;
   page: number;
   page_size: number;
-  facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>> & { health?: Record<string, number>; tier?: Record<string, number> };
+  facets: Record<'provider' | 'status' | 'domain' | 'tag', Record<string, number>> & { health?: Record<string, number>; tier?: Record<string, number>; model?: Record<string, number>; model_status?: Record<string, number> };
 }
 export type BulkCredentialAction = 'enable' | 'disable' | 'reserve' | 'unreserve' | 'add_tags' | 'remove_tags' | 'set_tags' | 'add_to_group' | 'remove_from_group';
 export interface BulkResult {

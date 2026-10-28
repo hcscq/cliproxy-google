@@ -69,9 +69,11 @@ function facetOptions(f?: Record<string, number>) {
   return Object.entries(f ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-/** Search + provider / status / domain / tag / group filters (server-side). */
+/** Search + provider / status / model / domain / tag / group filters (server-side). */
 // Subscription tier buckets (Home credentialTierBucket), best first.
 const TIER_FILTER = [['ultra', 'Ultra', 'Ultra'], ['pro', 'Pro', 'Pro'], ['free', 'Free', 'Free'], ['other', '其他', 'Other'], ['unknown', '未检测', 'Unknown']] as const;
+// Per-model availability (Home classifySupportedModel).
+const MODEL_STATUS_FILTER = [['ready', '可用', 'Ready'], ['exhausted', '额度用完', 'Exhausted'], ['cooling', '冷却', 'Cooling'], ['error', '错误', 'Error']] as const;
 
 export function CredentialFilterBar({
   value,
@@ -93,8 +95,14 @@ export function CredentialFilterBar({
     if ((value.q ?? '') !== debounced) onChange({ ...value, q: debounced || undefined });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debounced]);
-  const set = (k: keyof CredentialQuery, v: string) => onChange({ ...value, [k]: v || undefined });
-  const active = ['provider', 'status', 'health', 'tier', 'domain', 'tag', 'group'].filter((k) => value[k as keyof CredentialQuery]).length + (value.q ? 1 : 0);
+  const set = (k: keyof CredentialQuery, v: string) => {
+    const next = { ...value, [k]: v || undefined };
+    if (k === 'model' && !v) next.model_status = undefined;
+    onChange(next);
+  };
+  const active = ['provider', 'status', 'health', 'tier', 'domain', 'tag', 'group', 'model', 'model_status'].filter((k) => value[k as keyof CredentialQuery]).length + (value.q ? 1 : 0);
+  const modelOptions = facetOptions(facets?.model);
+  const modelKnown = !value.model || modelOptions.some(([k]) => k === value.model);
   return (
     <div className="filter-bar" data-testid="cred-filter-bar">
       <input className="input input-sm" style={{ width: 200 }} placeholder={tr('搜索邮箱 / 名称 / ID / 备注', 'Search email / name / id / note')} value={text} onChange={(e) => setText(e.target.value)} data-testid="cred-filter-q" />
@@ -111,6 +119,30 @@ export function CredentialFilterBar({
         {(['ok', 'cooling', 'error', 'disabled', 'reserve'] as const).map((s) => (
           <option key={s} value={s}>
             {tr(STATE_LABEL[s][0], STATE_LABEL[s][1])} ({facets?.status?.[s] ?? 0})
+          </option>
+        ))}
+      </select>
+      <select className="select input-sm select-model" value={value.model ?? ''} onChange={(e) => set('model', e.target.value)} data-testid="cred-filter-model">
+        <option value="">{tr('全部模型', 'All models')}</option>
+        {value.model && !modelKnown && <option value={value.model}>{value.model}</option>}
+        {modelOptions.map(([k, n]) => (
+          <option key={k} value={k}>
+            {k} ({n})
+          </option>
+        ))}
+      </select>
+      <select
+        className="select input-sm"
+        value={value.model_status ?? ''}
+        disabled={!value.model}
+        title={value.model ? undefined : tr('先选择模型', 'Pick a model first')}
+        onChange={(e) => set('model_status', e.target.value)}
+        data-testid="cred-filter-model-status"
+      >
+        <option value="">{value.model ? tr('该模型全部状态', 'Any state for this model') : tr('模型状态', 'Model state')}</option>
+        {MODEL_STATUS_FILTER.map(([k, zh, en]) => (
+          <option key={k} value={k}>
+            {tr(zh, en)} ({facets?.model_status?.[k] ?? 0})
           </option>
         ))}
       </select>
