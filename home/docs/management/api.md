@@ -123,6 +123,8 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `POST` | `/billing/balance-records/recharge` |
 | `GET` | `/billing/charges` |
 | `GET` | `/billing/daily` |
+| `GET` | `/billing/daily/settings` |
+| `PUT` | `/billing/daily/settings` |
 | `GET` | `/billing/model-prices` |
 | `POST` | `/billing/model-prices` |
 | `DELETE` | `/billing/model-prices/:id` |
@@ -1487,29 +1489,31 @@ Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` par
 
 Unsupported timezone names return `400 invalid_timezone`. A `from` value after `to` returns `400 invalid_time_range`.
 
-`GET /billing/daily` is separate from the ledger above. It estimates gemini-4 spend from a read-only new-api Postgres database and does not follow `report_timezone` or reprice `billing_charge` rows.
+`GET /billing/daily` is separate from the ledger above. It estimates all-model spend by subscription tier from a read-only new-api Postgres database and does not follow `report_timezone` or reprice `billing_charge` rows. `GET` and `PUT /billing/daily/settings` store the optional per-credential cost basis used for gross profit. That basis is not part of the user ledger.
 
 ### GET `/billing/daily`
 
-Estimated gemini-4 billing for the management panel. new-api `logs` are the billing authority (`type = 2` is a successful charge; `type = 5` is an error and is not billed). CPA `usage` is the tier authority (`auth_index` joined to `auth.uuid`, tier from `auth_json.metadata.subscription_tier`). new-api does not store the CPA tier, so pro and ultra figures are an estimate: each calendar day's share of successful CPA `total_tokens` is applied to that day's new-api requests, tokens, quota, and USD. USD is `quota / quota_per_unit`. `group_ratio` is reported and is not applied again, because new-api quota already includes it.
+Estimated billing for the management panel, grouped by subscription tier and then by model. new-api `logs` are the billing authority (`type = 2` is a successful charge; `type = 5` is an error and is not billed). Every successful charge is included unless `model-prefix`, `models`, `model-exclude`, or a channel filter is set. CPA `usage` is the tier authority (`auth_index` joined to `auth.uuid`, tier from `auth_json.metadata.subscription_tier`). new-api does not store the CPA tier, so pro, ultra, and other figures are an estimate: each calendar day's share of successful CPA `total_tokens` is applied to that day's new-api requests, tokens, quota, and USD with the largest-remainder method so the integer parts still sum to the new-api totals. USD is `quota / quota_per_unit`. `group_ratio` is reported and is not applied again, because new-api quota already includes it.
+
+When a cost basis is configured, each tier's estimated cost for a day is `active credentials × daily unit`. Active credentials are the distinct CPA `auth_index` values with a successful request that day (the same aggregate as the token share, not a row-by-row scan). The daily unit is the per-credential daily cost when that is greater than zero; otherwise it is the per-credential monthly cost divided by `cost-month-days`, or by the calendar length of that day when `cost-month-days` is 0. Gross profit is estimated USD minus that cost. Gross margin is profit / USD and is omitted when USD is 0. A zero cost basis omits the cost fields. Range-level `active_credentials` and `active_credential_days` are the sum of the daily distinct counts (credential-days), not distinct credentials across the range. Days with CPA activity but no new-api rows are included so their cost is not dropped; days with neither are omitted.
 
 When the new-api database is not configured the route returns `200` with `configured: false` and `message: "未配置 new-api 数据源"`. A configured database that cannot be reached returns `503 new_api_unavailable`. Query failures return `500 daily_billing_failed`. The response never includes the database password or DSN.
 
 Date parameters are `YYYY-MM-DD` in `timezone` (IANA, default `UTC`, or `new-api.timezone` when the query omits it). `from` and `to` are inclusive calendar dates. Omitted bounds default to yesterday through today. The range may be at most 93 days. `from` after `to`, a bad date, or a longer range returns `400 invalid_time_range`. A bad timezone returns `400 invalid_timezone`.
 
-Aggregates run in SQL. CPA does not create indexes on the new-api database. If the daily query is slow, the new-api owner can add:
+Aggregates run in SQL (new-api groups by day and `model_name`; CPA groups by day and tier and counts `DISTINCT auth_index`). CPA does not create indexes on the new-api database. If the daily query is slow, the new-api owner can add:
 
 ```sql
 CREATE INDEX CONCURRENTLY IF NOT EXISTS logs_daily_billing_idx
-  ON logs (channel_id, type, created_at)
-  INCLUDE (model_name, prompt_tokens, completion_tokens, quota);
+  ON logs (type, created_at)
+  INCLUDE (channel_id, model_name, prompt_tokens, completion_tokens, quota);
 ```
 
 On the CPA database, `auth.uuid` is already the primary key. A partial usage index is optional because `usage` is partitioned:
 
 ```sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS usage_gemini4_billing_idx
-  ON usage (timestamp, model)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS usage_daily_billing_idx
+  ON usage (timestamp)
   WHERE failed = false;
 ```
 
@@ -1530,18 +1534,26 @@ new-api:
   sslmode: "disable"
   quota-per-unit: 500000
   group-ratio: 0.3
-  channel-id: 59
+  # channel-id: 59
+  # channel-ids: [59, 60]
   timezone: "UTC"
-  model-prefix: "gemini-4-argon"
-  model-exclude: "-disabled"
+  # model-prefix: "gemini-4-argon"
+  # model-exclude: "-disabled"
   created-at: "unix" # unix | unix_ms | timestamptz
   pro-tier: "g1-pro-tier"
   ultra-tier: "g1-ultra-tier"
   success-type: 2
-  # models: ["gemini-4-argon", "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]
+  # models: ["gemini-4-argon", "gemini-4-argon-high"]
+  # pro-monthly-cost: 20
+  # ultra-monthly-cost: 200
+  # other-monthly-cost: 0
+  # pro-daily-cost: 0
+  # ultra-daily-cost: 0
+  # other-daily-cost: 0
+  # cost-month-days: 0
 ```
 
-`created-at` defaults to `unix` because new-api stores `logs.created_at` as Unix seconds. `channel-id: 0` disables the channel filter. An explicit `models` list replaces `model-prefix`. The connection is opened read-only (`default_transaction_read_only=on`, statement timeout 25s) and is not migrated.
+`created-at` defaults to `unix` because new-api stores `logs.created_at` as Unix seconds. `channel-id: 0` and an empty `channel-ids` list count every channel. A non-empty `channel-ids` list replaces `channel-id`. An empty `model-prefix` and empty `models` count every model; an explicit `models` list replaces `model-prefix`. `model-exclude` is off unless set. Cost fields default to 0, which hides cost and margin. The panel override (`PUT /billing/daily/settings`) is stored in `kv_store` and replaces these cost fields for later reports; it does not change the DSN. The connection is opened read-only (`default_transaction_read_only=on`, statement timeout 25s, `MaxOpenConns` 4) and is not migrated.
 
 | Environment variable | Meaning | Default |
 | --- | --- | --- |
@@ -1554,15 +1566,23 @@ new-api:
 | `NEW_API_DB_SSLMODE` | `sslmode`. | `disable` |
 | `NEW_API_QUOTA_PER_UNIT` | USD divisor. | `500000` |
 | `NEW_API_GROUP_RATIO` | Billing-group ratio shown on the report. | `0.3` |
-| `NEW_API_CHANNEL_ID` | `logs.channel_id` filter. `0` means all channels. | `59` |
+| `NEW_API_CHANNEL_ID` | Single `logs.channel_id` filter. `0` means all channels. Clears `channel-ids` from the file. | `0` |
+| `NEW_API_CHANNEL_IDS` | Comma-separated channel ids. Replaces `NEW_API_CHANNEL_ID`. | empty |
 | `NEW_API_BILLING_TIMEZONE` | Default reporting timezone. | `UTC` |
-| `NEW_API_MODEL_PREFIX` | Model name prefix. | `gemini-4-argon` |
+| `NEW_API_MODEL_PREFIX` | Model name prefix. Empty counts every model. | empty |
 | `NEW_API_MODELS` | Comma-separated exact model names. Replaces the prefix. | empty |
-| `NEW_API_MODEL_EXCLUDE` | Suffix excluded from the prefix match. | `-disabled` |
+| `NEW_API_MODEL_EXCLUDE` | Substring excluded from the model match. Empty disables it. | empty |
 | `NEW_API_CREATED_AT` | `unix`, `unix_ms`, or `timestamptz`. | `unix` |
 | `NEW_API_PRO_TIER` | CPA metadata tier id counted as pro. | `g1-pro-tier` |
 | `NEW_API_ULTRA_TIER` | CPA metadata tier id counted as ultra. | `g1-ultra-tier` |
 | `NEW_API_SUCCESS_TYPE` | new-api log type that is billed. | `2` |
+| `NEW_API_PRO_MONTHLY_COST` | USD per pro credential per month. `0` unsets it. | `0` |
+| `NEW_API_ULTRA_MONTHLY_COST` | USD per ultra credential per month. | `0` |
+| `NEW_API_OTHER_MONTHLY_COST` | USD per other credential per month. | `0` |
+| `NEW_API_PRO_DAILY_COST` | USD per pro credential per day. Overrides the monthly figure when greater than 0. | `0` |
+| `NEW_API_ULTRA_DAILY_COST` | USD per ultra credential per day. | `0` |
+| `NEW_API_OTHER_DAILY_COST` | USD per other credential per day. | `0` |
+| `NEW_API_COST_MONTH_DAYS` | Divisor for monthly costs. `0` uses each day's calendar month length (28–31). | `0` |
 
 The source is configured when `NEW_API_DATABASE_DSN` / `postgres-uri` is set, or when both host and database are set. Otherwise the panel shows the unconfigured message.
 
@@ -1586,11 +1606,28 @@ Response fields:
 | `timezone` | string | Timezone used for day buckets. |
 | `quota_per_unit` | number | Divisor used for USD. |
 | `group_ratio` | number | Configured billing-group ratio. Not multiplied into USD. |
-| `channel_id` | integer | Channel filter. `0` means no filter. |
+| `channel_id` | integer | Single channel filter. `0` means no single-id filter. |
+| `channel_ids` | integer[] | Present when more than one channel is filtered. |
+| `model_prefix` / `models` / `model_exclude` | string or string[] | Active model filter. Omitted when that filter is off. |
+| `cost_configured` | boolean | True when any tier has a positive monthly or daily cost. |
+| `cost_note` | string | Present when `cost_configured` is true. |
+| `cost_source` | string | `panel` when a saved override is in effect, otherwise `config`. |
+| `cost_settings` | object | Effective `pro_monthly_cost`, `ultra_monthly_cost`, `other_monthly_cost`, `pro_daily_cost`, `ultra_daily_cost`, `other_daily_cost`, and `month_days`. |
 | `discrepancy` | object | `new_api_success_requests`, `cpa_success_requests`, and `difference` (new-api minus CPA) over the whole range. |
-| `totals` | object | Requests, prompt and completion tokens, quota, USD, per-tier quota and USD, and `pro_ratio` (pro quota / quota). |
-| `days[]` | array | One object per day that has new-api rows: `tier_shares`, `unallocated`, both success counts, `rows[]`, and `totals`. |
-| `days[].rows[]` | array | `tier` (`pro`, `ultra`, `other`), `model`, `requests`, `prompt_tokens`, `completion_tokens`, `quota`, `usd`. |
+| `totals` | object | Requests, prompt and completion tokens, quota, USD, per-tier quota and USD, and `pro_ratio` (pro quota / quota). Flat totals stay for older clients. |
+| `tiers[]` | array | Range rollup for `pro`, `ultra`, and `other`: requests, tokens, quota, `usd`, `active_credentials`, `active_credential_days`, and `models[]`. When `cost_configured` is true, also `daily_unit_usd` (days only), `cost_usd`, `gross_profit_usd`, and `gross_margin` (omitted when USD is 0). |
+| `tiers[].models[]` | array | One row per `model_name`: `model`, `requests`, `prompt_tokens`, `completion_tokens`, `quota`, `usd`. |
+| `days[]` | array | One object per day that has new-api rows or CPA tier rows: `tier_shares`, `unallocated`, both success counts, `rows[]`, `tiers[]`, and `totals`. |
+| `days[].rows[]` | array | Flat `tier` (`pro`, `ultra`, `other`) × `model` rows. Same numbers as `days[].tiers[].models`, kept so older clients still read a table. |
+| `days[].tiers[]` | array | That day's tier rollup, including `active_credentials` for the day and per-model lines. |
+
+### GET `/billing/daily/settings`
+
+Returns the effective cost basis: the panel override when one has been saved, otherwise the `cluster.yaml` / environment values. `source` is `panel` or `config`. `cost_configured` is false when every cost is 0. The new-api password is not included.
+
+### PUT `/billing/daily/settings`
+
+Replaces the panel cost basis. Body fields match `cost_settings`. Omitted numbers are 0. Negative numbers, non-finite numbers, and `month_days` outside 0–31 return `400 invalid_cost` or `400 invalid_body`. The value is stored in `kv_store` under `management/daily-billing/cost` with no expiry and no schema change. Saving all zeros clears the displayed cost columns and still counts as a panel override. A database write failure returns `500 daily_billing_cost_failed`.
 
 ### GET `/billing/overview`
 

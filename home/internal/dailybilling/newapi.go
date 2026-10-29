@@ -3,6 +3,7 @@ package dailybilling
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -12,11 +13,11 @@ import (
 )
 
 // Recommended new-api index. CPA does not create it; the database is read-only.
-// The aggregate filters channel, billed type, and created_at, then groups model_name.
+// The aggregate filters billed type and created_at, optionally channel, then groups model_name.
 //
 //	CREATE INDEX CONCURRENTLY IF NOT EXISTS logs_daily_billing_idx
-//	  ON logs (channel_id, type, created_at)
-//	  INCLUDE (model_name, prompt_tokens, completion_tokens, quota);
+//	  ON logs (type, created_at)
+//	  INCLUDE (channel_id, model_name, prompt_tokens, completion_tokens, quota);
 
 const newAPILogSQL = `
 SELECT
@@ -77,13 +78,10 @@ func queryNewAPILogs(ctx context.Context, db *gorm.DB, cfg Config, query Query) 
 	}
 	cfg = cfg.normalized()
 	dayExpr, fromArg, toArg := createdAtBounds(cfg, query)
-	channelSQL := ""
+	channelSQL, channelArgs := channelClause(cfg)
 	predicate, predArgs := modelPredicate("model_name", cfg)
 	args := []any{query.Timezone, cfg.SuccessType, fromArg, toArg}
-	if cfg.ChannelID != 0 {
-		channelSQL = "AND channel_id = ?"
-		args = append(args, cfg.ChannelID)
-	}
+	args = append(args, channelArgs...)
 	args = append(args, predArgs...)
 	var scanned []logScan
 	statement := fmt.Sprintf(newAPILogSQL, dayExpr, channelSQL, predicate)
@@ -103,6 +101,24 @@ func queryNewAPILogs(ctx context.Context, db *gorm.DB, cfg Config, query Query) 
 		})
 	}
 	return rows, nil
+}
+
+func channelClause(cfg Config) (string, []any) {
+	ids := cfg.channelIDs()
+	switch len(ids) {
+	case 0:
+		return "", nil
+	case 1:
+		return "AND channel_id = ?", []any{ids[0]}
+	default:
+		placeholders := make([]string, len(ids))
+		args := make([]any, len(ids))
+		for i, id := range ids {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		return "AND channel_id IN (" + strings.Join(placeholders, ",") + ")", args
+	}
 }
 
 func createdAtBounds(cfg Config, query Query) (dayExpr string, fromArg, toArg any) {

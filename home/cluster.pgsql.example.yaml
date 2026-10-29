@@ -59,16 +59,24 @@ node:
 # Environment variables override this file. NEW_API_DATABASE_DSN replaces the URI.
 # NEW_API_DB_HOST, NEW_API_DB_PORT, NEW_API_DB_USER, NEW_API_DB_PASSWORD,
 # NEW_API_DB_NAME, and NEW_API_DB_SSLMODE override the individual fields.
-# NEW_API_QUOTA_PER_UNIT (500000), NEW_API_GROUP_RATIO (0.3), NEW_API_CHANNEL_ID (59),
-# NEW_API_BILLING_TIMEZONE, NEW_API_MODEL_PREFIX, NEW_API_MODELS, NEW_API_CREATED_AT,
-# NEW_API_PRO_TIER, and NEW_API_ULTRA_TIER override the matching knobs.
+# NEW_API_QUOTA_PER_UNIT (500000), NEW_API_GROUP_RATIO (0.3), NEW_API_CHANNEL_ID (0 = all),
+# NEW_API_CHANNEL_IDS, NEW_API_BILLING_TIMEZONE, NEW_API_MODEL_PREFIX (empty = all models),
+# NEW_API_MODELS, NEW_API_MODEL_EXCLUDE, NEW_API_CREATED_AT, NEW_API_PRO_TIER, NEW_API_ULTRA_TIER,
+# NEW_API_PRO_MONTHLY_COST, NEW_API_ULTRA_MONTHLY_COST, NEW_API_OTHER_MONTHLY_COST,
+# NEW_API_PRO_DAILY_COST, NEW_API_ULTRA_DAILY_COST, NEW_API_OTHER_DAILY_COST,
+# and NEW_API_COST_MONTH_DAYS override the matching knobs. Cost defaults to 0 (billing only).
+# The panel can replace the cost numbers; that override is stored in kv_store.
 # The connection is forced read-only. Passwords are not logged.
 #
 # new-api:
 #   postgres-uri: "postgresql://readonly:secret@127.0.0.1:5432/new-api?sslmode=disable"
 #   quota-per-unit: 500000
 #   group-ratio: 0.3
-#   channel-id: 59
+#   # channel-id: 0
+#   # channel-ids: [59]
 #   timezone: "UTC"
-#   model-prefix: "gemini-4-argon"
+#   # model-prefix: ""
+#   # pro-monthly-cost: 0
+#   # ultra-monthly-cost: 0
+#   # cost-month-days: 0
 #   created-at: "unix"

@@ -2,6 +2,7 @@ package dailybilling
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,9 +10,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestCPAQueryAggregatesByDayAndTier(t *testing.T) {
-	t.Parallel()
-
+func openBillingFixture(t *testing.T) *gorm.DB {
+	t.Helper()
 	db, errOpen := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if errOpen != nil {
 		t.Fatal(errOpen)
@@ -45,12 +45,20 @@ func TestCPAQueryAggregatesByDayAndTier(t *testing.T) {
 			t.Fatal(errExec)
 		}
 	}
+	return db
+}
 
+func TestCPAQueryAggregatesByDayAndTier(t *testing.T) {
+	t.Parallel()
+
+	db := openBillingFixture(t)
 	query, errRange := ResolveRange(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC), "2026-10-27", "2026-10-28", "UTC")
 	if errRange != nil {
 		t.Fatal(errRange)
 	}
-	rows, errQuery := queryCPATiers(context.Background(), db, Config{}.normalized(), query)
+	// The prefix filter is opt-in. This fixture keeps the old gemini-4 boundary.
+	cfg := Config{ModelPrefix: "gemini-4-argon", ModelExclude: "-disabled"}.normalized()
+	rows, errQuery := queryCPATiers(context.Background(), db, cfg, query)
 	if errQuery != nil {
 		t.Fatal(errQuery)
 	}
@@ -78,5 +86,57 @@ func TestCPAQueryAggregatesByDayAndTier(t *testing.T) {
 	}
 	if len(got) != 5 {
 		t.Fatalf("groups = %+v", got)
+	}
+}
+
+func TestCPAQueryDefaultsToAllModels(t *testing.T) {
+	t.Parallel()
+
+	db := openBillingFixture(t)
+	query, errRange := ResolveRange(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC), "2026-10-27", "2026-10-28", "UTC")
+	if errRange != nil {
+		t.Fatal(errRange)
+	}
+	rows, errQuery := queryCPATiers(context.Background(), db, Config{}.normalized(), query)
+	if errQuery != nil {
+		t.Fatal(errQuery)
+	}
+	got := map[string]TierRow{}
+	for _, row := range rows {
+		got[row.Day+"/"+row.Tier] = row
+	}
+	// gemini-3-flash and the disabled variant are included. Distinct auth_index is the active count.
+	if row := got["2026-10-27/"+TierPro]; row.Requests != 2 || row.TotalTokens != 5700 || row.ActiveCredentials != 1 {
+		t.Fatalf("day1 pro = %+v", row)
+	}
+	if row := got["2026-10-27/"+TierUltra]; row.Requests != 1 || row.TotalTokens != 300 || row.ActiveCredentials != 1 {
+		t.Fatalf("day1 ultra = %+v", row)
+	}
+	if row := got["2026-10-28/"+TierPro]; row.Requests != 2 || row.TotalTokens != 150 || row.ActiveCredentials != 1 {
+		t.Fatalf("day2 pro = %+v", row)
+	}
+	if row := got["2026-10-28/"+TierOther]; row.Requests != 2 || row.TotalTokens != 49 || row.ActiveCredentials != 2 {
+		t.Fatalf("day2 other = %+v", row)
+	}
+}
+
+func TestModelPredicateAndChannelClause(t *testing.T) {
+	t.Parallel()
+
+	sqlText, args := modelPredicate("model_name", Config{}.normalized())
+	if sqlText != "TRUE" || len(args) != 0 {
+		t.Fatalf("default predicate = %s %v", sqlText, args)
+	}
+	clause, channelArgs := channelClause(Config{}.normalized())
+	if clause != "" || len(channelArgs) != 0 {
+		t.Fatalf("default channel = %s %v", clause, channelArgs)
+	}
+	clause, channelArgs = channelClause(Config{ChannelIDs: []int{60, 59, 59, 0}}.normalized())
+	if clause != "AND channel_id IN (?,?)" || len(channelArgs) != 2 || channelArgs[0] != 59 || channelArgs[1] != 60 {
+		t.Fatalf("channel list = %s %v", clause, channelArgs)
+	}
+	sqlText, args = modelPredicate("u.model", Config{Models: []string{"gemini-4-argon", "gemini-3-flash"}, ModelExclude: "-disabled"}.normalized())
+	if !strings.Contains(sqlText, "IN (?,?)") || !strings.Contains(sqlText, "NOT LIKE") || len(args) != 3 {
+		t.Fatalf("model list = %s %v", sqlText, args)
 	}
 }

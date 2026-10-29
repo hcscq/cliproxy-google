@@ -20,6 +20,16 @@ describe('ApiClient', () => {
     expect(calls[0].url).toBe('/v8/management/billing/daily?from=2026-10-28&to=2026-10-29&timezone=Asia%2FShanghai');
   });
 
+  it('saves the daily billing cost basis', async () => {
+    const { fn, calls } = mockFetch(200, { pro_monthly_cost: 20, ultra_monthly_cost: 0, other_monthly_cost: 0, pro_daily_cost: 0, ultra_daily_cost: 0, other_daily_cost: 0, month_days: 0, source: 'panel', cost_configured: true });
+    const c = new ApiClient('k', { fetch: fn });
+    const saved = await c.updateDailyBillingCost({ pro_monthly_cost: 20, ultra_monthly_cost: 0, other_monthly_cost: 0, pro_daily_cost: 0, ultra_daily_cost: 0, other_daily_cost: 0, month_days: 0 });
+    expect(saved.source).toBe('panel');
+    expect(calls[0].url).toBe('/v8/management/billing/daily/settings');
+    expect(calls[0].init?.method).toBe('PUT');
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({ pro_monthly_cost: 20, month_days: 0 });
+  });
+
   it('sends bearer key and parses JSON', async () => {
     const { fn, calls } = mockFetch(200, { files: [] });
     const c = new ApiClient('secret', { fetch: fn });

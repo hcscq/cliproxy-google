@@ -258,6 +258,8 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/request-logs", handler.ListRequestLogs)
 	r.Set(http.MethodGet, "/billing/overview", handler.GetBillingOverview)
 	r.Set(http.MethodGet, "/billing/daily", handler.GetDailyBilling)
+	r.Set(http.MethodGet, "/billing/daily/settings", handler.GetDailyBillingSettings)
+	r.Set(http.MethodPut, "/billing/daily/settings", handler.PutDailyBillingSettings)
 	r.Set(http.MethodGet, "/billing/charges", handler.ListBillingCharges)
 	r.Set(http.MethodGet, "/billing/balance-records", handler.ListBillingBalanceRecords)
 	r.Set(http.MethodGet, "/billing/model-prices", handler.ListBillingModelPrices)

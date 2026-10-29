@@ -16,13 +16,18 @@ const (
 	// UnconfiguredMessage is the panel copy when the new-api database is absent.
 	UnconfiguredMessage = "未配置 new-api 数据源"
 	// EstimateNote describes the tier split. It is not a per-request attribution.
-	EstimateNote = "pro/ultra 按当日 CPA 成功请求的 total_tokens 占比分摊 new-api 计费，不是逐请求归因。"
+	EstimateNote = "pro/ultra/other 按当日 CPA 成功请求的 total_tokens 占比分摊 new-api 计费（全模型，不是逐请求归因）。"
+	// CostNote describes the credential-cost estimate. It is not an invoice.
+	CostNote = "当日成本 ≈ 当天该档有成功请求的去重凭据数 × 日均摊。日均摊 = 每凭据月成本 ÷ 当月天数；设置了每凭据日成本时改用日成本。毛利 = 估算收入 − 估算成本。"
 
 	DefaultQuotaPerUnit = 500000
 	DefaultGroupRatio   = 0.3
-	DefaultChannelID    = 59
-	DefaultModelPrefix  = "gemini-4-argon"
-	DefaultModelExclude = "-disabled"
+	// DefaultChannelID is 0: every channel. Set channel-id or channel-ids to narrow.
+	DefaultChannelID = 0
+	// DefaultModelPrefix is empty: every model. Set model-prefix or models to narrow.
+	DefaultModelPrefix = ""
+	// DefaultModelExclude is empty. Set model-exclude (for example -disabled) to drop names.
+	DefaultModelExclude = ""
 	DefaultProTier      = "g1-pro-tier"
 	DefaultUltraTier    = "g1-ultra-tier"
 	DefaultSuccessType  = 2
@@ -33,7 +38,7 @@ const (
 
 var tierOrder = []string{TierPro, TierUltra, TierOther}
 
-// LogRow is one new-api aggregate: a calendar day and a gemini-4 variant.
+// LogRow is one new-api aggregate: a calendar day and a model name.
 type LogRow struct {
 	Day              string
 	Model            string
@@ -43,12 +48,13 @@ type LogRow struct {
 	Quota            int64
 }
 
-// TierRow is one CPA aggregate: successful gemini-4 tokens for a day and tier.
+// TierRow is one CPA aggregate: successful tokens and distinct credentials for a day and tier.
 type TierRow struct {
-	Day         string
-	Tier        string
-	Requests    int64
-	TotalTokens int64
+	Day               string
+	Tier              string
+	Requests          int64
+	TotalTokens       int64
+	ActiveCredentials int64
 }
 
 // Query is an inclusive calendar range. To is the exclusive instant after ToDate.
@@ -58,23 +64,65 @@ type Query struct {
 	Timezone string
 	FromDate string
 	ToDate   string
+	// Cost, when set, replaces the file and environment cost basis for this report.
+	Cost *CostSettings
 }
 
 // Report is the daily billing payload.
 type Report struct {
-	Configured   bool         `json:"configured"`
-	Message      string       `json:"message,omitempty"`
-	Estimated    bool         `json:"estimated"`
-	EstimateNote string       `json:"estimate_note,omitempty"`
-	From         string       `json:"from,omitempty"`
-	To           string       `json:"to,omitempty"`
-	Timezone     string       `json:"timezone,omitempty"`
-	QuotaPerUnit float64      `json:"quota_per_unit,omitempty"`
-	GroupRatio   float64      `json:"group_ratio,omitempty"`
-	ChannelID    int          `json:"channel_id,omitempty"`
-	Discrepancy  *Discrepancy `json:"discrepancy,omitempty"`
-	Totals       Totals       `json:"totals"`
-	Days         []Day        `json:"days"`
+	Configured     bool          `json:"configured"`
+	Message        string        `json:"message,omitempty"`
+	Estimated      bool          `json:"estimated"`
+	EstimateNote   string        `json:"estimate_note,omitempty"`
+	From           string        `json:"from,omitempty"`
+	To             string        `json:"to,omitempty"`
+	Timezone       string        `json:"timezone,omitempty"`
+	QuotaPerUnit   float64       `json:"quota_per_unit,omitempty"`
+	GroupRatio     float64       `json:"group_ratio,omitempty"`
+	ChannelID      int           `json:"channel_id,omitempty"`
+	ChannelIDs     []int         `json:"channel_ids,omitempty"`
+	ModelPrefix    string        `json:"model_prefix,omitempty"`
+	Models         []string      `json:"models,omitempty"`
+	ModelExclude   string        `json:"model_exclude,omitempty"`
+	CostConfigured bool          `json:"cost_configured"`
+	CostNote       string        `json:"cost_note,omitempty"`
+	CostSource     string        `json:"cost_source,omitempty"`
+	CostSettings   CostSettings  `json:"cost_settings"`
+	Discrepancy    *Discrepancy  `json:"discrepancy,omitempty"`
+	Totals         Totals        `json:"totals"`
+	Tiers          []TierSummary `json:"tiers"`
+	Days           []Day         `json:"days"`
+}
+
+// TierSummary is one subscription tier for a day or for the whole range.
+// On a day, ActiveCredentials is the distinct CPA credentials with a successful
+// request. On the range, ActiveCredentials and ActiveCredentialDays are the sum
+// of those daily counts (credential-days), not a distinct count across days.
+// Cost fields are set only when a cost basis is configured.
+type TierSummary struct {
+	Tier                 string      `json:"tier"`
+	Requests             int64       `json:"requests"`
+	PromptTokens         int64       `json:"prompt_tokens"`
+	CompletionTokens     int64       `json:"completion_tokens"`
+	Quota                int64       `json:"quota"`
+	USD                  float64     `json:"usd"`
+	ActiveCredentials    int64       `json:"active_credentials"`
+	ActiveCredentialDays int64       `json:"active_credential_days,omitempty"`
+	DailyUnitUSD         *float64    `json:"daily_unit_usd,omitempty"`
+	CostUSD              *float64    `json:"cost_usd,omitempty"`
+	GrossProfitUSD       *float64    `json:"gross_profit_usd,omitempty"`
+	GrossMargin          *float64    `json:"gross_margin,omitempty"`
+	Models               []ModelLine `json:"models"`
+}
+
+// ModelLine is one model_name inside a tier. gemini-4-argon variants stay separate.
+type ModelLine struct {
+	Model            string  `json:"model"`
+	Requests         int64   `json:"requests"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	Quota            int64   `json:"quota"`
+	USD              float64 `json:"usd"`
 }
 
 // Discrepancy compares successful request counts. new-api minus CPA.
@@ -108,6 +156,7 @@ type Day struct {
 	NewAPISuccessRequests int64              `json:"new_api_success_requests"`
 	CPASuccessRequests    int64              `json:"cpa_success_requests"`
 	Rows                  []Row              `json:"rows"`
+	Tiers                 []TierSummary      `json:"tiers"`
 	Totals                Totals             `json:"totals"`
 }
 
@@ -208,6 +257,7 @@ func Build(cfg Config, query Query, logs []LogRow, tiers []TierRow) Report {
 	cfg = cfg.normalized()
 	weights := map[string]map[string]int64{}
 	tierRequests := map[string]map[string]int64{}
+	active := map[string]map[string]int64{}
 	var cpaTotal int64
 	for _, row := range tiers {
 		day := strings.TrimSpace(row.Day)
@@ -218,6 +268,7 @@ func Build(cfg Config, query Query, logs []LogRow, tiers []TierRow) Report {
 		if weights[day] == nil {
 			weights[day] = map[string]int64{}
 			tierRequests[day] = map[string]int64{}
+			active[day] = map[string]int64{}
 		}
 		if row.TotalTokens > 0 {
 			weights[day][tier] += row.TotalTokens
@@ -225,6 +276,9 @@ func Build(cfg Config, query Query, logs []LogRow, tiers []TierRow) Report {
 		if row.Requests > 0 {
 			tierRequests[day][tier] += row.Requests
 			cpaTotal += row.Requests
+		}
+		if row.ActiveCredentials > 0 {
+			active[day][tier] += row.ActiveCredentials
 		}
 	}
 
@@ -243,6 +297,12 @@ func Build(cfg Config, query Query, logs []LogRow, tiers []TierRow) Report {
 		if row.Requests > 0 {
 			newTotal += row.Requests
 		}
+	}
+	for day := range weights {
+		if _, seen := byDay[day]; seen {
+			continue
+		}
+		dayOrder = append(dayOrder, day)
 	}
 	sort.Strings(dayOrder)
 
@@ -300,10 +360,34 @@ func Build(cfg Config, query Query, logs []LogRow, tiers []TierRow) Report {
 			}
 		}
 		dayReport.Totals = totalsFromRows(dayReport.Rows, cfg.QuotaPerUnit)
+		dayReport.Tiers = summarizeDay(dayReport.Rows, active[day], cfg, day)
 		report.Days = append(report.Days, dayReport)
 	}
 	report.Totals = totalsFromDays(report.Days, cfg.QuotaPerUnit)
+	report.Tiers = mergeDays(report.Days, cfg)
+	report.CostSettings = cfg.CostSettings()
+	report.CostConfigured = cfg.CostConfigured()
+	if report.CostConfigured {
+		report.CostNote = CostNote
+	}
+	report.ModelPrefix = cfg.ModelPrefix
+	report.Models = cfg.Models
+	report.ModelExclude = cfg.ModelExclude
+	applyChannelFields(&report, cfg)
 	return report
+}
+
+func applyChannelFields(report *Report, cfg Config) {
+	ids := cfg.channelIDs()
+	switch len(ids) {
+	case 0:
+		report.ChannelID = 0
+	case 1:
+		report.ChannelID = ids[0]
+	default:
+		report.ChannelID = 0
+		report.ChannelIDs = ids
+	}
 }
 
 func normalizeTier(tier string) string {

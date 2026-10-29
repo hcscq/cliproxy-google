@@ -161,6 +161,112 @@ func findTier(t *testing.T, rows []Row, model string) (Row, Row) {
 	return pro, ultra
 }
 
+func TestBuildTiersModelsAndCost(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		QuotaPerUnit:   DefaultQuotaPerUnit,
+		ProMonthlyCost: 31,
+		UltraDailyCost: 2,
+	}.normalized()
+	logs := []LogRow{
+		{Day: "2026-10-27", Model: "gemini-4-argon-high", Requests: 10, PromptTokens: 100, CompletionTokens: 20, Quota: 500000},
+		{Day: "2026-10-27", Model: "gemini-3-flash", Requests: 4, PromptTokens: 40, CompletionTokens: 8, Quota: 500000},
+		{Day: "2026-10-28", Model: "gemini-4-argon", Requests: 2, PromptTokens: 4, CompletionTokens: 1, Quota: 0},
+	}
+	tiers := []TierRow{
+		{Day: "2026-10-27", Tier: TierPro, Requests: 1, TotalTokens: 1, ActiveCredentials: 2},
+		{Day: "2026-10-27", Tier: TierUltra, Requests: 1, TotalTokens: 1, ActiveCredentials: 3},
+		{Day: "2026-10-28", Tier: TierPro, Requests: 1, TotalTokens: 1, ActiveCredentials: 1},
+	}
+	report := Build(cfg, Query{FromDate: "2026-10-27", ToDate: "2026-10-28", Timezone: "UTC"}, logs, tiers)
+	if len(report.Days) != 2 || len(report.Tiers) != 3 {
+		t.Fatalf("days %d tiers %d", len(report.Days), len(report.Tiers))
+	}
+	october := report.Days[0]
+	pro, ultra := findTier(t, october.Rows, "gemini-4-argon-high")
+	flashPro, _ := findTier(t, october.Rows, "gemini-3-flash")
+	if pro.Quota+ultra.Quota != 500000 || flashPro.Model != "gemini-3-flash" || pro.Quota != ultra.Quota {
+		t.Fatalf("models were not split apart: %+v", october.Rows)
+	}
+	proTier := tierSummary(t, october.Tiers, TierPro)
+	ultraTier := tierSummary(t, october.Tiers, TierUltra)
+	otherTier := tierSummary(t, october.Tiers, TierOther)
+	if proTier.Quota+ultraTier.Quota+otherTier.Quota != october.Totals.Quota {
+		t.Fatalf("tier quota does not sum to the day: %+v", october.Tiers)
+	}
+	if len(proTier.Models) != 2 || proTier.Models[0].Model == proTier.Models[1].Model {
+		t.Fatalf("pro models = %+v", proTier.Models)
+	}
+	// October has 31 days, so a monthly cost of 31 is 1 USD per active credential.
+	if proTier.ActiveCredentials != 2 || proTier.USD != 1 || proTier.CostUSD == nil || *proTier.CostUSD != 2 {
+		t.Fatalf("pro cost = %+v", proTier)
+	}
+	if proTier.GrossProfitUSD == nil || *proTier.GrossProfitUSD != -1 || proTier.GrossMargin == nil || *proTier.GrossMargin != -1 {
+		t.Fatalf("pro margin = %+v", proTier)
+	}
+	// An explicit daily cost replaces monthly amortization.
+	if ultraTier.CostUSD == nil || *ultraTier.CostUSD != 6 || ultraTier.DailyUnitUSD == nil || *ultraTier.DailyUnitUSD != 2 {
+		t.Fatalf("ultra cost = %+v", ultraTier)
+	}
+	if otherTier.CostUSD == nil || *otherTier.CostUSD != 0 {
+		t.Fatalf("other cost = %+v", otherTier)
+	}
+	rangePro := tierSummary(t, report.Tiers, TierPro)
+	// Day 1 cost 2 plus day 2 cost 1. Active counts sum as credential-days.
+	if rangePro.ActiveCredentialDays != 3 || rangePro.CostUSD == nil || *rangePro.CostUSD != 3 || rangePro.Quota != 500000 {
+		t.Fatalf("range pro = %+v", rangePro)
+	}
+	if !report.CostConfigured || report.CostNote == "" {
+		t.Fatal("cost should be marked configured")
+	}
+
+	plain := Build(Config{QuotaPerUnit: DefaultQuotaPerUnit}.normalized(), Query{}, logs[:1], tiers[:1])
+	if plain.CostConfigured || tierSummary(t, plain.Tiers, TierPro).CostUSD != nil {
+		t.Fatalf("unset cost leaked: %+v", plain.Tiers)
+	}
+
+	leap := Build(Config{QuotaPerUnit: DefaultQuotaPerUnit, ProMonthlyCost: 29}.normalized(), Query{}, []LogRow{
+		{Day: "2024-02-10", Model: "gemini-4-argon", Requests: 1, Quota: 0},
+	}, []TierRow{{Day: "2024-02-10", Tier: TierPro, TotalTokens: 1, ActiveCredentials: 1}})
+	leapPro := tierSummary(t, leap.Days[0].Tiers, TierPro)
+	if leapPro.DailyUnitUSD == nil || *leapPro.DailyUnitUSD != 1 || leapPro.CostUSD == nil || *leapPro.CostUSD != 1 {
+		t.Fatalf("leap-day unit = %+v, want 29/29", leapPro)
+	}
+	if leapPro.USD != 0 && leapPro.GrossMargin != nil {
+		t.Fatal("zero revenue should not invent a margin")
+	}
+	if leapPro.GrossMargin != nil {
+		t.Fatalf("margin = %v, want none when revenue is 0", *leapPro.GrossMargin)
+	}
+
+	fixed := Build(Config{QuotaPerUnit: DefaultQuotaPerUnit, ProMonthlyCost: 30, UltraMonthlyCost: 60, UltraDailyCost: 4, CostMonthDays: 30}.normalized(), Query{}, []LogRow{
+		{Day: "2026-10-27", Model: "gemini-4-argon-low", Requests: 1, Quota: 0},
+	}, []TierRow{
+		{Day: "2026-10-27", Tier: TierPro, TotalTokens: 1, ActiveCredentials: 2},
+		{Day: "2026-10-27", Tier: TierUltra, TotalTokens: 1, ActiveCredentials: 1},
+	})
+	fixedPro := tierSummary(t, fixed.Days[0].Tiers, TierPro)
+	fixedUltra := tierSummary(t, fixed.Days[0].Tiers, TierUltra)
+	if fixedPro.DailyUnitUSD == nil || *fixedPro.DailyUnitUSD != 1 || fixedPro.CostUSD == nil || *fixedPro.CostUSD != 2 {
+		t.Fatalf("fixed month days = %+v, want 30/30", fixedPro)
+	}
+	if fixedUltra.DailyUnitUSD == nil || *fixedUltra.DailyUnitUSD != 4 || fixedUltra.CostUSD == nil || *fixedUltra.CostUSD != 4 {
+		t.Fatalf("daily cost should replace monthly = %+v", fixedUltra)
+	}
+}
+
+func tierSummary(t *testing.T, tiers []TierSummary, name string) TierSummary {
+	t.Helper()
+	for _, tier := range tiers {
+		if tier.Tier == name {
+			return tier
+		}
+	}
+	t.Fatalf("missing tier %s in %+v", name, tiers)
+	return TierSummary{}
+}
+
 func TestQuotaUSDDoesNotReapplyGroupRatio(t *testing.T) {
 	t.Parallel()
 	if quotaUSD(1, DefaultQuotaPerUnit) != 0.000002 {

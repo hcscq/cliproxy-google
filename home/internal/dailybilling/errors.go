@@ -13,4 +13,6 @@ var (
 	ErrInvalidTimezone = errors.New("invalid timezone")
 	// ErrInvalidRange means the date range is malformed or longer than MaxRangeDays.
 	ErrInvalidRange = errors.New("invalid time range")
+	// ErrInvalidCost means a panel cost setting is negative or not a finite number.
+	ErrInvalidCost = errors.New("invalid cost settings")
 )
