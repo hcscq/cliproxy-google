@@ -37,3 +37,15 @@ node:
   heartbeat-interval: "5s"
   heartbeat-timeout: "20s"
   event-poll-interval: "3s"
+
+# Optional read-only new-api Postgres for the management "Daily billing" page.
+# Same keys and environment variables as cluster.pgsql.example.yaml. Omit it when
+# the page should show that the new-api data source is not configured.
+#
+# new-api:
+#   host: "127.0.0.1"
+#   port: 5432
+#   user: "readonly"
+#   password: "secret"
+#   database: "new-api"
+#   sslmode: "disable"

@@ -52,3 +52,23 @@ node:
 # Each CPA must use a unique mTLS client certificate; never share a certificate between CPAs.
 # If a Home loses database liveness, it stops sending pong. A CPA that cannot cancel within its
 # cancel bound closes its service rather than continuing with an unsafe lifecycle.
+
+# Optional read-only new-api Postgres used by the management "Daily billing" page.
+# Omit this section to leave the page in the unconfigured state.
+# Do not put this DSN in config.yaml; that file is distributed to CPA nodes.
+# Environment variables override this file. NEW_API_DATABASE_DSN replaces the URI.
+# NEW_API_DB_HOST, NEW_API_DB_PORT, NEW_API_DB_USER, NEW_API_DB_PASSWORD,
+# NEW_API_DB_NAME, and NEW_API_DB_SSLMODE override the individual fields.
+# NEW_API_QUOTA_PER_UNIT (500000), NEW_API_GROUP_RATIO (0.3), NEW_API_CHANNEL_ID (59),
+# NEW_API_BILLING_TIMEZONE, NEW_API_MODEL_PREFIX, NEW_API_MODELS, NEW_API_CREATED_AT,
+# NEW_API_PRO_TIER, and NEW_API_ULTRA_TIER override the matching knobs.
+# The connection is forced read-only. Passwords are not logged.
+#
+# new-api:
+#   postgres-uri: "postgresql://readonly:secret@127.0.0.1:5432/new-api?sslmode=disable"
+#   quota-per-unit: 500000
+#   group-ratio: 0.3
+#   channel-id: 59
+#   timezone: "UTC"
+#   model-prefix: "gemini-4-argon"
+#   created-at: "unix"

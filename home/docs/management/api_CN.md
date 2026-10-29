@@ -122,6 +122,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `POST` | `/billing/balance-records/deduct` |
 | `POST` | `/billing/balance-records/recharge` |
 | `GET` | `/billing/charges` |
+| `GET` | `/billing/daily` |
 | `GET` | `/billing/model-prices` |
 | `POST` | `/billing/model-prices` |
 | `DELETE` | `/billing/model-prices/:id` |
@@ -1484,6 +1485,8 @@ Query 参数：
 只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。三个路由统一使用半开区间 `[from,to)`：包含 `from`，不包含 `to`。可选的 `timezone` 参数是报表时区覆盖，并且必须是 IANA 时区名称。未提供时，路由使用 `/billing/settings.report_timezone`，该设置默认为 `UTC`。纯日期值使用实际报表时区中的日历日期，纯日期形式的 `to` 会规范化为下一个本地零点，因此即使跨越 DST，也会完整包含结束日期。显式时间戳是精确的排他上界，不会因报表时区被移动或扩展。`/billing/overview` 还使用实际报表时区生成 `range` 日历日期和 `daily_trend` 分桶，因此一个自然日不会在 UTC 午夜被拆成两天。报表时区只控制查询边界和报表分组，不会重新计算不可变 charge、修改价格快照或改变用户余额。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
 
 不支持的时区名称返回 `400 invalid_timezone`。`from` 晚于 `to` 时返回 `400 invalid_time_range`。
+
+`GET /billing/daily` 与上面的账本无关。它只读 new-api 的 Postgres，估算 gemini-4 费用，不使用 `report_timezone`，也不改写 `billing_charge`。字段、配置项和索引说明见英文文档的同名小节；未配置数据源时返回 `200`，`configured: false`，`message` 为「未配置 new-api 数据源」。
 
 ### GET `/billing/overview`
 
