@@ -18,6 +18,8 @@ type fakeReserveStore struct {
 	active   int
 	promotes []time.Time
 	bans     int
+	disabled map[string]struct{}
+	trace    []string
 
 	lastCountCooled bool
 	cooled          int // extra credentials counted only when countCooled
@@ -75,7 +77,24 @@ func (f *fakeReserveStore) CountReserveEvents(_ context.Context, _ string, since
 	}
 	return n, nil
 }
-func (f *fakeReserveStore) RecordReserveBans(context.Context) (int, error) { f.bans++; return 0, nil }
+func (f *fakeReserveStore) RecordReserveBans(context.Context) (int, error) {
+	f.bans++
+	f.trace = append(f.trace, "ban")
+	return 0, nil
+}
+
+func (f *fakeReserveStore) UnreserveDisabledCredentials(context.Context) (int, error) {
+	f.trace = append(f.trace, "sweep")
+	n := 0
+	for id := range f.disabled {
+		if _, ok := f.reserved[id]; !ok {
+			continue
+		}
+		delete(f.reserved, id)
+		n++
+	}
+	return n, nil
+}
 
 func TestOrderReserveCandidates(t *testing.T) {
 	base := time.Now()
@@ -138,6 +157,36 @@ func TestReserveControlDelayAndRateLimit(t *testing.T) {
 	}
 	if !coreauth.IsCredentialReserved("r3") || coreauth.IsCredentialReserved("r1") {
 		t.Fatal("scheduler set must follow promotions")
+	}
+}
+
+func TestReserveControlUnreservesDisabledOnly(t *testing.T) {
+	store := &fakeReserveStore{
+		reserved: map[string]time.Time{"live": time.Now(), "dead": time.Now()},
+		disabled: map[string]struct{}{"dead": {}},
+		cands:    []ReserveCandidate{{ID: "live", Healthy: true, Health: "pass", Seq: 1}},
+		active:   4,
+	}
+	r := reserveTestRuntime(store, &config.Config{})
+	r.reserveControl(context.Background(), time.Now())
+	if _, ok := store.reserved["dead"]; ok {
+		t.Fatal("disabled reserve must be cleared")
+	}
+	if _, ok := store.reserved["live"]; !ok {
+		t.Fatal("enabled reserve must stay reserved")
+	}
+	if store.active != 4 || len(store.promotes) != 0 {
+		t.Fatalf("active=%d promotes=%d, sweep must not change promotable state", store.active, len(store.promotes))
+	}
+	if len(store.trace) < 2 || store.trace[0] != "ban" || store.trace[1] != "sweep" {
+		t.Fatalf("trace = %v, want ban audit before the sweep", store.trace)
+	}
+	r.reserveControl(context.Background(), time.Now())
+	if _, ok := store.reserved["live"]; !ok {
+		t.Fatal("second sweep cleared an enabled reserve")
+	}
+	if store.active != 4 {
+		t.Fatalf("active after second sweep = %d", store.active)
 	}
 }
 

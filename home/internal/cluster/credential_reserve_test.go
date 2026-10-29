@@ -3,6 +3,8 @@ package cluster
 import (
 	"testing"
 	"time"
+
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 )
 
 func TestCredentialReserveRoundTrip(t *testing.T) {
@@ -62,5 +64,206 @@ func TestCredentialReserveRoundTrip(t *testing.T) {
 	_ = db.Exec(`UPDATE auth SET unavailable = false, status = 'error' WHERE uuid = 'a3'`).Error
 	if active, _ := repo.CountActiveCredentials(ctx, true); active != 0 {
 		t.Fatalf("error status counted = %d", active)
+	}
+}
+
+func newReserveAuth(id string) *coreauth.Auth {
+	return &coreauth.Auth{
+		ID: id, Index: id, Provider: "antigravity", Status: coreauth.StatusActive,
+		Metadata: map[string]any{"refresh_token": "rt"},
+	}
+}
+
+func reserveFlag(t *testing.T, repo *Repository, id string) CredentialReserve {
+	t.Helper()
+	db, err := repo.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row CredentialReserve
+	if err := db.Where("auth_uuid = ?", id).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+// Disabling a reserved credential clears reserved and leaves other reserves,
+// the auth row, and the promotable count alone.
+func TestDisableClearsCredentialReserve(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	for _, id := range []string{"live", "tos", "unauth", "plain"} {
+		if _, err := repo.UpsertAuth(ctx, newReserveAuth(id), "create"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := repo.SetCredentialsReserved(ctx, []string{"live", "tos", "unauth"}, true, "reserve", "t"); err != nil || n != 3 {
+		t.Fatalf("reserve n=%d err=%v", n, err)
+	}
+	activeBefore, err := repo.CountActiveCredentials(ctx, true)
+	if err != nil || activeBefore != 1 {
+		t.Fatalf("active before = %d err=%v, want 1 (plain)", activeBefore, err)
+	}
+
+	// A non-disable update must not drop the reserve mark.
+	live, _, err := repo.GetAuth(ctx, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.Label = "renamed"
+	if _, err := repo.UpsertAuth(ctx, live, "update"); err != nil {
+		t.Fatal(err)
+	}
+	if row := reserveFlag(t, repo, "live"); !row.Reserved || row.PromotedAt != nil {
+		t.Fatalf("live reserve changed by a non-disable update: %+v", row)
+	}
+
+	tos, _, err := repo.GetAuth(ctx, "tos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	since := reserveFlag(t, repo, "tos").ReservedSince
+	tos.Disabled = true
+	tos.Status = coreauth.StatusDisabled
+	tos.StatusMessage = "账号已停用/违反条款（403） · 10-29 12:00 停用：terms of service"
+	if _, err := repo.UpsertAuth(ctx, tos, "update"); err != nil {
+		t.Fatal(err)
+	}
+	row := reserveFlag(t, repo, "tos")
+	if row.Reserved || row.PromotedAt != nil || row.ReservedSince == nil || !row.ReservedSince.Equal(*since) {
+		t.Fatalf("tos reserve = %+v, want reserved cleared without a promotion", row)
+	}
+	got, rec, err := repo.GetAuth(ctx, "tos")
+	if err != nil || !got.Disabled || got.Status != coreauth.StatusDisabled || rec.DeletedAt.Valid {
+		t.Fatalf("tos auth changed beyond disable: auth=%+v deleted=%v err=%v", got, rec != nil && rec.DeletedAt.Valid, err)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "ban", time.Now().Add(-time.Minute)); n != 1 {
+		t.Fatalf("ban events = %d, want 1 (was reserved)", n)
+	}
+	evs, err := repo.RecentReserveEvents(ctx, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ban *CredentialReserveEvent
+	for i := range evs {
+		if evs[i].Kind == "ban" && evs[i].AuthUUID == "tos" {
+			ban = &evs[i]
+			break
+		}
+	}
+	if ban == nil || !ban.WasReserved || ban.ReservedSince == nil {
+		t.Fatalf("ban audit = %+v", ban)
+	}
+
+	// Verify-account and unauthorized share the same persist hook.
+	_, _, changed, err := repo.MutateAuth(ctx, "unauth", "update", func(auth *coreauth.Auth) bool {
+		auth.Disabled = true
+		auth.Status = coreauth.StatusDisabled
+		auth.StatusMessage = "unauthorized"
+		return true
+	})
+	if err != nil || !changed {
+		t.Fatalf("mutate disable changed=%v err=%v", changed, err)
+	}
+	if row := reserveFlag(t, repo, "unauth"); row.Reserved {
+		t.Fatalf("unauthorized disable left reserved: %+v", row)
+	}
+	unauth, _, err := repo.GetAuth(ctx, "unauth")
+	if err != nil || !unauth.Disabled || unauth.StatusMessage != "unauthorized" {
+		t.Fatalf("unauth auth = %+v err=%v", unauth, err)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "ban", time.Now().Add(-time.Minute)); n != 1 {
+		t.Fatalf("unauthorized disable recorded a ban: %d", n)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "promote", time.Now().Add(-time.Minute)); n != 0 {
+		t.Fatalf("promote events = %d", n)
+	}
+	if row := reserveFlag(t, repo, "live"); !row.Reserved {
+		t.Fatal("disabling other credentials cleared the live reserve")
+	}
+	if _, err := repo.ListReservedCredentials(ctx); err != nil {
+		t.Fatal(err)
+	}
+	listed, _ := repo.ListReservedCredentials(ctx)
+	if len(listed) != 1 || listed["live"].IsZero() {
+		t.Fatalf("schedulable reserves = %v", listed)
+	}
+	if active, _ := repo.CountActiveCredentials(ctx, true); active != activeBefore {
+		t.Fatalf("active after disable = %d, want %d", active, activeBefore)
+	}
+
+	// A later write of an already-disabled credential must not duplicate the ban.
+	again, _, err := repo.GetAuth(ctx, "tos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again.Label = "still-disabled"
+	if _, err := repo.UpsertAuth(ctx, again, "update"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "ban", time.Now().Add(-time.Minute)); n != 1 {
+		t.Fatalf("ban events after rewrite = %d", n)
+	}
+	if row := reserveFlag(t, repo, "tos"); row.Reserved {
+		t.Fatal("rewrite re-reserved a disabled credential")
+	}
+}
+
+// The sweeper clears disabled+reserved zombies and leaves live reserves reserved.
+func TestUnreserveDisabledCredentialsLeavesLiveReserves(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	db, err := repo.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"zombie", "live", "plain", "already"} {
+		if _, err := repo.UpsertAuth(ctx, newReserveAuth(id), "create"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := repo.SetCredentialsReserved(ctx, []string{"zombie", "live"}, true, "reserve", "t"); err != nil || n != 2 {
+		t.Fatalf("reserve n=%d err=%v", n, err)
+	}
+	// Bypass the disable hook so the row stays a zombie, as historical data does.
+	if err := db.Exec(`UPDATE auth SET disabled = true, status = ? WHERE uuid = ?`, coreauth.StatusDisabled, "zombie").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`UPDATE auth SET disabled = true, status = ? WHERE uuid = ?`, coreauth.StatusDisabled, "already").Error; err != nil {
+		t.Fatal(err)
+	}
+	activeBefore, err := repo.CountActiveCredentials(ctx, true)
+	if err != nil || activeBefore != 1 {
+		t.Fatalf("active before = %d err=%v, want 1 (plain; live is reserved, zombie and already are disabled)", activeBefore, err)
+	}
+	n, err := repo.UnreserveDisabledCredentials(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("sweep n=%d err=%v, want 1", n, err)
+	}
+	if row := reserveFlag(t, repo, "zombie"); row.Reserved {
+		t.Fatalf("zombie still reserved: %+v", row)
+	}
+	if row := reserveFlag(t, repo, "live"); !row.Reserved || row.PromotedAt != nil {
+		t.Fatalf("live reserve = %+v", row)
+	}
+	_, rec, err := repo.GetAuth(ctx, "zombie")
+	if err != nil || rec == nil || !rec.Disabled || rec.DeletedAt.Valid {
+		t.Fatalf("sweep changed the credential: disabled=%v deleted=%v err=%v", rec != nil && rec.Disabled, rec != nil && rec.DeletedAt.Valid, err)
+	}
+	var reserveRows int64
+	if err := db.Model(&CredentialReserve{}).Count(&reserveRows).Error; err != nil || reserveRows != 2 {
+		t.Fatalf("reserve rows = %d err=%v, want the marks updated in place", reserveRows, err)
+	}
+	if active, _ := repo.CountActiveCredentials(ctx, true); active != activeBefore {
+		t.Fatalf("active after sweep = %d, want %d", active, activeBefore)
+	}
+	listed, err := repo.ListReservedCredentials(ctx)
+	if err != nil || len(listed) != 1 || listed["live"].IsZero() {
+		t.Fatalf("listed = %v err=%v", listed, err)
+	}
+	n, err = repo.UnreserveDisabledCredentials(ctx)
+	if err != nil || n != 0 {
+		t.Fatalf("second sweep n=%d err=%v, want 0", n, err)
+	}
+	if row := reserveFlag(t, repo, "live"); !row.Reserved {
+		t.Fatal("second sweep cleared a live reserve")
 	}
 }

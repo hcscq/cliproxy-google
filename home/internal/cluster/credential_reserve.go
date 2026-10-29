@@ -196,6 +196,85 @@ func (r *Repository) CountReserveEvents(ctx context.Context, kind string, since 
 	return int(n), err
 }
 
+// reserveBanStatusPrefix matches RecordReserveBans. Account-block TOS disables
+// start with this label; other disables (unauthorized, verify-account) do not.
+const reserveBanStatusPrefix = "账号已停用"
+
+// clearReserveForDisabledAuth drops credential_reserve.reserved when id is persisted
+// as disabled. The auth row is not modified. A still-reserved TOS ban is audited
+// first so was_reserved stays accurate after the mark is cleared. Idempotent.
+func clearReserveForDisabledAuth(tx *gorm.DB, id, statusMessage string) error {
+	if tx == nil {
+		return nil
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if err := noteReservedBan(tx, id, statusMessage); err != nil {
+		return err
+	}
+	return tx.Exec(
+		`UPDATE credential_reserve SET reserved = ?, updated_at = ? WHERE auth_uuid = ? AND reserved = ?`,
+		false, time.Now().UTC(), id, true,
+	).Error
+}
+
+// noteReservedBan records one ban audit when a reserved credential is disabled
+// with a TOS/account-disabled status. Non-reserved disables are left for
+// RecordReserveBans. Idempotent: one ban event per credential.
+func noteReservedBan(tx *gorm.DB, id, statusMessage string) error {
+	statusMessage = strings.TrimSpace(statusMessage)
+	if !strings.HasPrefix(statusMessage, reserveBanStatusPrefix) {
+		return nil
+	}
+	var n int64
+	if err := tx.Model(&CredentialReserveEvent{}).Where("auth_uuid = ? AND kind = ?", id, "ban").Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	var cur CredentialReserve
+	res := tx.Where("auth_uuid = ?", id).Limit(1).Find(&cur)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 || !cur.Reserved {
+		return nil
+	}
+	ev := CredentialReserveEvent{
+		AuthUUID:      id,
+		Kind:          "ban",
+		At:            time.Now().UTC(),
+		WasReserved:   true,
+		ReservedSince: cur.ReservedSince,
+		Detail:        clipRunes(statusMessage, 200),
+	}
+	return tx.Create(&ev).Error
+}
+
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if n <= 0 || len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+// UnreserveDisabledCredentials clears reserved on disabled credentials in one
+// statement. Auth enablement, deletion, and every other column stay unchanged.
+// Idempotent: a second call matches nothing. Callers should record ban audits
+// first; reserved is still the attribution input until this runs.
+func (r *Repository) UnreserveDisabledCredentials(ctx context.Context) (int, error) {
+	db, err := r.database()
+	if err != nil {
+		return 0, err
+	}
+	res := db.WithContext(contextOrBackground(ctx)).Exec(`UPDATE credential_reserve SET reserved = ?, updated_at = ? WHERE reserved = ? AND auth_uuid IN (SELECT uuid FROM auth WHERE COALESCE(disabled, false) = true)`, false, time.Now().UTC(), true)
+	return int(res.RowsAffected), res.Error
+}
+
 // RecordReserveBans audits credentials newly disabled as banned (403 terms/disabled
 // account), noting whether they were in reserve at the time. Postgres only.
 func (r *Repository) RecordReserveBans(ctx context.Context) (int, error) {
@@ -313,6 +392,14 @@ func (a *RuntimeAdapter) RecordReserveBans(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return r.RecordReserveBans(ctx)
+}
+
+func (a *RuntimeAdapter) UnreserveDisabledCredentials(ctx context.Context) (int, error) {
+	r, err := a.reserveRepo()
+	if err != nil {
+		return 0, err
+	}
+	return r.UnreserveDisabledCredentials(ctx)
 }
 
 // ReserveModelCapacity reports, for credentials whose latest Antigravity catalog lists
