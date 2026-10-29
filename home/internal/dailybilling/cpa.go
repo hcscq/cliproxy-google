@@ -13,8 +13,8 @@ import (
 // on Postgres; create it on the parent table so each partition inherits it.
 // auth.uuid is already the primary key, which is the join used here.
 //
-//	CREATE INDEX CONCURRENTLY IF NOT EXISTS usage_gemini4_billing_idx
-//	  ON usage (timestamp, model)
+//	CREATE INDEX CONCURRENTLY IF NOT EXISTS usage_daily_billing_idx
+//	  ON usage (timestamp)
 //	  WHERE failed = false;
 
 const cpaPostgresSQL = `
@@ -26,7 +26,8 @@ SELECT
     ELSE 'other'
   END AS tier,
   COUNT(*)::bigint AS requests,
-  COALESCE(SUM(u.total_tokens), 0)::bigint AS total_tokens
+  COALESCE(SUM(u.total_tokens), 0)::bigint AS total_tokens,
+  COUNT(DISTINCT NULLIF(u.auth_index, ''))::bigint AS active_credentials
 FROM usage AS u
 LEFT JOIN auth AS a ON a.deleted_at IS NULL AND a.uuid = u.auth_index
 WHERE u.failed = FALSE
@@ -44,7 +45,8 @@ SELECT
     ELSE 'other'
   END AS tier,
   COUNT(*) AS requests,
-  COALESCE(SUM(u.total_tokens), 0) AS total_tokens
+  COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+  COUNT(DISTINCT NULLIF(u.auth_index, '')) AS active_credentials
 FROM usage AS u
 LEFT JOIN auth AS a ON a.deleted_at IS NULL AND a.uuid = u.auth_index
 WHERE u.failed = 0
@@ -54,10 +56,11 @@ WHERE u.failed = 0
 GROUP BY 1, 2`
 
 type tierScan struct {
-	Day         string
-	Tier        string
-	Requests    int64
-	TotalTokens int64 `gorm:"column:total_tokens"`
+	Day               string
+	Tier              string
+	Requests          int64
+	TotalTokens       int64 `gorm:"column:total_tokens"`
+	ActiveCredentials int64 `gorm:"column:active_credentials"`
 }
 
 func queryCPATiers(ctx context.Context, db *gorm.DB, cfg Config, query Query) ([]TierRow, error) {
@@ -88,29 +91,40 @@ func queryCPATiers(ctx context.Context, db *gorm.DB, cfg Config, query Query) ([
 	rows := make([]TierRow, 0, len(scanned))
 	for _, row := range scanned {
 		rows = append(rows, TierRow{
-			Day:         row.Day,
-			Tier:        row.Tier,
-			Requests:    row.Requests,
-			TotalTokens: row.TotalTokens,
+			Day:               row.Day,
+			Tier:              row.Tier,
+			Requests:          row.Requests,
+			TotalTokens:       row.TotalTokens,
+			ActiveCredentials: row.ActiveCredentials,
 		})
 	}
 	return rows, nil
 }
 
 func modelPredicate(column string, cfg Config) (string, []any) {
-	exclude := likeContains(cfg.ModelExclude)
+	var parts []string
+	var args []any
 	models := cleanModels(cfg.Models)
-	if len(models) > 0 {
+	switch {
+	case len(models) > 0:
 		placeholders := make([]string, len(models))
-		args := make([]any, 0, len(models)+1)
 		for i, model := range models {
 			placeholders[i] = "?"
 			args = append(args, model)
 		}
-		args = append(args, exclude)
-		return fmt.Sprintf("%s IN (%s) AND %s NOT LIKE ? ESCAPE '\\'", column, strings.Join(placeholders, ","), column), args
+		parts = append(parts, fmt.Sprintf("%s IN (%s)", column, strings.Join(placeholders, ",")))
+	case strings.TrimSpace(cfg.ModelPrefix) != "":
+		parts = append(parts, fmt.Sprintf("%s LIKE ? ESCAPE '\\'", column))
+		args = append(args, likePrefix(cfg.ModelPrefix))
 	}
-	return fmt.Sprintf("%s LIKE ? ESCAPE '\\' AND %s NOT LIKE ? ESCAPE '\\'", column, column), []any{likePrefix(cfg.ModelPrefix), exclude}
+	if exclude := strings.TrimSpace(cfg.ModelExclude); exclude != "" {
+		parts = append(parts, fmt.Sprintf("%s NOT LIKE ? ESCAPE '\\'", column))
+		args = append(args, likeContains(exclude))
+	}
+	if len(parts) == 0 {
+		return "TRUE", nil
+	}
+	return strings.Join(parts, " AND "), args
 }
 
 func likePrefix(value string) string {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultBillingRange, tierLabel, variantLabel } from './DailyBilling';
+import { defaultBillingRange, findBillingTier, showsBillingCost, tierLabel, variantLabel } from './DailyBilling';
 
 describe('daily billing labels', () => {
   it('shortens gemini-4 argon variants', () => {
@@ -18,5 +18,12 @@ describe('daily billing labels', () => {
     expect(tierLabel('other', true)).toBe('其他');
     expect(tierLabel('pro', true)).toBe('pro');
     expect(tierLabel('other', false)).toBe('other');
+  });
+
+  it('shows cost only when a cost basis is configured', () => {
+    expect(showsBillingCost({ cost_configured: false })).toBe(false);
+    expect(showsBillingCost(null)).toBe(false);
+    expect(showsBillingCost({ cost_configured: true })).toBe(true);
+    expect(findBillingTier([{ tier: 'pro', requests: 1, prompt_tokens: 0, completion_tokens: 0, quota: 2, usd: 3, active_credentials: 1, models: [] }], 'pro')?.usd).toBe(3);
   });
 });

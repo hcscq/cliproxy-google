@@ -79,6 +79,33 @@ func TestReportAllocatesFixtureDays(t *testing.T) {
 	}
 }
 
+func TestReportUsesQueryCostOverride(t *testing.T) {
+	t.Parallel()
+	cfg := Config{Host: "db.internal", Database: "newapi", ProMonthlyCost: 31}.normalized()
+	svc := NewService(cfg, nil)
+	svc.logs = fakeLogs{rows: []LogRow{
+		{Day: "2026-10-27", Model: "gemini-3-flash", Requests: 2, Quota: 500000},
+	}}
+	svc.tiers = fakeTiers{rows: []TierRow{
+		{Day: "2026-10-27", Tier: TierUltra, Requests: 1, TotalTokens: 10, ActiveCredentials: 4},
+	}}
+	override := CostSettings{UltraDailyCost: 3}
+	report, errReport := svc.Report(context.Background(), Query{Cost: &override, FromDate: "2026-10-27", ToDate: "2026-10-27"})
+	if errReport != nil {
+		t.Fatal(errReport)
+	}
+	if report.CostSource != "panel" || svc.FileCost().ProMonthlyCost != 31 {
+		t.Fatalf("source %s file %+v", report.CostSource, svc.FileCost())
+	}
+	ultra := report.Tiers[1]
+	if ultra.Tier != TierUltra || ultra.CostUSD == nil || *ultra.CostUSD != 12 || ultra.USD != 1 {
+		t.Fatalf("ultra = %+v", ultra)
+	}
+	if ultra.GrossProfitUSD == nil || *ultra.GrossProfitUSD != -11 {
+		t.Fatalf("profit = %v", ultra.GrossProfitUSD)
+	}
+}
+
 func TestReportReturnsSourceError(t *testing.T) {
 	t.Parallel()
 	cfg := Config{Host: "db.internal", Database: "newapi"}.normalized()

@@ -84,6 +84,53 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadConfigCostChannelAndOpenModelDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cluster.yaml")
+	content := []byte(`
+new-api:
+  host: "db.internal"
+  database: "newapi"
+  channel-id: 59
+  channel-ids: [60, 59, 0]
+  pro-monthly-cost: 20
+  ultra-daily-cost: 1.5
+  cost-month-days: 30
+  model-prefix: "gemini-4-argon"
+`)
+	if errWrite := os.WriteFile(path, content, 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	clearNewAPIEnv(t)
+	t.Setenv("NEW_API_CHANNEL_IDS", "7,8")
+	t.Setenv("NEW_API_ULTRA_MONTHLY_COST", "100")
+	t.Setenv("NEW_API_COST_MONTH_DAYS", "28")
+	cfg := LoadConfig(path)
+	if cfg.ChannelID != 0 || len(cfg.ChannelIDs) != 2 || cfg.ChannelIDs[0] != 7 || cfg.ChannelIDs[1] != 8 {
+		t.Fatalf("channels = %d %v", cfg.ChannelID, cfg.ChannelIDs)
+	}
+	if cfg.ProMonthlyCost != 20 || cfg.UltraMonthlyCost != 100 || cfg.UltraDailyCost != 1.5 || cfg.CostMonthDays != 28 {
+		t.Fatalf("cost = %+v", cfg.CostSettings())
+	}
+	if !cfg.CostConfigured() {
+		t.Fatal("cost should be configured")
+	}
+	if cfg.ModelPrefix != "gemini-4-argon" {
+		t.Fatalf("prefix = %q", cfg.ModelPrefix)
+	}
+	clearNewAPIEnv(t)
+	open := LoadConfig(filepath.Join(t.TempDir(), "missing.yaml"))
+	if open.ModelPrefix != "" || open.ModelExclude != "" || open.ChannelID != 0 || open.CostConfigured() {
+		t.Fatalf("open default = prefix %q exclude %q channel %d cost %v", open.ModelPrefix, open.ModelExclude, open.ChannelID, open.CostSettings())
+	}
+	if errValidate := (CostSettings{ProMonthlyCost: -1}).Validate(); errValidate != ErrInvalidCost {
+		t.Fatalf("negative cost error = %v", errValidate)
+	}
+	if errValidate := (CostSettings{MonthDays: 32}).Validate(); errValidate != ErrInvalidCost {
+		t.Fatalf("month days error = %v", errValidate)
+	}
+}
+
 func TestURIKeepsReadOnlyOptionWithoutEmbeddingPasswordInSafeString(t *testing.T) {
 	t.Parallel()
 	cfg := Config{PostgresURI: "postgresql://reader:s3cret@db.internal:5432/newapi?sslmode=require"}.normalized()
@@ -126,6 +173,14 @@ func clearNewAPIEnv(t *testing.T) {
 		"NEW_API_PRO_TIER",
 		"NEW_API_ULTRA_TIER",
 		"NEW_API_SUCCESS_TYPE",
+		"NEW_API_CHANNEL_IDS",
+		"NEW_API_PRO_MONTHLY_COST",
+		"NEW_API_ULTRA_MONTHLY_COST",
+		"NEW_API_OTHER_MONTHLY_COST",
+		"NEW_API_PRO_DAILY_COST",
+		"NEW_API_ULTRA_DAILY_COST",
+		"NEW_API_OTHER_DAILY_COST",
+		"NEW_API_COST_MONTH_DAYS",
 	} {
 		t.Setenv(key, "")
 	}

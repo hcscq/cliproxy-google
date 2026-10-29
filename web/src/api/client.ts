@@ -527,6 +527,12 @@ export class ApiClient {
   dailyBilling(query?: Query) {
     return this.get<DailyBillingReport>('/billing/daily', query);
   }
+  dailyBillingCost() {
+    return this.get<DailyBillingCostSettings>('/billing/daily/settings');
+  }
+  updateDailyBillingCost(body: DailyBillingCostInput) {
+    return this.put<DailyBillingCostSettings>('/billing/daily/settings', body);
+  }
   requestEvents(query?: Query) {
     return this.get<Paged<RequestEvent>>('/request-events', query);
   }
@@ -894,6 +900,46 @@ export interface DailyBillingRow {
   usd: number;
 }
 
+export interface DailyBillingModel {
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  quota: number;
+  usd: number;
+}
+
+export interface DailyBillingTier {
+  tier: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  quota: number;
+  usd: number;
+  active_credentials: number;
+  active_credential_days?: number;
+  daily_unit_usd?: number;
+  cost_usd?: number;
+  gross_profit_usd?: number;
+  gross_margin?: number;
+  models: DailyBillingModel[];
+}
+
+export interface DailyBillingCostInput {
+  pro_monthly_cost: number;
+  ultra_monthly_cost: number;
+  other_monthly_cost: number;
+  pro_daily_cost: number;
+  ultra_daily_cost: number;
+  other_daily_cost: number;
+  month_days: number;
+}
+
+export interface DailyBillingCostSettings extends DailyBillingCostInput {
+  source?: 'panel' | 'config' | string;
+  cost_configured?: boolean;
+}
+
 export interface DailyBillingTotals {
   requests: number;
   prompt_tokens: number;
@@ -916,6 +962,7 @@ export interface DailyBillingDay {
   new_api_success_requests: number;
   cpa_success_requests: number;
   rows: DailyBillingRow[];
+  tiers?: DailyBillingTier[];
   totals: DailyBillingTotals;
 }
 
@@ -930,6 +977,15 @@ export interface DailyBillingReport {
   quota_per_unit?: number;
   group_ratio?: number;
   channel_id?: number;
+  channel_ids?: number[];
+  model_prefix?: string;
+  models?: string[];
+  model_exclude?: string;
+  cost_configured?: boolean;
+  cost_note?: string;
+  cost_source?: string;
+  cost_settings?: DailyBillingCostSettings;
+  tiers?: DailyBillingTier[];
   discrepancy?: {
     new_api_success_requests: number;
     cpa_success_requests: number;

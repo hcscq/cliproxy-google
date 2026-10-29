@@ -2,9 +2,11 @@ package dailybilling
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -33,6 +35,15 @@ type Config struct {
 	ProTier      string
 	UltraTier    string
 	SuccessType  int
+	ChannelIDs   []int
+
+	ProMonthlyCost   float64
+	UltraMonthlyCost float64
+	OtherMonthlyCost float64
+	ProDailyCost     float64
+	UltraDailyCost   float64
+	OtherDailyCost   float64
+	CostMonthDays    int
 
 	channelExplicit bool
 	groupExplicit   bool
@@ -44,26 +55,34 @@ type fileRoot struct {
 }
 
 type rawSection struct {
-	PostgresURI  *string  `yaml:"postgres-uri"`
-	PostgresURI2 *string  `yaml:"postgres_uri"`
-	DSN          *string  `yaml:"dsn"`
-	Host         *string  `yaml:"host"`
-	Port         *int     `yaml:"port"`
-	User         *string  `yaml:"user"`
-	Password     *string  `yaml:"password"`
-	Database     *string  `yaml:"database"`
-	SSLMode      *string  `yaml:"sslmode"`
-	QuotaPerUnit *float64 `yaml:"quota-per-unit"`
-	GroupRatio   *float64 `yaml:"group-ratio"`
-	ChannelID    *int     `yaml:"channel-id"`
-	Timezone     *string  `yaml:"timezone"`
-	ModelPrefix  *string  `yaml:"model-prefix"`
-	Models       []string `yaml:"models"`
-	ModelExclude *string  `yaml:"model-exclude"`
-	CreatedAt    *string  `yaml:"created-at"`
-	ProTier      *string  `yaml:"pro-tier"`
-	UltraTier    *string  `yaml:"ultra-tier"`
-	SuccessType  *int     `yaml:"success-type"`
+	PostgresURI   *string  `yaml:"postgres-uri"`
+	PostgresURI2  *string  `yaml:"postgres_uri"`
+	DSN           *string  `yaml:"dsn"`
+	Host          *string  `yaml:"host"`
+	Port          *int     `yaml:"port"`
+	User          *string  `yaml:"user"`
+	Password      *string  `yaml:"password"`
+	Database      *string  `yaml:"database"`
+	SSLMode       *string  `yaml:"sslmode"`
+	QuotaPerUnit  *float64 `yaml:"quota-per-unit"`
+	GroupRatio    *float64 `yaml:"group-ratio"`
+	ChannelID     *int     `yaml:"channel-id"`
+	Timezone      *string  `yaml:"timezone"`
+	ModelPrefix   *string  `yaml:"model-prefix"`
+	Models        []string `yaml:"models"`
+	ModelExclude  *string  `yaml:"model-exclude"`
+	CreatedAt     *string  `yaml:"created-at"`
+	ProTier       *string  `yaml:"pro-tier"`
+	UltraTier     *string  `yaml:"ultra-tier"`
+	SuccessType   *int     `yaml:"success-type"`
+	ChannelIDs    []int    `yaml:"channel-ids"`
+	ProMonthly    *float64 `yaml:"pro-monthly-cost"`
+	UltraMonthly  *float64 `yaml:"ultra-monthly-cost"`
+	OtherMonthly  *float64 `yaml:"other-monthly-cost"`
+	ProDaily      *float64 `yaml:"pro-daily-cost"`
+	UltraDaily    *float64 `yaml:"ultra-daily-cost"`
+	OtherDaily    *float64 `yaml:"other-daily-cost"`
+	CostMonthDays *int     `yaml:"cost-month-days"`
 }
 
 // LoadConfig reads the optional new-api section of cluster.yaml, then applies
@@ -147,6 +166,16 @@ func (raw rawSection) config() Config {
 		cfg.SuccessType = *raw.SuccessType
 		cfg.successExplicit = true
 	}
+	cfg.ChannelIDs = cleanChannelIDs(raw.ChannelIDs)
+	cfg.ProMonthlyCost = floatOrZero(raw.ProMonthly)
+	cfg.UltraMonthlyCost = floatOrZero(raw.UltraMonthly)
+	cfg.OtherMonthlyCost = floatOrZero(raw.OtherMonthly)
+	cfg.ProDailyCost = floatOrZero(raw.ProDaily)
+	cfg.UltraDailyCost = floatOrZero(raw.UltraDaily)
+	cfg.OtherDailyCost = floatOrZero(raw.OtherDaily)
+	if raw.CostMonthDays != nil && *raw.CostMonthDays >= 0 && *raw.CostMonthDays <= 31 {
+		cfg.CostMonthDays = *raw.CostMonthDays
+	}
 	return cfg
 }
 
@@ -203,6 +232,7 @@ func (c *Config) applyEnv() {
 		if value, errValue := strconv.Atoi(raw); errValue == nil && value >= 0 {
 			c.ChannelID = value
 			c.channelExplicit = true
+			c.ChannelIDs = nil
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv("NEW_API_BILLING_TIMEZONE")); raw != "" {
@@ -230,6 +260,22 @@ func (c *Config) applyEnv() {
 		if value, errValue := strconv.Atoi(raw); errValue == nil && value >= 0 {
 			c.SuccessType = value
 			c.successExplicit = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("NEW_API_CHANNEL_IDS")); raw != "" {
+		c.ChannelIDs = cleanChannelIDs(parseChannelIDs(raw))
+		c.ChannelID = 0
+		c.channelExplicit = true
+	}
+	applyMoneyEnv(c, "NEW_API_PRO_MONTHLY_COST", &c.ProMonthlyCost)
+	applyMoneyEnv(c, "NEW_API_ULTRA_MONTHLY_COST", &c.UltraMonthlyCost)
+	applyMoneyEnv(c, "NEW_API_OTHER_MONTHLY_COST", &c.OtherMonthlyCost)
+	applyMoneyEnv(c, "NEW_API_PRO_DAILY_COST", &c.ProDailyCost)
+	applyMoneyEnv(c, "NEW_API_ULTRA_DAILY_COST", &c.UltraDailyCost)
+	applyMoneyEnv(c, "NEW_API_OTHER_DAILY_COST", &c.OtherDailyCost)
+	if raw := strings.TrimSpace(os.Getenv("NEW_API_COST_MONTH_DAYS")); raw != "" {
+		if value, errValue := strconv.Atoi(raw); errValue == nil && value >= 0 && value <= 31 {
+			c.CostMonthDays = value
 		}
 	}
 }
@@ -275,6 +321,19 @@ func (c Config) normalized() Config {
 		c.SuccessType = DefaultSuccessType
 	}
 	c.Models = cleanModels(c.Models)
+	c.ChannelIDs = cleanChannelIDs(c.ChannelIDs)
+	if len(c.ChannelIDs) > 0 {
+		c.ChannelID = 0
+	}
+	c.ProMonthlyCost = clampMoney(c.ProMonthlyCost)
+	c.UltraMonthlyCost = clampMoney(c.UltraMonthlyCost)
+	c.OtherMonthlyCost = clampMoney(c.OtherMonthlyCost)
+	c.ProDailyCost = clampMoney(c.ProDailyCost)
+	c.UltraDailyCost = clampMoney(c.UltraDailyCost)
+	c.OtherDailyCost = clampMoney(c.OtherDailyCost)
+	if c.CostMonthDays < 0 || c.CostMonthDays > 31 {
+		c.CostMonthDays = 0
+	}
 	c.PostgresURI = strings.TrimSpace(c.PostgresURI)
 	c.Host = strings.TrimSpace(c.Host)
 	c.Database = strings.TrimSpace(c.Database)
@@ -356,6 +415,76 @@ func quoteDSN(value string) string {
 		return value
 	}
 	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
+}
+
+func (c Config) channelIDs() []int {
+	if len(c.ChannelIDs) > 0 {
+		return cleanChannelIDs(c.ChannelIDs)
+	}
+	if c.ChannelID > 0 {
+		return []int{c.ChannelID}
+	}
+	return nil
+}
+
+func cleanChannelIDs(ids []int) []int {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[int]struct{}{}
+	out := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Ints(out)
+	return out
+}
+
+func parseChannelIDs(raw string) []int {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t'
+	})
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		value, errValue := strconv.Atoi(strings.TrimSpace(part))
+		if errValue != nil {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func floatOrZero(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func applyMoneyEnv(c *Config, key string, dest *float64) {
+	if c == nil || dest == nil {
+		return
+	}
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return
+	}
+	value, errValue := strconv.ParseFloat(raw, 64)
+	if errValue != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return
+	}
+	*dest = value
 }
 
 func cleanModels(models []string) []string {

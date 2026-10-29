@@ -123,6 +123,8 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `POST` | `/billing/balance-records/recharge` |
 | `GET` | `/billing/charges` |
 | `GET` | `/billing/daily` |
+| `GET` | `/billing/daily/settings` |
+| `PUT` | `/billing/daily/settings` |
 | `GET` | `/billing/model-prices` |
 | `POST` | `/billing/model-prices` |
 | `DELETE` | `/billing/model-prices/:id` |
@@ -1486,7 +1488,7 @@ Query 参数：
 
 不支持的时区名称返回 `400 invalid_timezone`。`from` 晚于 `to` 时返回 `400 invalid_time_range`。
 
-`GET /billing/daily` 与上面的账本无关。它只读 new-api 的 Postgres，估算 gemini-4 费用，不使用 `report_timezone`，也不改写 `billing_charge`。字段、配置项和索引说明见英文文档的同名小节；未配置数据源时返回 `200`，`configured: false`，`message` 为「未配置 new-api 数据源」。
+`GET /billing/daily` 与上面的账本无关。它只读 new-api 的 Postgres，按 pro / ultra / other 估算全模型费用，不使用 `report_timezone`，也不改写 `billing_charge`。`GET` / `PUT /billing/daily/settings` 保存每档凭据的月成本或日成本；全为 0 时不返回成本列。字段、配置项和索引说明见英文文档的同名小节；未配置数据源时返回 `200`，`configured: false`，`message` 为「未配置 new-api 数据源」。
 
 ### GET `/billing/overview`
 

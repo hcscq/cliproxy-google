@@ -65,20 +65,62 @@ func (s *Service) DefaultTimezone() string {
 	return s.cfg.Timezone
 }
 
+// FileCost is the cost basis from cluster.yaml and the environment, before a panel override.
+func (s *Service) FileCost() CostSettings {
+	if s == nil {
+		return CostSettings{}
+	}
+	return s.cfg.CostSettings()
+}
+
 // Report returns the estimate, or a configured=false payload when new-api is unset.
 func (s *Service) Report(ctx context.Context, query Query) (Report, error) {
 	if s == nil || !s.cfg.Configured() {
-		return Report{Configured: false, Message: UnconfiguredMessage, Days: []Day{}}, nil
+		return unconfiguredReport(s, query), nil
 	}
-	logs, errLogs := s.logs.Aggregate(ctx, s.cfg, query)
+	cfg, source := s.effective(query)
+	logs, errLogs := s.logs.Aggregate(ctx, cfg, query)
 	if errLogs != nil {
 		return Report{}, errLogs
 	}
-	tiers, errTiers := s.tiers.Aggregate(ctx, s.cfg, query)
+	tiers, errTiers := s.tiers.Aggregate(ctx, cfg, query)
 	if errTiers != nil {
 		return Report{}, errTiers
 	}
-	return Build(s.cfg, query, logs, tiers), nil
+	report := Build(cfg, query, logs, tiers)
+	report.CostSource = source
+	return report, nil
+}
+
+func (s *Service) effective(query Query) (Config, string) {
+	if s == nil {
+		return Config{}, "config"
+	}
+	if query.Cost != nil {
+		return s.cfg.WithCost(*query.Cost), "panel"
+	}
+	return s.cfg, "config"
+}
+
+func unconfiguredReport(s *Service, query Query) Report {
+	cfg := Config{}
+	source := "config"
+	if s != nil {
+		cfg, source = s.effective(query)
+	}
+	report := Report{
+		Configured:     false,
+		Message:        UnconfiguredMessage,
+		Days:           []Day{},
+		Tiers:          []TierSummary{},
+		CostSettings:   cfg.CostSettings(),
+		CostConfigured: cfg.CostConfigured(),
+		CostSource:     source,
+	}
+	if report.CostConfigured {
+		report.CostNote = CostNote
+	}
+	return report
 }
 
 func (s *Service) readOnlyDB(ctx context.Context) (*gorm.DB, error) {

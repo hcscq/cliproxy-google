@@ -32,6 +32,9 @@ type Handler struct {
 	dailyBilling          dailybilling.Reporter
 	dailyBillingOnce      sync.Once
 	dailyBillingNow       func() time.Time
+	dailyCostMu           sync.Mutex
+	dailyCostSet          bool
+	dailyCostMem          dailybilling.CostSettings
 }
 
 // NewHandler creates a new handler.
