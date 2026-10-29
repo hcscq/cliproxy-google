@@ -5,12 +5,14 @@ import (
 	"crypto/tls"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginstore"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/dailybilling"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/pluginauth"
 )
@@ -27,6 +29,9 @@ type Handler struct {
 	pluginStoreAuth       *pluginauth.Service
 	quotaRecollect        QuotaRecollectTrigger
 	agEnricher            antigravityEnricher
+	dailyBilling          dailybilling.Reporter
+	dailyBillingOnce      sync.Once
+	dailyBillingNow       func() time.Time
 }
 
 // NewHandler creates a new handler.

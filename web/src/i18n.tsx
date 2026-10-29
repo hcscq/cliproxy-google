@@ -19,6 +19,7 @@ const dict = {
   accessKeys: ['访问密钥', 'Access keys'],
   groups: ['分组与权限', 'Groups'],
   usage: ['用量与请求', 'Usage & requests'],
+  dailyBilling: ['每日计费', 'Daily billing'],
   logs: ['日志', 'Logs'],
   nodes: ['节点', 'Nodes'],
   settings: ['设置', 'Settings'],

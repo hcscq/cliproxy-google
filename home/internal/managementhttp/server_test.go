@@ -87,6 +87,7 @@ func TestClusterManagementBillingWriteRoutesRegistered(t *testing.T) {
 
 	for _, route := range []RouteKey{
 		{Method: http.MethodGet, Path: "/billing/overview"},
+		{Method: http.MethodGet, Path: "/billing/daily"},
 		{Method: http.MethodGet, Path: "/billing/charges"},
 		{Method: http.MethodGet, Path: "/billing/balance-records"},
 		{Method: http.MethodGet, Path: "/billing/model-prices"},

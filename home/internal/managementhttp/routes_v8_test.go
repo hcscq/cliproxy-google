@@ -32,7 +32,7 @@ func TestManagementV8Routes(t *testing.T) {
 		"GET /server/latest-version", "POST /requests/api-call", "POST /routing/cooldown/reset",
 		"GET /observability/logs", "GET /observability/usage/api-keys", "GET /plugins/store", "DELETE /plugins/:id",
 		"GET /credentials/quota/providers", "POST /credentials/quota/fetch", "POST /credentials/quota/reset", "GET /plugins/:id/quota",
-		"GET /users", "GET /nodes", "GET /billing/overview", "GET /access/api-keys",
+		"GET /users", "GET /nodes", "GET /billing/overview", "GET /billing/daily", "GET /access/api-keys",
 	} {
 		method, path, _ := strings.Cut(route, " ")
 		if !registered[method+" /v8/management"+path] {

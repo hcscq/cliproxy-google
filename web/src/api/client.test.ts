@@ -12,6 +12,14 @@ function mockFetch(status: number, body: unknown, contentType = 'application/jso
 }
 
 describe('ApiClient', () => {
+  it('requests daily billing with the date range', async () => {
+    const { fn, calls } = mockFetch(200, { configured: false, message: '未配置 new-api 数据源', estimated: false, totals: {}, days: [] });
+    const c = new ApiClient('k', { fetch: fn });
+    const report = await c.dailyBilling({ from: '2026-10-28', to: '2026-10-29', timezone: 'Asia/Shanghai' });
+    expect(report.configured).toBe(false);
+    expect(calls[0].url).toBe('/v8/management/billing/daily?from=2026-10-28&to=2026-10-29&timezone=Asia%2FShanghai');
+  });
+
   it('sends bearer key and parses JSON', async () => {
     const { fn, calls } = mockFetch(200, { files: [] });
     const c = new ApiClient('secret', { fetch: fn });

@@ -23,6 +23,11 @@ export function fmtMs(ms?: number | null): string {
   return `${Math.round(ms)} ms`;
 }
 
+export function fmtUSD(n?: number | null): string {
+  if (n === undefined || n === null || Number.isNaN(n)) return '—';
+  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`;
+}
+
 export function fmtTime(iso?: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);

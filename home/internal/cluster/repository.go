@@ -68,6 +68,15 @@ func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{db: db, leaseDB: leaseDBFor(db)}
 }
 
+// ReadOnlyDB returns the repository database for read-only aggregates.
+// Callers must not migrate or write through this handle.
+func (r *Repository) ReadOnlyDB() *gorm.DB {
+	if r == nil {
+		return nil
+	}
+	return r.db
+}
+
 // leaseRepository returns a repository bound to the dedicated coordinator
 // pool (falls back to itself when there is none, e.g. SQLite).
 func (r *Repository) leaseRepository() *Repository {

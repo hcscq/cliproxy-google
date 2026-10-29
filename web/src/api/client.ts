@@ -524,6 +524,9 @@ export class ApiClient {
   usageOverview(query?: Query) {
     return this.get<UsageOverview>('/usage/overview', query);
   }
+  dailyBilling(query?: Query) {
+    return this.get<DailyBillingReport>('/billing/daily', query);
+  }
   requestEvents(query?: Query) {
     return this.get<Paged<RequestEvent>>('/request-events', query);
   }
@@ -879,6 +882,61 @@ export interface UsageTop {
   error_rate?: number;
   avg_latency_ms?: number | null;
   last_used_at?: string;
+}
+
+export interface DailyBillingRow {
+  tier: string;
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  quota: number;
+  usd: number;
+}
+
+export interface DailyBillingTotals {
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  quota: number;
+  usd: number;
+  pro_quota: number;
+  ultra_quota: number;
+  other_quota: number;
+  pro_usd: number;
+  ultra_usd: number;
+  other_usd: number;
+  pro_ratio: number;
+}
+
+export interface DailyBillingDay {
+  date: string;
+  tier_shares: Record<string, number>;
+  unallocated: boolean;
+  new_api_success_requests: number;
+  cpa_success_requests: number;
+  rows: DailyBillingRow[];
+  totals: DailyBillingTotals;
+}
+
+export interface DailyBillingReport {
+  configured: boolean;
+  message?: string;
+  estimated: boolean;
+  estimate_note?: string;
+  from?: string;
+  to?: string;
+  timezone?: string;
+  quota_per_unit?: number;
+  group_ratio?: number;
+  channel_id?: number;
+  discrepancy?: {
+    new_api_success_requests: number;
+    cpa_success_requests: number;
+    difference: number;
+  };
+  totals: DailyBillingTotals;
+  days: DailyBillingDay[];
 }
 
 export interface UsageOverview {

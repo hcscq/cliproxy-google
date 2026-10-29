@@ -122,6 +122,7 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `POST` | `/billing/balance-records/deduct` |
 | `POST` | `/billing/balance-records/recharge` |
 | `GET` | `/billing/charges` |
+| `GET` | `/billing/daily` |
 | `GET` | `/billing/model-prices` |
 | `POST` | `/billing/model-prices` |
 | `DELETE` | `/billing/model-prices/:id` |
@@ -1485,6 +1486,111 @@ All paths in this section are relative to the Management API base URL, for examp
 Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. All three routes use the half-open interval `[from,to)`: `from` is included and `to` is excluded. The optional `timezone` parameter is a reporting-timezone override and must be an IANA timezone name. When omitted, the routes use `/billing/settings.report_timezone`, which defaults to `UTC`. Date-only values use calendar dates in the applied reporting timezone, and a date-only `to` is normalized to the next local midnight so the whole ending day remains included across DST transitions. Explicit timestamps are exact exclusive boundaries and are not shifted or expanded by the reporting timezone. `/billing/overview` also uses the applied reporting timezone for `range` calendar dates and `daily_trend` buckets, so one natural day is not split at UTC midnight. The reporting timezone only controls query boundaries and report grouping; it never reprices immutable charges, changes price snapshots, or mutates user balances. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
 
 Unsupported timezone names return `400 invalid_timezone`. A `from` value after `to` returns `400 invalid_time_range`.
+
+`GET /billing/daily` is separate from the ledger above. It estimates gemini-4 spend from a read-only new-api Postgres database and does not follow `report_timezone` or reprice `billing_charge` rows.
+
+### GET `/billing/daily`
+
+Estimated gemini-4 billing for the management panel. new-api `logs` are the billing authority (`type = 2` is a successful charge; `type = 5` is an error and is not billed). CPA `usage` is the tier authority (`auth_index` joined to `auth.uuid`, tier from `auth_json.metadata.subscription_tier`). new-api does not store the CPA tier, so pro and ultra figures are an estimate: each calendar day's share of successful CPA `total_tokens` is applied to that day's new-api requests, tokens, quota, and USD. USD is `quota / quota_per_unit`. `group_ratio` is reported and is not applied again, because new-api quota already includes it.
+
+When the new-api database is not configured the route returns `200` with `configured: false` and `message: "未配置 new-api 数据源"`. A configured database that cannot be reached returns `503 new_api_unavailable`. Query failures return `500 daily_billing_failed`. The response never includes the database password or DSN.
+
+Date parameters are `YYYY-MM-DD` in `timezone` (IANA, default `UTC`, or `new-api.timezone` when the query omits it). `from` and `to` are inclusive calendar dates. Omitted bounds default to yesterday through today. The range may be at most 93 days. `from` after `to`, a bad date, or a longer range returns `400 invalid_time_range`. A bad timezone returns `400 invalid_timezone`.
+
+Aggregates run in SQL. CPA does not create indexes on the new-api database. If the daily query is slow, the new-api owner can add:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS logs_daily_billing_idx
+  ON logs (channel_id, type, created_at)
+  INCLUDE (model_name, prompt_tokens, completion_tokens, quota);
+```
+
+On the CPA database, `auth.uuid` is already the primary key. A partial usage index is optional because `usage` is partitioned:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS usage_gemini4_billing_idx
+  ON usage (timestamp, model)
+  WHERE failed = false;
+```
+
+#### Configuration
+
+Set this on the Home host. Do not put the DSN in the runtime `config.yaml`: that document is stored in Home's database and distributed to CPA nodes. Use `cluster.yaml` or environment variables. Environment variables override the file. A non-empty `NEW_API_DATABASE_DSN` wins. If that variable is empty and any `NEW_API_DB_*` connection variable is set, those fields are used instead of a URI from the file.
+
+`cluster.yaml`:
+
+```yaml
+new-api:
+  # postgres-uri: "postgresql://readonly:secret@new-api-host:5432/new-api?sslmode=require"
+  host: "127.0.0.1"
+  port: 5432
+  user: "readonly"
+  password: "secret"
+  database: "new-api"
+  sslmode: "disable"
+  quota-per-unit: 500000
+  group-ratio: 0.3
+  channel-id: 59
+  timezone: "UTC"
+  model-prefix: "gemini-4-argon"
+  model-exclude: "-disabled"
+  created-at: "unix" # unix | unix_ms | timestamptz
+  pro-tier: "g1-pro-tier"
+  ultra-tier: "g1-ultra-tier"
+  success-type: 2
+  # models: ["gemini-4-argon", "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]
+```
+
+`created-at` defaults to `unix` because new-api stores `logs.created_at` as Unix seconds. `channel-id: 0` disables the channel filter. An explicit `models` list replaces `model-prefix`. The connection is opened read-only (`default_transaction_read_only=on`, statement timeout 25s) and is not migrated.
+
+| Environment variable | Meaning | Default |
+| --- | --- | --- |
+| `NEW_API_DATABASE_DSN` | Full Postgres URI or keyword DSN. | empty |
+| `NEW_API_DB_HOST` | Host, when no DSN is set. | empty |
+| `NEW_API_DB_PORT` | Port. | `5432` |
+| `NEW_API_DB_USER` | User. | empty |
+| `NEW_API_DB_PASSWORD` | Password. Never logged. | empty |
+| `NEW_API_DB_NAME` | Database name. | empty |
+| `NEW_API_DB_SSLMODE` | `sslmode`. | `disable` |
+| `NEW_API_QUOTA_PER_UNIT` | USD divisor. | `500000` |
+| `NEW_API_GROUP_RATIO` | Billing-group ratio shown on the report. | `0.3` |
+| `NEW_API_CHANNEL_ID` | `logs.channel_id` filter. `0` means all channels. | `59` |
+| `NEW_API_BILLING_TIMEZONE` | Default reporting timezone. | `UTC` |
+| `NEW_API_MODEL_PREFIX` | Model name prefix. | `gemini-4-argon` |
+| `NEW_API_MODELS` | Comma-separated exact model names. Replaces the prefix. | empty |
+| `NEW_API_MODEL_EXCLUDE` | Suffix excluded from the prefix match. | `-disabled` |
+| `NEW_API_CREATED_AT` | `unix`, `unix_ms`, or `timestamptz`. | `unix` |
+| `NEW_API_PRO_TIER` | CPA metadata tier id counted as pro. | `g1-pro-tier` |
+| `NEW_API_ULTRA_TIER` | CPA metadata tier id counted as ultra. | `g1-ultra-tier` |
+| `NEW_API_SUCCESS_TYPE` | new-api log type that is billed. | `2` |
+
+The source is configured when `NEW_API_DATABASE_DSN` / `postgres-uri` is set, or when both host and database are set. Otherwise the panel shows the unconfigured message.
+
+Query parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from` | string | Optional inclusive start date, `YYYY-MM-DD`. |
+| `to` | string | Optional inclusive end date, `YYYY-MM-DD`. |
+| `timezone` | string | Optional IANA timezone for the calendar dates. |
+
+Response fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `configured` | boolean | False when the new-api database is not configured. |
+| `message` | string | Present when `configured` is false. |
+| `estimated` | boolean | True when tier amounts are allocated rather than joined per request. |
+| `estimate_note` | string | Short description of the allocation. |
+| `from` / `to` | string | Inclusive dates that were queried. |
+| `timezone` | string | Timezone used for day buckets. |
+| `quota_per_unit` | number | Divisor used for USD. |
+| `group_ratio` | number | Configured billing-group ratio. Not multiplied into USD. |
+| `channel_id` | integer | Channel filter. `0` means no filter. |
+| `discrepancy` | object | `new_api_success_requests`, `cpa_success_requests`, and `difference` (new-api minus CPA) over the whole range. |
+| `totals` | object | Requests, prompt and completion tokens, quota, USD, per-tier quota and USD, and `pro_ratio` (pro quota / quota). |
+| `days[]` | array | One object per day that has new-api rows: `tier_shares`, `unallocated`, both success counts, `rows[]`, and `totals`. |
+| `days[].rows[]` | array | `tier` (`pro`, `ultra`, `other`), `model`, `requests`, `prompt_tokens`, `completion_tokens`, `quota`, `usd`. |
 
 ### GET `/billing/overview`
 
