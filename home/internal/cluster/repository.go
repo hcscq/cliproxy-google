@@ -317,6 +317,15 @@ func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 			}
 			out = record
 		}
+		// Every disable path (unauthorized refresh, verify-account 403, TOS ban,
+		// management toggle, egress pause) persists through this upsert. Drop the
+		// reserve mark in the same transaction so a disabled credential cannot
+		// stay reserved. Already-disabled rows are left to the reserve sweeper.
+		if record.Disabled && !existing.Disabled {
+			if errClear := clearReserveForDisabledAuth(tx, record.UUID, auth.StatusMessage); errClear != nil {
+				return errClear
+			}
+		}
 		return appendEvent(tx, "auth", op, record.UUID, record.Version)
 	})
 	if errTransaction != nil {
@@ -463,6 +472,12 @@ func (r *Repository) MutateAuth(ctx context.Context, uuid string, op string, mut
 			}
 			if errDeleteWindows := txDB.Where("credential_id = ?", uuid).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
 				return errDeleteWindows
+			}
+		}
+		// Refresh unauthorized and other mutate-to-disable paths land here.
+		if record.Disabled && !existing.Disabled {
+			if errClear := clearReserveForDisabledAuth(txDB, uuid, auth.StatusMessage); errClear != nil {
+				return errClear
 			}
 		}
 		outAuth = auth

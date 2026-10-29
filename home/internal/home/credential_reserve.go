@@ -75,6 +75,9 @@ type ReserveStore interface {
 	CountActiveCredentials(ctx context.Context, countCooled bool) (int, error)
 	CountReserveEvents(ctx context.Context, kind string, since time.Time) (int, error)
 	RecordReserveBans(ctx context.Context) (int, error)
+	// UnreserveDisabledCredentials clears reserved on disabled credentials.
+	// It must not change auth enablement, deletion, or promotable counts.
+	UnreserveDisabledCredentials(ctx context.Context) (int, error)
 }
 
 type credentialReserve struct {
@@ -211,7 +214,8 @@ func (r *Runtime) reserveSettings() config.ReserveSettings {
 }
 
 func (r *Runtime) startCredentialReserve(ctx context.Context) {
-	r.syncReserve(ctx) // before serving: never schedule a reserved credential at startup
+	r.sweepDisabledReserves(ctx) // drop reserved marks left on already-disabled credentials
+	r.syncReserve(ctx)           // before serving: never schedule a reserved credential at startup
 	r.startReserveBanProbe(ctx)
 	go func() {
 		sync := time.NewTicker(reserveSyncEvery)
@@ -303,10 +307,11 @@ func orderReserveCandidates(in []ReserveCandidate, tiers []string, healthPolicy 
 	return out
 }
 
-// reserveControl runs on the leader: audits bans, then promotes reserves when the
-// active count (or a model rule's usable count) has stayed below its minimum for the
-// activation delay, rate-limited. Model-rule shortages promote rule-capable reserves
-// (most remaining quota first); a generic shortage prefers them while a rule is short.
+// reserveControl runs on the leader: audits bans, clears reserved marks on disabled
+// credentials, then promotes reserves when the active count (or a model rule's usable
+// count) has stayed below its minimum for the activation delay, rate-limited.
+// Model-rule shortages promote rule-capable reserves (most remaining quota first);
+// a generic shortage prefers them while a rule is short.
 func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	s := r.reserveStore()
 	if s == nil {
@@ -314,11 +319,7 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if n, err := s.RecordReserveBans(cctx); err != nil {
-		log.WithError(err).Debug("credential reserve: ban audit failed")
-	} else if n > 0 {
-		log.Infof("credential reserve: recorded %d ban(s)", n)
-	}
+	r.sweepDisabledReservesWithStore(cctx, s)
 	cfg := r.reserveSettings()
 	active, err := s.CountActiveCredentials(cctx, cfg.CountCooled)
 	if err != nil {
@@ -462,6 +463,41 @@ func (r *Runtime) reserveControl(ctx context.Context, now time.Time) {
 	if done > 0 {
 		r.syncReserve(ctx)
 		publishQuotaSync(quotaSyncMsg{Kind: "reserve"})
+	}
+}
+
+// sweepDisabledReserves clears reserved on credentials that are already disabled.
+// Ban attribution runs first, while reserved still reflects whether the
+// credential was in reserve when it was banned. The auth row is not modified,
+// and promotable counts already exclude disabled credentials.
+func (r *Runtime) sweepDisabledReserves(ctx context.Context) {
+	s := r.reserveStore()
+	if s == nil {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	r.sweepDisabledReservesWithStore(cctx, s)
+}
+
+func (r *Runtime) sweepDisabledReservesWithStore(ctx context.Context, s ReserveStore) {
+	if s == nil {
+		return
+	}
+	if n, err := s.RecordReserveBans(ctx); err != nil {
+		// Leave the marks in place so a later pass can still attribute bans.
+		log.WithError(err).Debug("credential reserve: ban audit failed")
+		return
+	} else if n > 0 {
+		log.Infof("credential reserve: recorded %d ban(s)", n)
+	}
+	n, err := s.UnreserveDisabledCredentials(ctx)
+	if err != nil {
+		log.WithError(err).Debug("credential reserve: unreserve disabled failed")
+		return
+	}
+	if n > 0 {
+		log.Infof("credential reserve: cleared reserved on %d disabled credential(s)", n)
 	}
 }
 
