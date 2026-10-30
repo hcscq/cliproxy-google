@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -89,6 +90,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 				return nil
 			}
 			perAccountExcluded := extractExcludedModelsFromMetadata(metadata)
+			priorityModels := extractPriorityModelsFromMetadata(metadata)
 			for _, auth := range auths {
 				auth.CreatedAt = now
 				auth.UpdatedAt = now
@@ -97,6 +99,14 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 				}
 				auth.Attributes["path"] = fullPath
 				auth.Attributes["source"] = fullPath
+				if len(priorityModels) > 0 {
+					if auth.Metadata == nil {
+						auth.Metadata = make(map[string]any)
+					}
+					auth.Metadata["priority_models"] = priorityModels
+					delete(auth.Metadata, "priority-models")
+					auth.Attributes["priority_models"] = strings.Join(priorityModels, ",")
+				}
 				ApplyAuthExcludedModelsMeta(auth, cfg, perAccountExcluded, "oauth")
 				coreauth.ApplyCustomHeadersFromMetadata(auth)
 				applyClusterUUID(ctx, auth)
@@ -172,6 +182,12 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 				a.Attributes["priority"] = priority
 			}
 		}
+	}
+	// Read priority_models (per-model priority scope) from auth file.
+	if priorityModels := extractPriorityModelsFromMetadata(metadata); len(priorityModels) > 0 {
+		a.Metadata["priority_models"] = priorityModels
+		delete(a.Metadata, "priority-models")
+		a.Attributes["priority_models"] = strings.Join(priorityModels, ",")
 	}
 	// Read note from auth file.
 	if rawNote, ok := metadata["note"]; ok {
@@ -250,4 +266,49 @@ func extractExcludedModelsFromMetadata(metadata map[string]any) []string {
 		}
 	}
 	return result
+}
+
+// extractPriorityModelsFromMetadata reads per-account priority model patterns from OAuth JSON metadata.
+// Supports both "priority_models" and "priority-models". Values are lower-cased, de-duplicated, and sorted.
+func extractPriorityModelsFromMetadata(metadata map[string]any) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["priority_models"]
+	if !ok {
+		raw, ok = metadata["priority-models"]
+	}
+	if !ok || raw == nil {
+		return nil
+	}
+	var items []string
+	switch v := raw.(type) {
+	case string:
+		items = strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' })
+	case []string:
+		items = v
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				items = append(items, s)
+			}
+		}
+	default:
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, s := range items {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }

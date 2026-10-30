@@ -808,6 +808,9 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	if excludedModels := credentialExcludedModels(auth.Metadata); len(excludedModels) > 0 {
 		entry["excluded_models"] = excludedModels
 	}
+	if priorityModels := credentialPriorityModels(auth.Metadata); len(priorityModels) > 0 {
+		entry["priority_models"] = priorityModels
+	}
 	if !auth.CreatedAt.IsZero() {
 		entry["created_at"] = auth.CreatedAt
 	}
@@ -1057,6 +1060,19 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage
 				continue
 			}
 		}
+		if metadataPath == "priority" && value == nil {
+			delete(auth.Metadata, "priority")
+			touchedRoots["priority"] = struct{}{}
+			changed = true
+			continue
+		}
+		if metadataPath == "priority_models" && value == nil {
+			delete(auth.Metadata, "priority_models")
+			delete(auth.Metadata, "priority-models")
+			touchedRoots["priority_models"] = struct{}{}
+			changed = true
+			continue
+		}
 		if metadataPath == "headers" {
 			applyOAuthHeadersPatch(auth, value)
 		} else if errSet := setOAuthMetadataValue(auth.Metadata, metadataPath, value); errSet != nil {
@@ -1123,6 +1139,8 @@ func canonicalOAuthMetadataKey(key string) string {
 		return "disable_cooling"
 	case "excluded-models":
 		return "excluded_models"
+	case "priority-models":
+		return "priority_models"
 	case "fingerprint-profile":
 		return "fingerprint_profile"
 	case "model-aliases":
@@ -1150,6 +1168,8 @@ func legacyOAuthMetadataKey(canonicalKey string) string {
 		return "disable-cooling"
 	case "excluded_models":
 		return "excluded-models"
+	case "priority_models":
+		return "priority-models"
 	case "fingerprint_profile":
 		return "fingerprint-profile"
 	case "model_aliases":
@@ -1290,6 +1310,9 @@ func syncOAuthMetadataFields(auth *coreauth.Auth, touchedRoots map[string]struct
 	if _, ok := touchedRoots["excluded_models"]; ok {
 		syncOAuthExcludedModelsAttribute(auth)
 	}
+	if _, ok := touchedRoots["priority_models"]; ok {
+		syncOAuthPriorityModelsAttribute(auth)
+	}
 }
 
 // syncOAuthExcludedModelsAttribute mirrors the per-credential exclusion list
@@ -1382,10 +1405,72 @@ func syncOAuthPriorityAttribute(auth *coreauth.Auth) {
 	}
 	priority, ok := oauthIntValue(auth.Metadata["priority"])
 	if !ok || priority == 0 {
+		delete(auth.Metadata, "priority")
 		delete(auth.Attributes, "priority")
 		return
 	}
 	auth.Attributes["priority"] = strconv.Itoa(priority)
+}
+
+// syncOAuthPriorityModelsAttribute mirrors metadata.priority_models into the
+// routing attribute (comma-joined). Empty clears both metadata and attributes.
+func syncOAuthPriorityModelsAttribute(auth *coreauth.Auth) {
+	if auth == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	list := credentialPriorityModels(auth.Metadata)
+	delete(auth.Metadata, "priority-models")
+	if len(list) == 0 {
+		delete(auth.Metadata, "priority_models")
+		delete(auth.Attributes, "priority_models")
+		return
+	}
+	auth.Metadata["priority_models"] = list
+	auth.Attributes["priority_models"] = strings.Join(list, ",")
+}
+
+// credentialPriorityModels returns the normalized (trimmed, lower-cased,
+// de-duplicated, sorted) per-credential priority model patterns from metadata.
+// Accepts a list or a comma/newline separated string. Alias: priority-models.
+func credentialPriorityModels(metadata map[string]any) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["priority_models"]
+	if !ok {
+		raw = metadata["priority-models"]
+	}
+	var items []string
+	switch v := raw.(type) {
+	case string:
+		items = strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' })
+	case []string:
+		items = v
+	case []any:
+		for _, it := range v {
+			if str, ok := it.(string); ok {
+				items = append(items, str)
+			}
+		}
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		it = strings.ToLower(strings.TrimSpace(it))
+		if it == "" {
+			continue
+		}
+		if _, dup := seen[it]; dup {
+			continue
+		}
+		seen[it] = struct{}{}
+		out = append(out, it)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func oauthIntValue(value any) (int, bool) {

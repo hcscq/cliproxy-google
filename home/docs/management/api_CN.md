@@ -2058,6 +2058,7 @@ Thinking levels 会去除首尾空白、转小写并去重。`none` 启用零预
       "prefix": "team-a",
       "proxy_url": "socks5://127.0.0.1:1080",
       "priority": 10,
+      "priority_models": ["gemini-4-*", "claude-*"],
       "note": "operator note",
       "websockets": true,
       "disable-cooling": false,
@@ -2077,6 +2078,7 @@ Thinking levels 会去除首尾空白、转小写并去重。`none` 启用零预
 | `prefix` | string | 模型命名空间前缀；未设置时为空字符串。 |
 | `proxy_url` | string | 凭证级代理 URL；未设置时为空字符串。 |
 | `priority` | integer | 凭证选择优先级；未设置时省略。 |
+| `priority_models` | string array | 与非零 `priority` 同时设置时，优先级仅对这些模型模式生效（支持 `*` 通配）。省略或空表示对所有模型生效（兼容旧行为）。 |
 | `note` | string | 运维备注；为空时省略。 |
 | `websockets` | boolean | 实际生效的运行时 WebSocket 标志。 |
 | `disable-cooling` | boolean | 可选凭证级冷却覆盖。`true` 禁用冷却，`false` 显式启用；未设置时省略该字段并继承全局设置。 |
@@ -2267,7 +2269,8 @@ Selector 字段：
 | `proxy_url` | string | Per-auth proxy URL；空值清空。 |
 | `proxy-url` | string | `proxy_url` 的 alias。 |
 | `headers` | object string to string | 额外上游 headers。空字符串会删除单个 header。 |
-| `priority` | integer or numeric string | 凭证选择优先级。 |
+| `priority` | integer、数字字符串或 `null` | 凭证选择优先级。`null` 清除。 |
+| `priority_models` / `priority-models` | 字符串数组、逗号分隔字符串或 `null` | 限定 `priority` 生效的模型模式。值会小写、去重、排序。空数组或 `null` 清除限定，使优先级对所有模型生效。接受别名 `priority-models`；两者同时出现时以规范名 `priority_models` 为准。 |
 | `note` | string | 操作备注；空值清空。 |
 | `websockets` | boolean or string bool | 支持的 auth 的 runtime websocket flag。 |
 | `disabled` | boolean or string bool | 更新 auth disabled state 和 status。 |

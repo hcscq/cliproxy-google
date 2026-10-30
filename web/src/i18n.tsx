@@ -49,6 +49,7 @@ const dict = {
   provider: ['提供方', 'Provider'],
   name: ['名称', 'Name'],
   priority: ['优先级', 'Priority'],
+  priorityModels: ['优先级模型', 'Priority models'],
   weight: ['权重', 'Weight'],
   prefix: ['模型前缀', 'Model prefix'],
   proxyUrl: ['代理地址', 'Proxy URL'],

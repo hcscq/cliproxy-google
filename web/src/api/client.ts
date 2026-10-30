@@ -750,6 +750,7 @@ export interface Credential {
   priority?: number;
   note?: string;
   excluded_models?: string[];
+  priority_models?: string[];
   websockets?: boolean;
   'disable-cooling'?: boolean;
   'request-retry'?: number;
