@@ -62,7 +62,7 @@ func TestEgressRoundPlacesNewUltraOnly(t *testing.T) {
 	reg("new1", now.Add(-time.Hour))
 	rt := &Runtime{coreManager: manager}
 	old := egressChecker
-	egressChecker = func(context.Context, string) error { return nil }
+	egressChecker = func(context.Context, string, time.Duration) error { return nil }
 	defer func() { egressChecker = old }()
 	rt.egressRound(ctx, specs)
 	for id, want := range map[string]string{"old1": "http://h1:1", "old2": "http://h1:1", "new1": "http://h2:1"} {

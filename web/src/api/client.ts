@@ -241,10 +241,10 @@ export class ApiClient {
     return this.post<{ dry_run: boolean; moves: EgressMove[]; applied?: number }>('/proxy/egress/ultra/rebalance', { dry_run: dryRun });
   }
   egressSettings() {
-    return this.get<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[]; ultra_max_per_egress?: number }>('/proxy/egress/settings');
+    return this.get<EgressSettings>('/proxy/egress/settings');
   }
-  saveEgressSettings(v: { allow_primary: boolean; max_per_egress?: number; disabled?: string[]; ultra_max_per_egress?: number }) {
-    return this.request<{ allow_primary: boolean; max_per_egress?: number; disabled?: string[]; ultra_max_per_egress?: number }>('PUT', '/proxy/egress/settings', { body: v });
+  saveEgressSettings(v: EgressSettings) {
+    return this.request<EgressSettings>('PUT', '/proxy/egress/settings', { body: v });
   }
   egressAck(id: string) {
     return this.post<{ status: string }>('/proxy/egress/ack', { id });
@@ -1601,6 +1601,17 @@ export interface CredentialQuotaGroup {
 }
 
 export interface ImportOpts { reserve?: boolean; health_check?: boolean; batch_id?: string }
+
+export type EgressSettings = {
+  allow_primary: boolean;
+  max_per_egress?: number;
+  disabled?: string[];
+  ultra_max_per_egress?: number;
+  probe_tick_seconds?: number;
+  fail_threshold?: number;
+  probe_timeout_seconds?: number;
+  probe_per_agent?: number;
+};
 export interface ImportResponse { status: string; uploaded?: number; files?: string[]; summary?: RTImportSummary; results?: RTImportResult[]; result?: RTImportResult; batch_id?: string; health_batch_id?: string }
 function importQuery(o: ImportOpts): Record<string, string | undefined> {
   return { reserve: o.reserve ? 'true' : undefined, health_check: o.health_check === undefined ? undefined : String(o.health_check), batch_id: o.batch_id };

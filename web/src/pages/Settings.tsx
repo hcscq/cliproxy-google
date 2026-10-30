@@ -543,7 +543,126 @@ function EgressPolicy() {
           }}
         />
       </label>
-    </Card>
+    
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 16, alignItems: 'center' }}>
+        <label
+          style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title={tr('出口探测间隔（秒）。默认 5。连续失败达到阈值后才判离线。', 'Egress probe interval in seconds. Default 5. Unhealthy only after consecutive failures reach the threshold.')}
+        >
+          {tr('探测间隔(秒)', 'Probe tick (s)')}
+          <input
+            type="number"
+            min={2}
+            max={60}
+            style={{ width: 72 }}
+            defaultValue={st.data.probe_tick_seconds ?? 5}
+            disabled={saving}
+            data-testid="settings-probe-tick"
+            onBlur={async (e) => {
+              const v = Math.min(60, Math.max(2, Math.floor(Number(e.target.value) || 5)));
+              if (v === (st.data?.probe_tick_seconds ?? 5)) return;
+              setSaving(true);
+              try {
+                await api.saveEgressSettings({ ...st.data!, probe_tick_seconds: v });
+                toast(tr('已保存', 'Saved'));
+                await st.reload();
+              } catch (err) {
+                toastError(err);
+              } finally {
+                setSaving(false);
+              }
+            }}
+          />
+        </label>
+        <label
+          style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title={tr('连续探测失败次数达到此值才判离线并暂停凭据（慢判离线）。默认 6（约 30 秒）。恢复只需一次成功。', 'Consecutive probe failures before marking down and pausing credentials (slow mark-down). Default 6 (~30s). One success recovers.')}
+        >
+          {tr('失败阈值', 'Fail threshold')}
+          <input
+            type="number"
+            min={1}
+            max={30}
+            style={{ width: 72 }}
+            defaultValue={st.data.fail_threshold ?? 6}
+            disabled={saving}
+            data-testid="settings-fail-threshold"
+            onBlur={async (e) => {
+              const v = Math.min(30, Math.max(1, Math.floor(Number(e.target.value) || 6)));
+              if (v === (st.data?.fail_threshold ?? 6)) return;
+              setSaving(true);
+              try {
+                await api.saveEgressSettings({ ...st.data!, fail_threshold: v });
+                toast(tr('已保存', 'Saved'));
+                await st.reload();
+              } catch (err) {
+                toastError(err);
+              } finally {
+                setSaving(false);
+              }
+            }}
+          />
+        </label>
+        <label
+          style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title={tr('单次 CONNECT 探测超时（秒）。默认 8，避免 Home 节点短暂卡顿误判。', 'Per-probe CONNECT timeout in seconds. Default 8, to reduce false downs when Home briefly stalls.')}
+        >
+          {tr('探测超时(秒)', 'Probe timeout (s)')}
+          <input
+            type="number"
+            min={2}
+            max={30}
+            style={{ width: 72 }}
+            defaultValue={st.data.probe_timeout_seconds ?? 8}
+            disabled={saving}
+            data-testid="settings-probe-timeout"
+            onBlur={async (e) => {
+              const v = Math.min(30, Math.max(2, Math.floor(Number(e.target.value) || 8)));
+              if (v === (st.data?.probe_timeout_seconds ?? 8)) return;
+              setSaving(true);
+              try {
+                await api.saveEgressSettings({ ...st.data!, probe_timeout_seconds: v });
+                toast(tr('已保存', 'Saved'));
+                await st.reload();
+              } catch (err) {
+                toastError(err);
+              } finally {
+                setSaving(false);
+              }
+            }}
+          />
+        </label>
+        <label
+          style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title={tr('同一出口 agent（host:port）上并发探测数。默认 1（串行），减轻 agent 抖动时的集体超时。', 'Concurrent probes per egress agent host:port. Default 1 (serialize) to avoid stampedes when one agent stalls.')}
+        >
+          {tr('每 agent 并发', 'Per-agent concurrency')}
+          <input
+            type="number"
+            min={1}
+            max={8}
+            style={{ width: 72 }}
+            defaultValue={st.data.probe_per_agent ?? 1}
+            disabled={saving}
+            data-testid="settings-probe-per-agent"
+            onBlur={async (e) => {
+              const v = Math.min(8, Math.max(1, Math.floor(Number(e.target.value) || 1)));
+              if (v === (st.data?.probe_per_agent ?? 1)) return;
+              setSaving(true);
+              try {
+                await api.saveEgressSettings({ ...st.data!, probe_per_agent: v });
+                toast(tr('已保存', 'Saved'));
+                await st.reload();
+              } catch (err) {
+                toastError(err);
+              } finally {
+                setSaving(false);
+              }
+            }}
+          />
+        </label>
+      </div>
+</Card>
   );
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 )
@@ -45,7 +46,7 @@ func TestEgressRoundAssignPauseResume(t *testing.T) {
 	rt := &Runtime{coreManager: manager}
 	down := map[string]bool{}
 	old := egressChecker
-	egressChecker = func(_ context.Context, u string) error {
+	egressChecker = func(_ context.Context, u string, _ time.Duration) error {
 		if down[u] {
 			return errors.New("down")
 		}
@@ -135,5 +136,58 @@ func TestPickEgressRespectsMaxPerEgress(t *testing.T) {
 	}
 	if _, ok := pickEgress(specs, nil, counts, false, 0); !ok {
 		t.Fatal("0 = unlimited")
+	}
+}
+
+
+func TestEgressProbeSettingsDefaults(t *testing.T) {
+	var z EgressSettingsValue
+	if z.ProbeTick() != egressTick || z.EffectiveFailThreshold() != egressFailThreshold || z.ProbeTimeout() != egressCheckTimeout || z.EffectiveProbePerAgent() != egressDefaultPerAgent {
+		t.Fatalf("zero defaults: tick=%v fail=%d timeout=%v per=%d", z.ProbeTick(), z.EffectiveFailThreshold(), z.ProbeTimeout(), z.EffectiveProbePerAgent())
+	}
+	d := z.WithProbeDefaults()
+	if d.ProbeTickSeconds != 5 || d.FailThreshold != 6 || d.ProbeTimeoutSeconds != 8 || d.ProbePerAgent != 1 {
+		t.Fatalf("with defaults: %+v", d)
+	}
+	custom := EgressSettingsValue{ProbeTickSeconds: 1, FailThreshold: 100, ProbeTimeoutSeconds: 1, ProbePerAgent: 99}
+	if custom.ProbeTick() != 2*time.Second || custom.EffectiveFailThreshold() != 30 || custom.ProbeTimeout() != 2*time.Second || custom.EffectiveProbePerAgent() != 8 {
+		t.Fatalf("clamps: tick=%v fail=%d timeout=%v per=%d", custom.ProbeTick(), custom.EffectiveFailThreshold(), custom.ProbeTimeout(), custom.EffectiveProbePerAgent())
+	}
+}
+
+func TestAgentHostOf(t *testing.T) {
+	if got := agentHostOf("http://1.2.3.4@10.0.0.1:3141"); got != "10.0.0.1:3141" {
+		t.Fatalf("got %q", got)
+	}
+	if got := agentHostOf("http://10.0.0.2:3141"); got != "10.0.0.2:3141" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestEgressRoundNeedsFailThreshold(t *testing.T) {
+	ctx := context.Background()
+	specs := ParseEgressSpecs("a=http://h1:1=1.1.1.1")
+	manager := coreauth.NewManager(nil, nil, nil)
+	_, _ = manager.Register(coreauth.WithSkipPersist(ctx), &coreauth.Auth{ID: "c1", Provider: "antigravity", Status: coreauth.StatusActive, Metadata: map[string]any{}})
+	rt := &Runtime{coreManager: manager}
+	old := egressChecker
+	egressChecker = func(_ context.Context, _ string, _ time.Duration) error { return errors.New("down") }
+	defer func() { egressChecker = old }()
+	// Below threshold: still healthy, credential not paused.
+	for i := 0; i < egressFailThreshold-1; i++ {
+		rt.egressRound(ctx, specs)
+	}
+	st := rt.egress.status["http://h1:1"]
+	if st == nil || !st.Healthy || st.Failures != egressFailThreshold-1 {
+		t.Fatalf("pre-threshold status = %+v", st)
+	}
+	c1, _ := manager.GetByID("c1")
+	if c1.Disabled {
+		t.Fatal("paused before fail threshold")
+	}
+	rt.egressRound(ctx, specs)
+	st = rt.egress.status["http://h1:1"]
+	if st.Healthy {
+		t.Fatal("still healthy after threshold")
 	}
 }

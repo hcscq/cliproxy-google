@@ -308,3 +308,92 @@ func TestUnreserveDisabledCredentialsLeavesLiveReserves(t *testing.T) {
 		t.Fatal("second sweep cleared a live reserve")
 	}
 }
+
+
+// Egress pauses set Disabled=true but must keep reserve intact (probe flap).
+func TestClearReserveSkipsEgressPause(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	auth := newReserveAuth("paused")
+	auth.Metadata["auto_paused_reason"] = "egress_down"
+	if _, err := repo.UpsertAuth(ctx, auth, "create"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := repo.SetCredentialsReserved(ctx, []string{"paused"}, true, "reserve", "t"); err != nil || n != 1 {
+		t.Fatalf("reserve n=%d err=%v", n, err)
+	}
+	auth.Disabled = true
+	auth.Status = coreauth.StatusDisabled
+	auth.StatusMessage = "已暂停 · 出口离线 1.2.3.4"
+	if _, err := repo.UpsertAuth(ctx, auth, "update"); err != nil {
+		t.Fatal(err)
+	}
+	if row := reserveFlag(t, repo, "paused"); !row.Reserved {
+		t.Fatalf("egress pause cleared reserve: %+v", row)
+	}
+	if c, _ := repo.CountReserveEvents(ctx, "clear-on-disable", time.Now().Add(-time.Minute)); c != 0 {
+		t.Fatalf("clear-on-disable events = %d, want 0", c)
+	}
+}
+
+func TestUnreserveDisabledSkipsEgressPause(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	db, err := repo.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"eg-pause", "real-ban"} {
+		if _, err := repo.UpsertAuth(ctx, newReserveAuth(id), "create"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := repo.SetCredentialsReserved(ctx, []string{"eg-pause", "real-ban"}, true, "reserve", "t"); err != nil || n != 2 {
+		t.Fatalf("reserve n=%d err=%v", n, err)
+	}
+	// Persist egress-pause metadata + disabled on eg-pause; plain disable on real-ban.
+	paused := newReserveAuth("eg-pause")
+	paused.Disabled = true
+	paused.Status = coreauth.StatusDisabled
+	paused.Metadata["auto_paused_reason"] = "egress_down"
+	if _, err := repo.UpsertAuth(ctx, paused, "update"); err != nil {
+		t.Fatal(err)
+	}
+	// UpsertAuth for egress pause must not have cleared reserve already.
+	if row := reserveFlag(t, repo, "eg-pause"); !row.Reserved {
+		t.Fatal("upsert of egress pause cleared reserve before sweeper")
+	}
+	if err := db.Exec(`UPDATE auth SET disabled = true, status = ? WHERE uuid = ?`, coreauth.StatusDisabled, "real-ban").Error; err != nil {
+		t.Fatal(err)
+	}
+	n, err := repo.UnreserveDisabledCredentials(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("sweep n=%d err=%v, want 1 (only real-ban)", n, err)
+	}
+	if row := reserveFlag(t, repo, "eg-pause"); !row.Reserved {
+		t.Fatal("sweeper cleared egress-paused reserve")
+	}
+	if row := reserveFlag(t, repo, "real-ban"); row.Reserved {
+		t.Fatal("sweeper left real disable reserved")
+	}
+}
+
+func TestClearReserveSkipsEgressRemoved(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	auth := newReserveAuth("removed-ip")
+	auth.Metadata["auto_paused_reason"] = "egress_removed"
+	auth.Disabled = true
+	auth.Status = coreauth.StatusDisabled
+	if _, err := repo.UpsertAuth(ctx, auth, "create"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := repo.SetCredentialsReserved(ctx, []string{"removed-ip"}, true, "reserve", "t"); err != nil || n != 1 {
+		t.Fatalf("reserve n=%d err=%v", n, err)
+	}
+	// Re-upsert as newly disabled transition (existing already disabled — sweeper path).
+	n, err := repo.UnreserveDisabledCredentials(ctx)
+	if err != nil || n != 0 {
+		t.Fatalf("sweep n=%d err=%v, want 0", n, err)
+	}
+	if row := reserveFlag(t, repo, "removed-ip"); !row.Reserved {
+		t.Fatal("egress_removed pause cleared reserve")
+	}
+}

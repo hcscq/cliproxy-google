@@ -326,12 +326,13 @@ func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 			}
 			out = record
 		}
-		// Every disable path (unauthorized refresh, verify-account 403, TOS ban,
-		// management toggle, egress pause) persists through this upsert. Drop the
-		// reserve mark in the same transaction so a disabled credential cannot
-		// stay reserved. Already-disabled rows are left to the reserve sweeper.
+		// Real disable paths (unauthorized refresh, verify-account 403, TOS ban,
+		// management toggle) persist through this upsert and drop the reserve mark
+		// in the same transaction. Egress pauses also set Disabled, but must NOT
+		// clear reserve (temporary probe flap). Already-disabled rows are left to
+		// the reserve sweeper.
 		if record.Disabled && !existing.Disabled {
-			if errClear := clearReserveForDisabledAuth(tx, record.UUID, auth.StatusMessage); errClear != nil {
+			if errClear := clearReserveForDisabledAuth(tx, record.UUID, auth.StatusMessage, auth.Metadata); errClear != nil {
 				return errClear
 			}
 		}
@@ -484,8 +485,9 @@ func (r *Repository) MutateAuth(ctx context.Context, uuid string, op string, mut
 			}
 		}
 		// Refresh unauthorized and other mutate-to-disable paths land here.
+		// Egress pauses are skipped inside clearReserveForDisabledAuth.
 		if record.Disabled && !existing.Disabled {
-			if errClear := clearReserveForDisabledAuth(txDB, uuid, auth.StatusMessage); errClear != nil {
+			if errClear := clearReserveForDisabledAuth(txDB, uuid, auth.StatusMessage, auth.Metadata); errClear != nil {
 				return errClear
 			}
 		}
