@@ -123,6 +123,7 @@ h3 { font-size: 14px; }
 .btn-danger.solid { background: var(--err); border-color: var(--err); color: #fff; }
 .btn-ghost { background: transparent; border-color: transparent; }
 .btn-sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.btn-xs { height: 22px; padding: 0 8px; font-size: 11.5px; border-radius: 6px; }
 .btn-icon { width: 30px; padding: 0; height: 30px; }
 
 /* Forms */
@@ -337,8 +338,19 @@ tr.row-muted td { opacity: .62; }
 .mini-bar.removed > span { background: var(--err); }
 
 /* ---- scale: filters, selection, bulk ---- */
-.filter-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; max-width: 100%; }
-.filter-bar .select, .filter-bar .input { width: auto; min-width: min(120px, 100%); max-width: min(220px, 100%); }
+.filter-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  min-width: 0; max-width: 100%; width: 100%;
+}
+.filter-bar .filter-q {
+  flex: 1 1 220px; width: auto; min-width: min(200px, 100%); max-width: 320px;
+}
+.filter-bar .select {
+  flex: 0 1 128px; width: 128px; min-width: 112px; max-width: 148px;
+}
+.filter-bar .select.select-model { flex-basis: 168px; width: 168px; max-width: 200px; }
+.filter-bar .select.select-model-status { flex-basis: 120px; width: 120px; max-width: 136px; }
+.filter-bar .filter-reset { flex: 0 0 auto; margin-left: auto; }
 .selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); min-height: 40px; }
 .selection-bar.active { background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .modal-body .selection-bar, .drawer .selection-bar { border: 1px solid var(--border); border-radius: 8px; }
@@ -350,8 +362,10 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .scroll-list { max-height: 240px; overflow: auto; }
 .card .pager { padding: 8px 12px; }
 .card-head .filter-bar { flex: 1; min-width: 0; }
+.card-head { align-items: flex-start; }
 @media (max-width: 720px) {
-  .filter-bar .select, .filter-bar .input { max-width: none; flex: 1 1 140px; }
+  .filter-bar .select, .filter-bar .filter-q { max-width: none; flex: 1 1 140px; width: auto; }
+  .filter-bar .filter-reset { margin-left: 0; }
 }
 
 /* key/value status grid (request log storage) */
@@ -402,12 +416,42 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 .reserve-chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .reserve-chip { border: 1px solid var(--border); background: var(--bg-sunken); color: var(--text-2); border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reserve-chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
-.filter-bar .select { width: auto; max-width: min(112px, 100%); }
-/* Model id can be long; per-model state label stays short. Both shrink and wrap instead of overflowing the row. */
-.filter-bar .select.select-model,
-.filter-bar .select.select-model-status { min-width: 0; flex: 0 1 auto; max-width: 100%; }
-.filter-bar .select.select-model { max-width: min(180px, 100%); }
-.filter-bar .select.select-model-status { max-width: min(120px, 100%); }
+
+/* Compact reserve banner + expandable event table */
+.reserve-alert {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-elev);
+}
+.reserve-alert.warn { border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); background: color-mix(in srgb, var(--warn-soft) 55%, var(--bg-elev)); }
+.reserve-alert-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reserve-alert-head .reserve-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.reserve-alert-sep { margin: 0 2px; }
+.reserve-alert-recent { font-weight: 500; }
+.reserve-alert-detail { line-height: 1.4; }
+.reserve-events { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-elev); }
+.reserve-events-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.reserve-events-table th, .reserve-events-table td { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.reserve-events-table th { color: var(--text-3); font-weight: 500; background: var(--bg-sunken); white-space: nowrap; }
+.reserve-events-table tr:last-child td { border-bottom: 0; }
+.reserve-events-table td.ellipsis { max-width: 280px; }
+.reserve-ev-badge {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 7px;
+  border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap;
+  background: var(--bg-sunken); color: var(--text-2);
+}
+.reserve-ev-badge.ok { background: color-mix(in srgb, var(--ok, #16a34a) 14%, transparent); color: var(--ok, #16a34a); }
+.reserve-ev-badge.warn { background: var(--warn-soft); color: var(--warn); }
+.reserve-ev-badge.err { background: var(--err-soft); color: var(--err); }
+.reserve-ev-badge.primary { background: var(--primary-soft); color: var(--primary); }
+.reserve-events-more { padding: 6px 8px; border-top: 1px solid var(--border); }
+
+/* Egress strip sits under the filter head as part of the same card */
+.egress-strip {
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-sunken) 70%, transparent);
+  font-size: 12px;
+}
 .quota-inline { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; white-space: nowrap; }
 .quota-inline .qseg { display: inline-flex; align-items: center; gap: 4px; }
 .quota-inline .qlabel { color: var(--text-2); }

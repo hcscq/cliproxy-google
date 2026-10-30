@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { reserveShortText, reserveSummaryText } from './ReserveAlert';
+import {
+  reserveShortText,
+  reserveSummaryText,
+  shortReserveDetail,
+  reserveEventKindLabel,
+  reserveEventKindTone,
+} from './ReserveAlert';
 import type { ReserveStats } from '../api/client';
 
 const zh = (z: string) => z;
@@ -29,5 +35,39 @@ describe('reserveSummaryText', () => {
     expect(t).toContain('最低 未设置（按可用数）');
     expect(t).toContain('启用 — · 可用 —');
     expect(t).toContain('可提升 — · 上次提升 从未');
+  });
+});
+
+describe('shortReserveDetail', () => {
+  it('collapses ToS violation text', () => {
+    const long = 'This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.';
+    expect(shortReserveDetail(long, zh)).toBe('违反服务条款(403)');
+  });
+  it('keeps a short first clause', () => {
+    expect(shortReserveDetail('auto promote for argon shortfall', zh)).toBe('auto promote for argon shortfall');
+  });
+  it('truncates long non-ToS detail', () => {
+    const long = 'x'.repeat(60);
+    expect(shortReserveDetail(long, zh).endsWith('…')).toBe(true);
+    expect(shortReserveDetail(long, zh).length).toBeLessThanOrEqual(41);
+  });
+  it('empty detail is empty', () => {
+    expect(shortReserveDetail(undefined, zh)).toBe('');
+  });
+});
+
+describe('reserveEventKindLabel', () => {
+  it('labels known kinds', () => {
+    expect(reserveEventKindLabel('promote', zh)).toBe('自动启用');
+    expect(reserveEventKindLabel('ban', zh)).toBe('封禁');
+    expect(reserveEventKindLabel('clear-on-disable', zh)).toBe('停用时清除储备');
+  });
+});
+
+describe('reserveEventKindTone', () => {
+  it('maps tones', () => {
+    expect(reserveEventKindTone('ban')).toBe('err');
+    expect(reserveEventKindTone('promote')).toBe('primary');
+    expect(reserveEventKindTone('reserve')).toBe('ok');
   });
 });

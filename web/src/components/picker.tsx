@@ -105,7 +105,7 @@ export function CredentialFilterBar({
   const modelKnown = !value.model || modelOptions.some(([k]) => k === value.model);
   return (
     <div className="filter-bar" data-testid="cred-filter-bar">
-      <input className="input input-sm" style={{ width: 200 }} placeholder={tr('搜索邮箱 / 名称 / ID / 备注', 'Search email / name / id / note')} value={text} onChange={(e) => setText(e.target.value)} data-testid="cred-filter-q" />
+      <input className="input input-sm filter-q" placeholder={tr('搜索邮箱 / 名称 / ID / 备注', 'Search email / name / id / note')} value={text} onChange={(e) => setText(e.target.value)} data-testid="cred-filter-q" />
       <select className="select input-sm" value={value.provider ?? ''} onChange={(e) => set('provider', e.target.value)} data-testid="cred-filter-provider">
         <option value="">{tr('全部提供方', 'All providers')}</option>
         {facetOptions(facets?.provider).map(([k, n]) => (
@@ -193,13 +193,14 @@ export function CredentialFilterBar({
       )}
       {active > 0 && (
         <button
-          className="btn btn-sm btn-ghost"
+          className="btn btn-sm btn-ghost filter-reset"
           onClick={() => {
             setText('');
             onChange({ exclude_group: value.exclude_group });
           }}
+          data-testid="cred-filter-reset"
         >
-          {tr('清除筛选', 'Clear')}
+          {tr('重置', 'Reset')}
         </button>
       )}
     </div>

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { PURGE_DEFAULT_CATS, isAuthInvalidCategory, purgeSelection, purgeStats, shortDate, shortReason } from "./purgeInvalid";
 import { HealthBadge } from '../components/HealthCheck';
 import { downloadBlob as saveHealthCsv } from '../format';
-import { ReserveChip, ReserveEventsList } from '../components/ReserveAlert';
+import { ReserveAlert } from '../components/ReserveAlert';
 import { ColumnToggle, ProviderIcon, RowMenu, StatusPill, useHiddenColumns, useStoredFlag, type MenuItem } from '../components/CredRow';
 import { safeVerifyURL } from '../components/HealthCheck';
 import { useAction, useApi, useAsync, useUi } from "../app-context";
@@ -640,8 +640,7 @@ export function CredentialsPage() {
 
   return (
     <div className="stack">
-      <ReserveChip stats={reserveInfo.data?.stats} />
-      <ReserveEventsList events={reserveInfo.data?.events} />
+      <ReserveAlert stats={reserveInfo.data?.stats} events={reserveInfo.data?.events} />
       <div className="page-head">
         <div>
           <h1>{t("credentials")}</h1>
@@ -2122,7 +2121,7 @@ function EgressStrip({
     .map(([n, list]) => [n, list.sort((a, b) => Number(!!b.primary) - Number(!!a.primary) || ipKey(a).localeCompare(ipKey(b)))] as const);
   const activeEg = active ? items.find((e) => e.name === active) : undefined;
   return (
-    <div className="card-body small" data-testid="egress-list">
+    <div className="egress-strip" data-testid="egress-list">
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <button className="btn btn-xs" onClick={toggle} data-testid="egress-toggle">
           {open ? tr("收起", "Collapse") : tr("展开", "Expand")}
