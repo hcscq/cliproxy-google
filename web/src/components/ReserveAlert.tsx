@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ReserveStats } from '../api/client';
+import type { ReserveEvent, ReserveStats } from '../api/client';
 import { useI18n } from '../i18n';
 
 /** Text of the shortfall warning, or null when there is nothing to warn about. */
@@ -71,6 +71,42 @@ export function ReserveChip({ stats }: { stats?: ReserveStats | null }) {
         {chip} <span className="faint">{open ? '▴' : '▾'}</span>
       </button>
       {open && <span className="muted reserve-chip-detail">{full}{short ? ` — ${short}` : ''}</span>}
+    </div>
+  );
+}
+
+
+/** Human-readable label for a reserve audit event kind. */
+export function reserveEventKindLabel(kind: string, tr: (zh: string, en: string) => string): string {
+  switch (kind) {
+    case 'reserve':
+      return tr('设为储备', 'Reserve');
+    case 'unreserve':
+      return tr('取消储备', 'Unreserve');
+    case 'promote':
+      return tr('自动启用', 'Promote');
+    case 'ban':
+      return tr('封禁', 'Ban');
+    case 'clear-on-disable':
+      return tr('停用时清除储备', 'Cleared on disable');
+    default:
+      return kind;
+  }
+}
+
+/** Compact recent reserve audit events (newest first). */
+export function ReserveEventsList({ events }: { events?: ReserveEvent[] | null }) {
+  const { tr } = useI18n();
+  if (!events?.length) return null;
+  return (
+    <div className="small muted" data-testid="reserve-events" style={{ margin: '4px 0' }}>
+      {events.slice(0, 8).map((e, i) => (
+        <div key={`${e.auth_id}-${e.at}-${i}`}>
+          {reserveEventKindLabel(e.kind, tr)}
+          {e.seq ? ` #${e.seq}` : ''} · {e.auth_id.slice(0, 8)}
+          {e.detail ? ` · ${e.detail}` : ''}
+        </div>
+      ))}
     </div>
   );
 }

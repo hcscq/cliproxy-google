@@ -13,7 +13,8 @@ import (
 // Credential reserve (凭据储备) state lives in its own tables, never in auth_json, so
 // it is not subject to light runtime metadata persistence. credential_reserve holds
 // the current state; credential_reserve_event is the audit trail (reserve, unreserve,
-// promote, ban with was_reserved) used to compare ban rates of reserved vs active.
+// promote, ban, clear-on-disable with was_reserved) used to compare ban rates of
+// reserved vs active and to record reserve clears on disable.
 
 // CredentialReserve is the current reserve state of one credential.
 type CredentialReserve struct {
@@ -202,7 +203,8 @@ const reserveBanStatusPrefix = "账号已停用"
 
 // clearReserveForDisabledAuth drops credential_reserve.reserved when id is persisted
 // as disabled. The auth row is not modified. A still-reserved TOS ban is audited
-// first so was_reserved stays accurate after the mark is cleared. Idempotent.
+// first so was_reserved stays accurate after the mark is cleared. When reserved
+// flips from true to false, a clear-on-disable event is written. Idempotent.
 func clearReserveForDisabledAuth(tx *gorm.DB, id, statusMessage string) error {
 	if tx == nil {
 		return nil
@@ -212,6 +214,25 @@ func clearReserveForDisabledAuth(tx *gorm.DB, id, statusMessage string) error {
 		return nil
 	}
 	if err := noteReservedBan(tx, id, statusMessage); err != nil {
+		return err
+	}
+	var cur CredentialReserve
+	res := tx.Where("auth_uuid = ?", id).Limit(1).Find(&cur)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 || !cur.Reserved {
+		return nil
+	}
+	ev := CredentialReserveEvent{
+		AuthUUID:      id,
+		Kind:          "clear-on-disable",
+		At:            time.Now().UTC(),
+		WasReserved:   true,
+		ReservedSince: cur.ReservedSince,
+		Detail:        "停用时清除储备",
+	}
+	if err := tx.Create(&ev).Error; err != nil {
 		return err
 	}
 	return tx.Exec(
@@ -262,17 +283,52 @@ func clipRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-// UnreserveDisabledCredentials clears reserved on disabled credentials in one
-// statement. Auth enablement, deletion, and every other column stay unchanged.
-// Idempotent: a second call matches nothing. Callers should record ban audits
-// first; reserved is still the attribution input until this runs.
+// UnreserveDisabledCredentials clears reserved on disabled credentials and writes
+// one clear-on-disable event per cleared row (batched). Auth enablement, deletion,
+// and every other column stay unchanged. Idempotent: a second call matches nothing.
+// Callers should record ban audits first; reserved is still the attribution input
+// until this runs.
 func (r *Repository) UnreserveDisabledCredentials(ctx context.Context) (int, error) {
 	db, err := r.database()
 	if err != nil {
 		return 0, err
 	}
-	res := db.WithContext(contextOrBackground(ctx)).Exec(`UPDATE credential_reserve SET reserved = ?, updated_at = ? WHERE reserved = ? AND auth_uuid IN (SELECT uuid FROM auth WHERE COALESCE(disabled, false) = true)`, false, time.Now().UTC(), true)
-	return int(res.RowsAffected), res.Error
+	now := time.Now().UTC()
+	var n int
+	err = db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		var rows []CredentialReserve
+		if errFind := tx.Where("reserved = ? AND auth_uuid IN (SELECT uuid FROM auth WHERE COALESCE(disabled, false) = true)", true).Find(&rows).Error; errFind != nil {
+			return errFind
+		}
+		if len(rows) == 0 {
+			n = 0
+			return nil
+		}
+		events := make([]CredentialReserveEvent, 0, len(rows))
+		ids := make([]string, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.AuthUUID)
+			since := row.ReservedSince
+			events = append(events, CredentialReserveEvent{
+				AuthUUID:      row.AuthUUID,
+				Kind:          "clear-on-disable",
+				At:            now,
+				WasReserved:   true,
+				ReservedSince: since,
+				Detail:        "停用时清除储备",
+			})
+		}
+		if errCreate := tx.Create(&events).Error; errCreate != nil {
+			return errCreate
+		}
+		res := tx.Exec(`UPDATE credential_reserve SET reserved = ?, updated_at = ? WHERE reserved = ? AND auth_uuid IN ?`, false, now, true, ids)
+		if res.Error != nil {
+			return res.Error
+		}
+		n = int(res.RowsAffected)
+		return nil
+	})
+	return n, err
 }
 
 // RecordReserveBans audits credentials newly disabled as banned (403 terms/disabled

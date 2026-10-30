@@ -174,8 +174,27 @@ func TestDisableClearsCredentialReserve(t *testing.T) {
 	if n, _ := repo.CountReserveEvents(ctx, "ban", time.Now().Add(-time.Minute)); n != 1 {
 		t.Fatalf("unauthorized disable recorded a ban: %d", n)
 	}
+	if n, _ := repo.CountReserveEvents(ctx, "clear-on-disable", time.Now().Add(-time.Minute)); n != 2 {
+		t.Fatalf("clear-on-disable events = %d, want 2 (tos + unauth)", n)
+	}
 	if n, _ := repo.CountReserveEvents(ctx, "promote", time.Now().Add(-time.Minute)); n != 0 {
 		t.Fatalf("promote events = %d", n)
+	}
+	evs, err = repo.RecentReserveEvents(ctx, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared := map[string]bool{}
+	for i := range evs {
+		if evs[i].Kind == "clear-on-disable" {
+			if !evs[i].WasReserved || evs[i].Detail != "停用时清除储备" {
+				t.Fatalf("clear-on-disable = %+v", evs[i])
+			}
+			cleared[evs[i].AuthUUID] = true
+		}
+	}
+	if !cleared["tos"] || !cleared["unauth"] {
+		t.Fatalf("clear-on-disable auth ids = %v", cleared)
 	}
 	if row := reserveFlag(t, repo, "live"); !row.Reserved {
 		t.Fatal("disabling other credentials cleared the live reserve")
@@ -238,6 +257,25 @@ func TestUnreserveDisabledCredentialsLeavesLiveReserves(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("sweep n=%d err=%v, want 1", n, err)
 	}
+	if c, _ := repo.CountReserveEvents(ctx, "clear-on-disable", time.Now().Add(-time.Minute)); c != 1 {
+		t.Fatalf("sweep clear-on-disable events = %d, want 1", c)
+	}
+	evs, err := repo.RecentReserveEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for i := range evs {
+		if evs[i].Kind == "clear-on-disable" && evs[i].AuthUUID == "zombie" {
+			found = true
+			if !evs[i].WasReserved || evs[i].Detail != "停用时清除储备" {
+				t.Fatalf("sweep event = %+v", evs[i])
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing clear-on-disable for zombie: %+v", evs)
+	}
 	if row := reserveFlag(t, repo, "zombie"); row.Reserved {
 		t.Fatalf("zombie still reserved: %+v", row)
 	}
@@ -262,6 +300,9 @@ func TestUnreserveDisabledCredentialsLeavesLiveReserves(t *testing.T) {
 	n, err = repo.UnreserveDisabledCredentials(ctx)
 	if err != nil || n != 0 {
 		t.Fatalf("second sweep n=%d err=%v, want 0", n, err)
+	}
+	if c, _ := repo.CountReserveEvents(ctx, "clear-on-disable", time.Now().Add(-time.Minute)); c != 1 {
+		t.Fatalf("second sweep duplicated clear-on-disable: %d", c)
 	}
 	if row := reserveFlag(t, repo, "live"); !row.Reserved {
 		t.Fatal("second sweep cleared a live reserve")

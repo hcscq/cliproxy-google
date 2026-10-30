@@ -150,7 +150,8 @@ func (e *modelCooldownError) Headers() http.Header {
 	return headers
 }
 
-// authPriority handles an auth priority.
+// authPriority returns the credential's configured priority (Attributes["priority"]).
+// Prefer authPriorityForModel when a model is known so priority_models can scope it.
 func authPriority(auth *Auth) int {
 	if auth == nil || auth.Attributes == nil {
 		return 0
@@ -164,6 +165,134 @@ func authPriority(auth *Auth) int {
 		return 0
 	}
 	return parsed
+}
+
+// authPriorityModels returns normalized (lower-cased, de-duplicated, sorted)
+// priority_models patterns from Attributes (comma-joined) or Metadata.
+func authPriorityModels(auth *Auth) []string {
+	if auth == nil {
+		return nil
+	}
+	if auth.Attributes != nil {
+		if raw := strings.TrimSpace(auth.Attributes["priority_models"]); raw != "" {
+			return normalizeModelPatterns(strings.Split(raw, ","))
+		}
+	}
+	if len(auth.Metadata) == 0 {
+		return nil
+	}
+	raw, ok := auth.Metadata["priority_models"]
+	if !ok {
+		raw = auth.Metadata["priority-models"]
+	}
+	return normalizeModelPatternsFromAny(raw)
+}
+
+// authPriorityForModel returns the effective priority for model.
+// priority>0 with empty priority_models applies to every model (backward compatible).
+// With patterns, the priority applies only when the model matches; otherwise 0.
+func authPriorityForModel(auth *Auth, model string) int {
+	priority := authPriority(auth)
+	if priority == 0 {
+		return 0
+	}
+	patterns := authPriorityModels(auth)
+	if len(patterns) == 0 {
+		return priority
+	}
+	modelKey := strings.ToLower(strings.TrimSpace(canonicalModelKey(model)))
+	if modelKey == "" {
+		modelKey = strings.ToLower(strings.TrimSpace(model))
+	}
+	for _, pattern := range patterns {
+		if matchModelPattern(pattern, modelKey) {
+			return priority
+		}
+	}
+	return 0
+}
+
+// normalizeModelPatterns trims, lower-cases, de-duplicates, and sorts patterns.
+func normalizeModelPatterns(items []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		it = strings.ToLower(strings.TrimSpace(it))
+		if it == "" {
+			continue
+		}
+		if _, dup := seen[it]; dup {
+			continue
+		}
+		seen[it] = struct{}{}
+		out = append(out, it)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func normalizeModelPatternsFromAny(raw any) []string {
+	var items []string
+	switch v := raw.(type) {
+	case string:
+		items = strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' })
+	case []string:
+		items = v
+	case []any:
+		for _, it := range v {
+			if str, ok := it.(string); ok {
+				items = append(items, str)
+			}
+		}
+	}
+	return normalizeModelPatterns(items)
+}
+
+// matchModelPattern matches value against a simple * wildcard pattern (same rules as home.matchWildcard).
+func matchModelPattern(pattern, value string) bool {
+	if pattern == "" {
+		return false
+	}
+	if !strings.Contains(pattern, "*") {
+		return pattern == value
+	}
+	parts := strings.Split(pattern, "*")
+	if prefix := parts[0]; prefix != "" {
+		if !strings.HasPrefix(value, prefix) {
+			return false
+		}
+		value = value[len(prefix):]
+	}
+	if suffix := parts[len(parts)-1]; suffix != "" {
+		if !strings.HasSuffix(value, suffix) {
+			return false
+		}
+		value = value[:len(value)-len(suffix)]
+	}
+	for i := 1; i < len(parts)-1; i++ {
+		segment := parts[i]
+		if segment == "" {
+			continue
+		}
+		idx := strings.Index(value, segment)
+		if idx < 0 {
+			return false
+		}
+		value = value[idx+len(segment):]
+	}
+	return true
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // CanonicalModelID removes a request-option suffix and surrounding whitespace from a model ID.
@@ -226,7 +355,7 @@ func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (ava
 		candidate := auths[i]
 		blocked, reason, next := isAuthBlockedForModel(candidate, model, now)
 		if !blocked {
-			priority := authPriority(candidate)
+			priority := authPriorityForModel(candidate, model)
 			available[priority] = append(available[priority], candidate)
 			continue
 		}

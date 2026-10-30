@@ -2197,6 +2197,7 @@ Example response:
       "prefix": "team-a",
       "proxy_url": "socks5://127.0.0.1:1080",
       "priority": 10,
+      "priority_models": ["gemini-4-*", "claude-*"],
       "note": "operator note",
       "websockets": true,
       "disable-cooling": false,
@@ -2217,6 +2218,7 @@ the current value without downloading the credential JSON:
 | `prefix` | string | Model namespace prefix; empty when unset. |
 | `proxy_url` | string | Per-auth proxy URL; empty when unset. |
 | `priority` | integer | Credential selection priority; omitted when unset. |
+| `priority_models` | string array | When set with a non-zero `priority`, the priority applies only to these model patterns (`*` wildcards). Omitted or empty means the priority applies to every model (legacy behavior). |
 | `note` | string | Operator note; omitted when empty. |
 | `websockets` | boolean | Effective runtime websocket flag. |
 | `disable-cooling` | boolean | Optional credential cooling override. `true` disables cooling, `false` explicitly enables it, and the field is omitted when unset so the credential inherits the global setting. |
@@ -2407,7 +2409,8 @@ Editable fields:
 | `proxy_url` | string | Per-auth proxy URL; empty value clears it. |
 | `proxy-url` | string | Alias for `proxy_url`. |
 | `headers` | object string to string | Extra upstream headers. Empty string deletes a single header. |
-| `priority` | integer or numeric string | Credential selection priority. |
+| `priority` | integer, numeric string, or `null` | Credential selection priority. `null` clears it. |
+| `priority_models` / `priority-models` | string array, comma-separated string, or `null` | Model patterns that scope `priority`. Values are lower-cased, de-duplicated, and sorted. Empty array or `null` clears the scope so priority applies to every model. Alias `priority-models` is accepted; canonical `priority_models` wins when both appear. |
 | `note` | string | Operator note; empty value clears it. |
 | `websockets` | boolean or string bool | Runtime websocket flag for supported auths. |
 | `disabled` | boolean or string bool | Updates auth disabled state and status. |

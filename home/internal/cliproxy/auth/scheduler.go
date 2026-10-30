@@ -58,9 +58,27 @@ type scheduledAuthMeta struct {
 	auth               *Auth
 	providerKey        string
 	priority           int
+	priorityModels     []string // cached, normalized; empty => priority applies to all models
 	websocketEnabled   bool
 	supportedModelSet  map[string]struct{}
 	registeredModelSet map[string]struct{}
+}
+
+// priorityForModel returns the effective priority for this model shard key.
+func (m *scheduledAuthMeta) priorityForModel(modelKey string) int {
+	if m == nil || m.priority == 0 {
+		return 0
+	}
+	if len(m.priorityModels) == 0 {
+		return m.priority
+	}
+	key := strings.ToLower(strings.TrimSpace(modelKey))
+	for _, pattern := range m.priorityModels {
+		if matchModelPattern(pattern, key) {
+			return m.priority
+		}
+	}
+	return 0
 }
 
 // modelScheduler tracks ready and blocked auths for one provider/model combination.
@@ -764,6 +782,7 @@ func buildScheduledAuthMeta(auth *Auth) *scheduledAuthMeta {
 		auth:               auth,
 		providerKey:        providerKey,
 		priority:           authPriority(auth),
+		priorityModels:     authPriorityModels(auth),
 		websocketEnabled:   authWebsocketsEnabled(auth),
 		supportedModelSet:  supportedModelSet,
 		registeredModelSet: registeredModelSet,
@@ -982,9 +1001,11 @@ func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Tim
 	previousHasRequestRetryOverride := entry.hasRequestRetryOverride
 	previousAlphaSearchAllowed := entry.alphaSearchAllowed
 	previousPriority := 0
+	var previousPriorityModels []string
 	previousWebsocketEnabled := false
 	if entry.meta != nil {
 		previousPriority = entry.meta.priority
+		previousPriorityModels = entry.meta.priorityModels
 		previousWebsocketEnabled = entry.meta.websocketEnabled
 	}
 
@@ -1006,6 +1027,7 @@ func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Tim
 		previousHasRequestRetryOverride == entry.hasRequestRetryOverride &&
 		previousAlphaSearchAllowed == entry.alphaSearchAllowed &&
 		previousPriority == meta.priority &&
+		equalStringSlices(previousPriorityModels, meta.priorityModels) &&
 		previousWebsocketEnabled == meta.websocketEnabled {
 		return
 	}
@@ -1259,7 +1281,10 @@ func (m *modelScheduler) rebuildIndexesLocked() {
 		}
 		switch entry.state {
 		case scheduledStateReady:
-			priority := entry.meta.priority
+			priority := 0
+			if entry.meta != nil {
+				priority = entry.meta.priorityForModel(m.modelKey)
+			}
 			priorityBuckets[priority] = append(priorityBuckets[priority], entry)
 		case scheduledStateCooldown, scheduledStateBlocked:
 			m.blocked = append(m.blocked, entry)

@@ -641,3 +641,51 @@ func TestPatchAuthFileFieldsEgress(t *testing.T) {
 		t.Fatalf("auto kept proxy %q", got.ProxyURL)
 	}
 }
+
+func TestApplyOAuthFieldPatchPriorityModelsRoundTrip(t *testing.T) {
+	auth := &coreauth.Auth{
+		ID:         "ultra-auth",
+		Provider:   "antigravity",
+		Attributes: map[string]string{},
+		Metadata:   map[string]any{"type": "antigravity"},
+	}
+	changed, errPatch := applyOAuthFieldPatch(auth, mustRawFields(t, `{"priority":1,"priority-models":["Gemini-4-*","claude-*","gemini-4-*"]}`))
+	if errPatch != nil || !changed {
+		t.Fatalf("apply = (%t, %v)", changed, errPatch)
+	}
+	list, ok := auth.Metadata["priority_models"].([]string)
+	if !ok || len(list) != 2 || list[0] != "claude-*" || list[1] != "gemini-4-*" {
+		t.Fatalf("metadata.priority_models = %#v", auth.Metadata["priority_models"])
+	}
+	if _, exists := auth.Metadata["priority-models"]; exists {
+		t.Fatalf("legacy alias left in metadata: %#v", auth.Metadata)
+	}
+	if got := auth.Attributes["priority_models"]; got != "claude-*,gemini-4-*" {
+		t.Fatalf("attributes.priority_models = %q", got)
+	}
+	if got := auth.Attributes["priority"]; got != "1" {
+		t.Fatalf("attributes.priority = %q", got)
+	}
+	entry := authFileEntry(auth)
+	models, _ := entry["priority_models"].([]string)
+	if len(models) != 2 {
+		t.Fatalf("authFileEntry priority_models = %#v", entry["priority_models"])
+	}
+
+	changed, errPatch = applyOAuthFieldPatch(auth, mustRawFields(t, `{"priority":null,"priority_models":null}`))
+	if errPatch != nil || !changed {
+		t.Fatalf("clear = (%t, %v)", changed, errPatch)
+	}
+	if _, exists := auth.Metadata["priority"]; exists {
+		t.Fatalf("priority metadata not cleared: %#v", auth.Metadata["priority"])
+	}
+	if _, exists := auth.Metadata["priority_models"]; exists {
+		t.Fatalf("priority_models metadata not cleared")
+	}
+	if _, exists := auth.Attributes["priority"]; exists {
+		t.Fatalf("priority attribute not cleared")
+	}
+	if _, exists := auth.Attributes["priority_models"]; exists {
+		t.Fatalf("priority_models attribute not cleared")
+	}
+}

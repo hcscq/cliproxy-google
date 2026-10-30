@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { PURGE_DEFAULT_CATS, isAuthInvalidCategory, purgeSelection, purgeStats, shortDate, shortReason } from "./purgeInvalid";
 import { HealthBadge } from '../components/HealthCheck';
 import { downloadBlob as saveHealthCsv } from '../format';
-import { ReserveChip } from '../components/ReserveAlert';
+import { ReserveChip, ReserveEventsList } from '../components/ReserveAlert';
 import { ColumnToggle, ProviderIcon, RowMenu, StatusPill, useHiddenColumns, useStoredFlag, type MenuItem } from '../components/CredRow';
 import { safeVerifyURL } from '../components/HealthCheck';
 import { useAction, useApi, useAsync, useUi } from "../app-context";
@@ -366,7 +366,7 @@ function SortTh({
 export function CredentialsPage() {
   const api = useApi();
   const { t, tr, lang } = useI18n();
-  const { toast } = useUi();
+  const { toast, confirm } = useUi();
   const { busy, run } = useAction();
   const [filter, setFilter] = useState<CredentialQuery>({});
   const [page, setPage] = useState(1);
@@ -444,6 +444,19 @@ export function CredentialsPage() {
 
   const toggle = (c: Credential, enabled: boolean) =>
     run(`toggle-${c.id}`, async () => {
+      const reserved = !!(c as { reserved?: boolean }).reserved;
+      if (!enabled && reserved) {
+        const ok = await confirm({
+          title: tr("禁用储备凭据", "Disable reserved credential"),
+          body: tr(
+            "储备凭据禁用后会退出储备，重新启用也不会回到储备；若只想投入调度请用『取消储备』。",
+            "Disabling a reserved credential removes it from reserve permanently; re-enabling will not restore reserve. To put it into the scheduler, use Unreserve instead.",
+          ),
+          danger: true,
+          confirmText: tr("仍要禁用", "Disable anyway"),
+        });
+        if (!ok) return;
+      }
       const r = await api.setCredentialDisabled(c.id, !enabled);
       // Show the stored state right away (the server reads it back after the
       // write), then reload; a background poll started earlier cannot undo it.
@@ -504,6 +517,21 @@ export function CredentialsPage() {
   const bulkToggle = (action: "enable" | "disable") =>
     run(`bulk-${action}`, async () => {
       const ids = sel.list();
+      if (action === "disable") {
+        const reservedCount = items.filter((c) => ids.includes(c.id) && !!(c as { reserved?: boolean }).reserved).length;
+        if (reservedCount > 0) {
+          const ok = await confirm({
+            title: tr("禁用储备凭据", "Disable reserved credentials"),
+            body: tr(
+              `所选中有 ${reservedCount} 个储备凭据。储备凭据禁用后会退出储备，重新启用也不会回到储备；若只想投入调度请用『取消储备』。`,
+              `${reservedCount} selected credential(s) are in reserve. Disabling removes them from reserve permanently; re-enabling will not restore reserve. To schedule them, use Unreserve instead.`,
+            ),
+            danger: true,
+            confirmText: tr("仍要禁用", "Disable anyway"),
+          });
+          if (!ok) return;
+        }
+      }
       const r = await api.bulkCredentials({ ids, action }, ids.length > BULK_CHUNK ? (d, t) => toast(tr(`处理中 ${d}/${t}`, `Working ${d}/${t}`)) : undefined);
       toast(
         tr(
@@ -613,6 +641,7 @@ export function CredentialsPage() {
   return (
     <div className="stack">
       <ReserveChip stats={reserveInfo.data?.stats} />
+      <ReserveEventsList events={reserveInfo.data?.events} />
       <div className="page-head">
         <div>
           <h1>{t("credentials")}</h1>
@@ -1360,6 +1389,7 @@ function CredentialDrawer({
     egress: cred.egress_id || (cred.proxy_url ? "custom" : "auto"),
     note: cred.note ?? "",
     excludedModels: (cred.excluded_models ?? []).join(", "),
+    priorityModels: (cred.priority_models ?? []).join(", "),
     requestRetry: cred["request-retry"]?.toString() ?? "",
     cooling:
       cred["disable-cooling"] === undefined
@@ -1382,12 +1412,16 @@ function CredentialDrawer({
           .split(/[\s,]+/)
           .map((x) => x.trim())
           .filter(Boolean),
+        priority_models: form.priorityModels
+          .split(/[\s,]+/)
+          .map((x) => x.trim())
+          .filter(Boolean),
         "request-retry":
           form.requestRetry.trim() === "" ? null : Number(form.requestRetry),
         "disable-cooling":
           form.cooling === "inherit" ? null : form.cooling === "off",
       };
-      if (form.priority.trim() !== "") fields.priority = Number(form.priority);
+      fields.priority = form.priority.trim() === "" ? null : Number(form.priority);
       const initialEgress = cred.egress_id || (cred.proxy_url ? "custom" : "auto");
       if (form.egress === "custom") {
         if (form.proxy_url.trim() !== (cred.proxy_url ?? "")) fields.proxy_url = form.proxy_url.trim();
@@ -1645,6 +1679,22 @@ function CredentialDrawer({
                 {tr(
                   "该凭据永不提供这些模型（逗号分隔，支持 * 通配）。调度直接跳过；所有凭据都排除时请求返回模型不可用，不会改用其他模型。",
                   "This credential never serves these models (comma-separated, * wildcard). Routing skips it; if every credential excludes a model, requests fail instead of falling back.",
+                )}
+              </span>
+            </div>
+            <div className="field full">
+              <label>{t("priorityModels")}</label>
+              <input
+                className="input"
+                value={form.priorityModels}
+                placeholder="gemini-4-*, claude-*"
+                onChange={(e) => setForm({ ...form, priorityModels: e.target.value })}
+                data-testid="cred-priority-models"
+              />
+              <span className="faint small">
+                {tr(
+                  "仅对这些模型使用上方优先级（逗号分隔，支持 * 通配）。留空则对所有模型生效（与旧行为一致）。",
+                  "Apply the priority above only to these models (comma-separated, * wildcard). Leave empty to apply to every model (legacy behavior).",
                 )}
               </span>
             </div>
