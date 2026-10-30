@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -201,16 +202,36 @@ func (r *Repository) CountReserveEvents(ctx context.Context, kind string, since 
 // start with this label; other disables (unauthorized, verify-account) do not.
 const reserveBanStatusPrefix = "账号已停用"
 
+// egressAutoPausedReason reports whether metadata marks an egress pause
+// (egress_down / egress_removed). Those temporary pauses must not clear reserve.
+func egressAutoPausedReason(meta map[string]any) bool {
+	if meta == nil {
+		return false
+	}
+	raw, _ := meta["auto_paused_reason"].(string)
+	switch strings.TrimSpace(raw) {
+	case "egress_down", "egress_removed":
+		return true
+	default:
+		return false
+	}
+}
+
 // clearReserveForDisabledAuth drops credential_reserve.reserved when id is persisted
-// as disabled. The auth row is not modified. A still-reserved TOS ban is audited
-// first so was_reserved stays accurate after the mark is cleared. When reserved
-// flips from true to false, a clear-on-disable event is written. Idempotent.
-func clearReserveForDisabledAuth(tx *gorm.DB, id, statusMessage string) error {
+// as disabled for a real account/management reason. Egress pauses (auto_paused_reason
+// egress_down / egress_removed) are skipped so a brief probe flap cannot strip reserve.
+// The auth row is not modified. A still-reserved TOS ban is audited first so
+// was_reserved stays accurate after the mark is cleared. When reserved flips from
+// true to false, a clear-on-disable event is written. Idempotent.
+func clearReserveForDisabledAuth(tx *gorm.DB, id, statusMessage string, meta map[string]any) error {
 	if tx == nil {
 		return nil
 	}
 	id = strings.TrimSpace(id)
 	if id == "" {
+		return nil
+	}
+	if egressAutoPausedReason(meta) {
 		return nil
 	}
 	if err := noteReservedBan(tx, id, statusMessage); err != nil {
@@ -284,8 +305,10 @@ func clipRunes(s string, n int) string {
 }
 
 // UnreserveDisabledCredentials clears reserved on disabled credentials and writes
-// one clear-on-disable event per cleared row (batched). Auth enablement, deletion,
-// and every other column stay unchanged. Idempotent: a second call matches nothing.
+// one clear-on-disable event per cleared row (batched). Egress pauses
+// (metadata.auto_paused_reason egress_down / egress_removed) are left reserved so a
+// brief probe flap cannot strip stock. Auth enablement, deletion, and every other
+// column stay unchanged. Idempotent: a second call matches nothing.
 // Callers should record ban audits first; reserved is still the attribution input
 // until this runs.
 func (r *Repository) UnreserveDisabledCredentials(ctx context.Context) (int, error) {
@@ -304,9 +327,36 @@ func (r *Repository) UnreserveDisabledCredentials(ctx context.Context) (int, err
 			n = 0
 			return nil
 		}
+		idsAll := make([]string, 0, len(rows))
+		for _, row := range rows {
+			idsAll = append(idsAll, row.AuthUUID)
+		}
+		type authMeta struct {
+			UUID     string `gorm:"column:uuid"`
+			AuthJSON JSONB  `gorm:"column:auth_json"`
+		}
+		var metas []authMeta
+		if errMeta := tx.Table("auth").Select("uuid", "auth_json").Where("uuid IN ?", idsAll).Find(&metas).Error; errMeta != nil {
+			return errMeta
+		}
+		skip := map[string]bool{}
+		for _, m := range metas {
+			var blob struct {
+				Metadata map[string]any `json:"metadata"`
+			}
+			if json.Unmarshal([]byte(m.AuthJSON), &blob) != nil {
+				continue
+			}
+			if egressAutoPausedReason(blob.Metadata) {
+				skip[m.UUID] = true
+			}
+		}
 		events := make([]CredentialReserveEvent, 0, len(rows))
 		ids := make([]string, 0, len(rows))
 		for _, row := range rows {
+			if skip[row.AuthUUID] {
+				continue
+			}
 			ids = append(ids, row.AuthUUID)
 			since := row.ReservedSince
 			events = append(events, CredentialReserveEvent{
@@ -317,6 +367,10 @@ func (r *Repository) UnreserveDisabledCredentials(ctx context.Context) (int, err
 				ReservedSince: since,
 				Detail:        "停用时清除储备",
 			})
+		}
+		if len(ids) == 0 {
+			n = 0
+			return nil
 		}
 		if errCreate := tx.Create(&events).Error; errCreate != nil {
 			return errCreate
@@ -330,6 +384,7 @@ func (r *Repository) UnreserveDisabledCredentials(ctx context.Context) (int, err
 	})
 	return n, err
 }
+
 
 // RecordReserveBans audits credentials newly disabled as banned (403 terms/disabled
 // account), noting whether they were in reserve at the time. Postgres only.

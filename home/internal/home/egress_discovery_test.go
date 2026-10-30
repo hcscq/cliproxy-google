@@ -41,7 +41,7 @@ func TestEgressDiscoveryLifecycle(t *testing.T) {
 	down := map[string]bool{}
 	setAgents(t, inv, down)
 	old := egressChecker
-	egressChecker = func(context.Context, string) error { return nil }
+	egressChecker = func(context.Context, string, time.Duration) error { return nil }
 	defer func() { egressChecker = old }()
 
 	manager := coreauth.NewManager(nil, nil, nil)

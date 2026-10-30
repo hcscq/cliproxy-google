@@ -277,6 +277,19 @@ func (h *Handler) PutEgressSettings(c *gin.Context) {
 	if _, ok := keys["ultra_max_per_egress"]; !ok {
 		body.UltraMaxPerEgress = h.runtime.EgressSettings(c.Request.Context()).UltraMaxPerEgress
 	}
+	cur := h.runtime.EgressSettings(c.Request.Context())
+	if _, ok := keys["probe_tick_seconds"]; !ok {
+		body.ProbeTickSeconds = cur.ProbeTickSeconds
+	}
+	if _, ok := keys["fail_threshold"]; !ok {
+		body.FailThreshold = cur.FailThreshold
+	}
+	if _, ok := keys["probe_timeout_seconds"]; !ok {
+		body.ProbeTimeoutSeconds = cur.ProbeTimeoutSeconds
+	}
+	if _, ok := keys["probe_per_agent"]; !ok {
+		body.ProbePerAgent = cur.ProbePerAgent
+	}
 	if err := h.runtime.SetEgressSettings(c.Request.Context(), body); err != nil {
 		respondError(c, http.StatusInternalServerError, "save_failed", err)
 		return

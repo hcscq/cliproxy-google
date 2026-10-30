@@ -36,9 +36,12 @@ const (
 	EgressPausedReasonKey = "auto_paused_reason"
 	egressPausedDown      = "egress_down"
 	egressStatusKV        = "egress-status"
+	// Defaults for probe hardening (overridable via EgressSettings / panel).
+	// Slow to mark down (~30s at tick=5s, fail=6), fast to recover (one success).
 	egressTick            = 5 * time.Second
-	egressFailThreshold   = 3
-	egressCheckTimeout    = 4 * time.Second
+	egressFailThreshold   = 6
+	egressCheckTimeout    = 8 * time.Second
+	egressDefaultPerAgent = 1
 	egressHealthTarget    = "oauth2.googleapis.com:443"
 	egressStatusTTL       = 10 * time.Minute
 	egressEnv             = "HOME_EGRESS_PROXIES"
@@ -184,8 +187,6 @@ func (r *Runtime) startEgressManager(ctx context.Context) {
 	}
 	go func() {
 		seededKey := ""
-		tick := time.NewTicker(egressTick)
-		defer tick.Stop()
 		for {
 			if r.catalogLeader() && r.coreManager != nil {
 				specs, legacy := r.currentEgressSpecs(ctx, false)
@@ -199,10 +200,14 @@ func (r *Runtime) startEgressManager(ctx context.Context) {
 				}
 				r.egressRoundWith(ctx, specs, legacy)
 			}
+			wait := egressTick
+			if r.catalogLeader() {
+				wait = r.EgressSettings(ctx).ProbeTick()
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-tick.C:
+			case <-time.After(wait):
 			}
 		}
 	}()
@@ -265,12 +270,15 @@ type egressPoolDeleter interface {
 }
 
 // checkEgress opens a CONNECT tunnel through the egress to a Google endpoint.
-func checkEgress(ctx context.Context, proxyURL string) error {
+func checkEgress(ctx context.Context, proxyURL string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = egressCheckTimeout
+	}
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return err
 	}
-	cctx, cancel := context.WithTimeout(ctx, egressCheckTimeout)
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var d net.Dialer
 	conn, err := d.DialContext(cctx, "tcp", u.Host)
@@ -278,7 +286,7 @@ func checkEgress(ctx context.Context, proxyURL string) error {
 		return err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(egressCheckTimeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	auth := ""
 	if u.User != nil {
 		pass, _ := u.User.Password()
@@ -298,7 +306,18 @@ func checkEgress(ctx context.Context, proxyURL string) error {
 	return nil
 }
 
-var egressChecker = checkEgress
+var egressChecker = func(ctx context.Context, proxyURL string, timeout time.Duration) error {
+	return checkEgress(ctx, proxyURL, timeout)
+}
+
+// agentHostOf returns the egress-agent address (host:port) probes share.
+func agentHostOf(proxyURL string) string {
+	u, err := url.Parse(proxyURL)
+	if err != nil || u.Host == "" {
+		return proxyURL
+	}
+	return u.Host
+}
 
 func isAntigravity(a *coreauth.Auth) bool {
 	return a != nil && strings.EqualFold(a.Provider, "antigravity")
@@ -376,19 +395,41 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 	repo := r.egress.repo
 	r.egress.mu.Unlock()
 
-	// 1. Health (parallel, so one dead egress never delays the others).
+	// 1. Health: agents (same host:port) are probed with limited concurrency so a
+	// brief stall on one agent does not stampede every IP behind it; different
+	// agents still run in parallel. Mark-down needs FailThreshold consecutive
+	// failures; one success recovers immediately (hysteresis).
+	probeSettings := r.EgressSettings(ctx)
+	timeout := probeSettings.ProbeTimeout()
+	failNeed := probeSettings.EffectiveFailThreshold()
+	perAgent := probeSettings.EffectiveProbePerAgent()
 	errs := make([]error, len(specs))
-	var wg sync.WaitGroup
+	byAgent := map[string][]int{}
 	for i := range specs {
+		byAgent[agentHostOf(specs[i].ProxyURL)] = append(byAgent[agentHostOf(specs[i].ProxyURL)], i)
+	}
+	var wg sync.WaitGroup
+	for _, idxs := range byAgent {
 		wg.Add(1)
-		go func(i int) {
+		go func(idxs []int) {
 			defer wg.Done()
-			if specs[i].Removed {
-				errs[i] = errEgressRemoved
-				return
+			sem := make(chan struct{}, perAgent)
+			var inner sync.WaitGroup
+			for _, i := range idxs {
+				inner.Add(1)
+				sem <- struct{}{}
+				go func(i int) {
+					defer inner.Done()
+					defer func() { <-sem }()
+					if specs[i].Removed {
+						errs[i] = errEgressRemoved
+						return
+					}
+					errs[i] = egressChecker(ctx, specs[i].ProxyURL, timeout)
+				}(i)
 			}
-			errs[i] = egressChecker(ctx, specs[i].ProxyURL)
-		}(i)
+			inner.Wait()
+		}(idxs)
 	}
 	wg.Wait()
 	for i, s := range specs {
@@ -401,7 +442,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 		}
 		st.EgressSpec = s
 		if s.Removed {
-			st.Failures = egressFailThreshold - 1 // removed is final: unhealthy now
+			st.Failures = failNeed - 1 // removed is final: unhealthy now
 		}
 		was := st.Healthy
 		st.LastCheck = now
@@ -410,7 +451,7 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 		} else {
 			st.Failures++
 			st.LastError = err.Error()
-			if st.Failures >= egressFailThreshold {
+			if st.Failures >= failNeed {
 				st.Healthy = false
 			}
 		}
@@ -814,6 +855,86 @@ type EgressSettingsValue struct {
 	// 0 = unlimited). Applied when a new credential's tier becomes known as Ultra;
 	// existing pins are never moved automatically (explicit rebalance only).
 	UltraMaxPerEgress *int `json:"ultra_max_per_egress,omitempty"`
+	// ProbeTickSeconds is how often each egress is probed (default 5, clamp [2,60]).
+	ProbeTickSeconds int `json:"probe_tick_seconds,omitempty"`
+	// FailThreshold consecutive probe failures before marking unhealthy (default 6, clamp [1,30]).
+	// With the default tick this is ~30s of failures before pause (slow mark-down).
+	FailThreshold int `json:"fail_threshold,omitempty"`
+	// ProbeTimeoutSeconds is the per-probe CONNECT timeout (default 8, clamp [2,30]).
+	ProbeTimeoutSeconds int `json:"probe_timeout_seconds,omitempty"`
+	// ProbePerAgent limits concurrent probes sharing one agent host:port (default 1 = serialize).
+	ProbePerAgent int `json:"probe_per_agent,omitempty"`
+}
+
+// ProbeTick returns the effective probe interval.
+func (v EgressSettingsValue) ProbeTick() time.Duration {
+	s := v.ProbeTickSeconds
+	if s <= 0 {
+		return egressTick
+	}
+	if s < 2 {
+		s = 2
+	}
+	if s > 60 {
+		s = 60
+	}
+	return time.Duration(s) * time.Second
+}
+
+// FailThreshold returns consecutive failures needed to mark an egress down.
+func (v EgressSettingsValue) EffectiveFailThreshold() int {
+	n := v.FailThreshold
+	if n <= 0 {
+		return egressFailThreshold
+	}
+	if n > 30 {
+		return 30
+	}
+	return n
+}
+
+// ProbeTimeout returns the per-probe CONNECT timeout.
+func (v EgressSettingsValue) ProbeTimeout() time.Duration {
+	s := v.ProbeTimeoutSeconds
+	if s <= 0 {
+		return egressCheckTimeout
+	}
+	if s < 2 {
+		s = 2
+	}
+	if s > 30 {
+		s = 30
+	}
+	return time.Duration(s) * time.Second
+}
+
+// ProbePerAgent returns max concurrent probes per agent host (default 1).
+func (v EgressSettingsValue) EffectiveProbePerAgent() int {
+	n := v.ProbePerAgent
+	if n <= 0 {
+		return egressDefaultPerAgent
+	}
+	if n > 8 {
+		return 8
+	}
+	return n
+}
+
+// WithProbeDefaults fills zero probe fields with the hardened defaults for API responses.
+func (v EgressSettingsValue) WithProbeDefaults() EgressSettingsValue {
+	if v.ProbeTickSeconds <= 0 {
+		v.ProbeTickSeconds = int(egressTick / time.Second)
+	}
+	if v.FailThreshold <= 0 {
+		v.FailThreshold = egressFailThreshold
+	}
+	if v.ProbeTimeoutSeconds <= 0 {
+		v.ProbeTimeoutSeconds = int(egressCheckTimeout / time.Second)
+	}
+	if v.ProbePerAgent <= 0 {
+		v.ProbePerAgent = egressDefaultPerAgent
+	}
+	return v
 }
 
 // DefaultUltraMaxPerEgress is the Ultra-per-IP cap when unset.
@@ -881,6 +1002,7 @@ func (r *Runtime) EgressSettings(ctx context.Context) EgressSettingsValue {
 	} else if err != nil && !egressSettingsCache.at.IsZero() {
 		return egressSettingsCache.val
 	}
+	v = v.WithProbeDefaults()
 	egressSettingsCache.at, egressSettingsCache.val = time.Now(), v
 	return v
 }
