@@ -2,6 +2,8 @@
 package util
 
 import (
+	log "github.com/sirupsen/logrus"
+	"sync/atomic"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -39,6 +41,51 @@ type jsonSchemaCleanOptions struct {
 	preserveAdditionalPropertiesFalse bool
 	preserveAllAdditionalProperties   bool
 	preserveStandardConstraints       bool
+	keepEmptyEnums                    bool
+}
+
+
+// antigravitySchemaSanitizeMode holds off|observe|on (default on).
+var antigravitySchemaSanitizeMode atomic.Value
+
+func init() {
+	antigravitySchemaSanitizeMode.Store("on")
+}
+
+// SetAntigravitySchemaSanitizeMode sets schema cleanup mode for Antigravity cleaners.
+// Values: off, observe, on (unknown → on).
+func SetAntigravitySchemaSanitizeMode(mode string) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "off", "false", "0", "no":
+		antigravitySchemaSanitizeMode.Store("off")
+	case "observe", "dry-run", "dryrun", "log":
+		antigravitySchemaSanitizeMode.Store("observe")
+	default:
+		antigravitySchemaSanitizeMode.Store("on")
+	}
+}
+
+func antigravitySchemaMode() string {
+	if v := antigravitySchemaSanitizeMode.Load(); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return "on"
+}
+
+func applyAntigravitySchemaMode(original, cleaned string) string {
+	switch antigravitySchemaMode() {
+	case "off":
+		return original
+	case "observe":
+		if cleaned != original {
+			log.Warnf("antigravity: observe schema sanitize would change %d→%d bytes (mode=observe; not applied)", len(original), len(cleaned))
+		}
+		return original
+	default:
+		return cleaned
+	}
 }
 
 // CleanJSONSchemaForAntigravity transforms a tool schema to be compatible with Antigravity API.
@@ -53,14 +100,16 @@ func CleanJSONSchemaForAntigravity(jsonStr string) string {
 // type of generated function arguments, so numeric and boolean types must not be rewritten.
 // requirePlaceholder is used only for Claude VALIDATED mode.
 func CleanJSONSchemaForAntigravityTool(jsonStr string, requirePlaceholder bool) string {
-	return cleanJSONSchema(jsonStr, jsonSchemaCleanOptions{
+	cleaned := cleanJSONSchema(jsonStr, jsonSchemaCleanOptions{
 		addPlaceholder:       requirePlaceholder,
 		addMissingArrayItems: true,
 		antigravitySemantics: true,
 		removeToolTitle:      !requirePlaceholder,
 		flattenUnions:        true,
 		dropAllEnums:         true,
+		keepEmptyEnums:       true, // probe 2026-11-01: empty enum accepted upstream
 	})
+	return applyAntigravitySchemaMode(jsonStr, cleaned)
 }
 
 // CleanJSONSchemaForAntigravityResponse transforms a response schema without applying tool-only
@@ -76,12 +125,14 @@ func CleanJSONSchemaForAntigravityTool(jsonStr string, requirePlaceholder bool) 
 //   - Dropped: unresolved $ref (after a hint), metadata, unsupported object-key constraints,
 //     conditional keywords (after non-conflicting properties are retained), and x-* extensions.
 func CleanJSONSchemaForAntigravityResponse(jsonStr string) string {
-	return cleanJSONSchema(jsonStr, jsonSchemaCleanOptions{
+	cleaned := cleanJSONSchema(jsonStr, jsonSchemaCleanOptions{
 		antigravitySemantics:              true,
 		flattenUnions:                     true,
 		dropBooleanEnums:                  true,
 		preserveAdditionalPropertiesFalse: true,
+		keepEmptyEnums:                    true,
 	})
+	return applyAntigravitySchemaMode(jsonStr, cleaned)
 }
 
 // CleanJSONSchemaForGemini transforms a JSON schema to be compatible with Gemini tool calling.
@@ -142,7 +193,9 @@ func cleanJSONSchema(jsonStr string, options jsonSchemaCleanOptions) string {
 
 	// Phase 3: Cleanup
 	jsonStr = removeUnsupportedKeywords(jsonStr, options)
-	jsonStr = dropEmptyEnums(jsonStr)
+	if !options.keepEmptyEnums {
+		jsonStr = dropEmptyEnums(jsonStr)
+	}
 	if options.removeGeminiMetadata {
 		// Gemini schema cleanup: remove nullable/title and placeholder-only fields.
 		jsonStr = removeKeywords(jsonStr, []string{"nullable", "title"})

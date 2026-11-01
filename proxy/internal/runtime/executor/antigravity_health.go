@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	"container/list"
 	"context"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -112,6 +113,7 @@ func antigravityRequestDeadlineFloor(model string, stream bool) time.Duration {
 // SetAntigravityHealthConfig installs the live health config (on load/reload).
 func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 	antigravityHealthLive.Store(&h)
+	util.SetAntigravitySchemaSanitizeMode(string(h.SchemaSanitizeMode.ModeOr(config.CompatModeOn)))
 	thinking.SetClampUnsupportedLevels(h.ClampThinkingLevel == nil || *h.ClampThinkingLevel)
 	maxTTFB := defaultAntigravityTTFBMaxRetries
 	if h.TTFBTimeoutMaxRetries != nil {

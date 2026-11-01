@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -161,25 +162,51 @@ func geminiContentIsBlankText(content gjson.Result) bool {
 	return true
 }
 
-func antigravityRepairFunctionResponseNamesEnabled() bool {
-	if live := antigravityHealthLive.Load(); live != nil && live.RepairFunctionResponseNames != nil {
-		return *live.RepairFunctionResponseNames
+func antigravityCompatMode(get func(*config.AntigravityHealthConfig) *config.CompatMode) config.CompatMode {
+	if live := antigravityHealthLive.Load(); live != nil {
+		return get(live).ModeOr(config.CompatModeOn)
 	}
-	return true
+	return config.CompatModeOn
+}
+
+func antigravityRepairFunctionResponseNamesMode() config.CompatMode {
+	return antigravityCompatMode(func(h *config.AntigravityHealthConfig) *config.CompatMode { return h.RepairFunctionResponseNames })
+}
+
+func antigravityRepairFunctionResponseNamesEnabled() bool {
+	return antigravityRepairFunctionResponseNamesMode() != config.CompatModeOff
+}
+
+func antigravityRepairFunctionResponseNamesObserveOnly() bool {
+	return antigravityRepairFunctionResponseNamesMode() == config.CompatModeObserve
+}
+
+func antigravityRetryStripInvalidThinkingMode() config.CompatMode {
+	return antigravityCompatMode(func(h *config.AntigravityHealthConfig) *config.CompatMode { return h.RetryStripInvalidThinkingOn400 })
 }
 
 func antigravityRetryStripInvalidThinkingEnabled() bool {
-	if live := antigravityHealthLive.Load(); live != nil && live.RetryStripInvalidThinkingOn400 != nil {
-		return *live.RetryStripInvalidThinkingOn400
-	}
-	return true
+	return antigravityRetryStripInvalidThinkingMode() != config.CompatModeOff
+}
+
+func antigravityRetryStripInvalidThinkingObserveOnly() bool {
+	return antigravityRetryStripInvalidThinkingMode() == config.CompatModeObserve
+}
+
+func antigravitySchemaSanitizeMode() config.CompatMode {
+	return antigravityCompatMode(func(h *config.AntigravityHealthConfig) *config.CompatMode { return h.SchemaSanitizeMode })
+}
+
+func antigravityContextTokenPrecheckMode() config.CompatMode {
+	return antigravityCompatMode(func(h *config.AntigravityHealthConfig) *config.CompatMode { return h.ContextTokenPrecheck })
 }
 
 func antigravityContextTokenPrecheckEnabled() bool {
-	if live := antigravityHealthLive.Load(); live != nil && live.ContextTokenPrecheck != nil {
-		return *live.ContextTokenPrecheck
-	}
-	return true
+	return antigravityContextTokenPrecheckMode() != config.CompatModeOff
+}
+
+func antigravityContextTokenPrecheckObserveOnly() bool {
+	return antigravityContextTokenPrecheckMode() == config.CompatModeObserve
 }
 
 func antigravityDropBuiltinToolsWithFunctions() bool {
@@ -233,12 +260,15 @@ func repairGeminiFunctionResponseNames(payload []byte, path string) []byte {
 			continue
 		}
 		used := make([]bool, len(pending))
+		observeOnly := antigravityRepairFunctionResponseNamesObserveOnly()
 		for ri, r := range resps {
 			targetIdx := -1
+			pairedByID := false
 			if r.id != "" {
 				for i, c := range pending {
 					if !used[i] && c.id != "" && c.id == r.id {
 						targetIdx = i
+						pairedByID = true
 						break
 					}
 				}
@@ -254,11 +284,26 @@ func repairGeminiFunctionResponseNames(payload []byte, path string) []byte {
 			if target == "" || r.name == target {
 				continue
 			}
+			// Probe matrix 2026-11-01: upstream rejects id-paired name mismatches and
+			// empty names; arbitrary wrong names without ids are accepted. Only rewrite
+			// by position for empty / placeholder names.
+			if !pairedByID {
+				placeholder := r.name == "" || r.name == "unknown_function"
+				if !placeholder {
+					continue
+				}
+			}
+			mode := repairPairingMode(r.id, pending[targetIdx].id)
+			if observeOnly {
+				log.Warnf("antigravity: observe functionResponse.name %q -> %q (paired by %s to functionCall at pending[%d]; not applied; schema-sanitize/repair mode=observe)",
+					r.name, target, mode, targetIdx)
+				continue
+			}
 			p := path + "." + strconv.Itoa(ci) + ".parts." + strconv.Itoa(r.idx) + "." + r.key + ".name"
 			if updated, err := sjson.SetBytes(out, p, target); err == nil {
 				out = updated
-				log.Warnf("antigravity: repaired functionResponse.name %q -> %q (paired by %s to functionCall at pending[%d]; setting repair-function-response-names=false to disable)",
-					r.name, target, repairPairingMode(r.id, pending[targetIdx].id), targetIdx)
+				log.Warnf("antigravity: repaired functionResponse.name %q -> %q (paired by %s to functionCall at pending[%d]; setting repair-function-response-names=off to disable)",
+					r.name, target, mode, targetIdx)
 			}
 		}
 		pending = nil

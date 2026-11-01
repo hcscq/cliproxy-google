@@ -61,8 +61,8 @@ func TestDropGeminiBuiltinToolsWhenFunctions(t *testing.T) {
 func TestAntigravity400CompatSettingsOff(t *testing.T) {
 	prev := antigravityHealthLive.Load()
 	defer antigravityHealthLive.Store(prev)
-	no, keep := false, "keep"
-	antigravityHealthLive.Store(&config.AntigravityHealthConfig{RepairFunctionResponseNames: &no, BuiltinToolsWithFunctions: &keep, RetryStripInvalidThinkingOn400: &no, ContextTokenPrecheck: &no})
+	off, keep := config.CompatModeOff, "keep"
+	antigravityHealthLive.Store(&config.AntigravityHealthConfig{RepairFunctionResponseNames: &off, BuiltinToolsWithFunctions: &keep, RetryStripInvalidThinkingOn400: &off, ContextTokenPrecheck: &off})
 	if antigravityRepairFunctionResponseNamesEnabled() || antigravityDropBuiltinToolsWithFunctions() || antigravityRetryStripInvalidThinkingEnabled() || antigravityContextTokenPrecheckEnabled() {
 		t.Fatal("settings off must disable the repairs")
 	}

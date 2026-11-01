@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/json"
+	"bytes"
 	"fmt"
 	"math"
 	"strconv"
@@ -176,6 +178,87 @@ type AntigravityConfig struct {
 
 // AntigravityHealthConfig tunes per-credential degradation handling. Zero
 // values mean the defaults noted on each field; negative disables.
+// CompatMode is off | observe | on for silent rewrite features.
+// Accepts JSON/YAML bools for backward compatibility (true→on, false→off).
+type CompatMode string
+
+const (
+	CompatModeOff     CompatMode = "off"
+	CompatModeObserve CompatMode = "observe"
+	CompatModeOn      CompatMode = "on"
+)
+
+func ParseCompatMode(v any, defaultMode CompatMode) CompatMode {
+	switch x := v.(type) {
+	case CompatMode:
+		return x.Normalized(defaultMode)
+	case string:
+		return CompatMode(x).Normalized(defaultMode)
+	case bool:
+		if x {
+			return CompatModeOn
+		}
+		return CompatModeOff
+	case nil:
+		return defaultMode
+	default:
+		return defaultMode
+	}
+}
+
+func (m CompatMode) Normalized(defaultMode CompatMode) CompatMode {
+	switch CompatMode(strings.ToLower(strings.TrimSpace(string(m)))) {
+	case CompatModeOff, "false", "0", "no":
+		return CompatModeOff
+	case CompatModeObserve, "dry-run", "dryrun", "log":
+		return CompatModeObserve
+	case CompatModeOn, "true", "1", "yes":
+		return CompatModeOn
+	case "":
+		return defaultMode
+	default:
+		return defaultMode
+	}
+}
+
+func (m *CompatMode) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if string(b) == "true" {
+		*m = CompatModeOn
+		return nil
+	}
+	if string(b) == "false" {
+		*m = CompatModeOff
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	*m = CompatMode(s)
+	return nil
+}
+
+func (m *CompatMode) UnmarshalYAML(unmarshal func(any) error) error {
+	var raw any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	*m = ParseCompatMode(raw, "")
+	return nil
+}
+
+func (m *CompatMode) ModeOr(defaultMode CompatMode) CompatMode {
+	if m == nil {
+		return defaultMode
+	}
+	return m.Normalized(defaultMode)
+}
+
+
 type AntigravityHealthConfig struct {
 	// TTFBTimeoutSeconds abandons a streaming attempt with no first upstream
 	// byte after this long and switches credential. Default 75.
@@ -243,21 +326,21 @@ type AntigravityHealthConfig struct {
 	// 400 "required oneof field 'data'" / "Unsupported input part type", and
 	// removes contents left with no parts. nil = on.
 	DropEmptyParts *bool `yaml:"drop-empty-parts,omitempty" json:"drop-empty-parts,omitempty"`
-	// RepairFunctionResponseNames rewrites functionResponse.name to the paired
-	// functionCall.name (by id first, else by position) when they differ — empty,
-	// placeholder (unknown_function), or a wrong real name such as list_files
-	// answering package_proxy. Avoids 400 "functionResponse.name ... does not
-	// match functionCall.name". nil = on.
-	RepairFunctionResponseNames *bool `yaml:"repair-function-response-names,omitempty" json:"repair-function-response-names,omitempty"`
-	// RetryStripInvalidThinkingOn400 retries once after stripping signed
-	// thinking/reasoning blocks when upstream returns 400 Invalid signature in
-	// thinking block (signatures are bound to the issuing credential/model;
-	// clients often replay them across credentials). nil = on.
-	RetryStripInvalidThinkingOn400 *bool `yaml:"retry-strip-invalid-thinking-on-400,omitempty" json:"retry-strip-invalid-thinking-on-400,omitempty"`
-	// ContextTokenPrecheck rejects locally with a clear 400 when the estimated
-	// input token count exceeds the model's input/context limit, instead of
-	// forwarding and wasting an upstream call. nil = on.
-	ContextTokenPrecheck *bool `yaml:"context-token-precheck,omitempty" json:"context-token-precheck,omitempty"`
+	// RepairFunctionResponseNames controls rewriting functionResponse.name to the
+	// paired functionCall.name. Modes: on (default) = rewrite when justified;
+	// observe = log only; off = disabled. Accepts legacy bool.
+	RepairFunctionResponseNames *CompatMode `yaml:"repair-function-response-names,omitempty" json:"repair-function-response-names,omitempty"`
+	// RetryStripInvalidThinkingOn400 retries once after stripping signed thinking
+	// blocks on upstream 400 Invalid signature in thinking. Modes: on (default) /
+	// observe / off. Accepts legacy bool.
+	RetryStripInvalidThinkingOn400 *CompatMode `yaml:"retry-strip-invalid-thinking-on-400,omitempty" json:"retry-strip-invalid-thinking-on-400,omitempty"`
+	// SchemaSanitizeMode controls Antigravity/Gemini JSON-schema cleanup before
+	// forward. on (default) applies proven-reject transforms; observe logs a diff
+	// but keeps the original schema; off skips cleanup.
+	SchemaSanitizeMode *CompatMode `yaml:"schema-sanitize-mode,omitempty" json:"schema-sanitize-mode,omitempty"`
+	// ContextTokenPrecheck rejects locally when estimated input clearly exceeds
+	// the model limit. Modes: on (default) / observe (log only) / off.
+	ContextTokenPrecheck *CompatMode `yaml:"context-token-precheck,omitempty" json:"context-token-precheck,omitempty"`
 	// BuiltinToolsWithFunctions handles requests that declare built-in tools
 	// (googleSearch / urlContext / codeExecution) together with function
 	// declarations. Antigravity rejects that mix with 400 "Please enable

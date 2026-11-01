@@ -33,9 +33,16 @@ func antigravityModelInputLimit(modelName string, info *registry.ModelInfo) int 
 	switch {
 	case strings.Contains(lower, "gemini-3.8-flash"), strings.Contains(lower, "gemini-3-8-flash"):
 		return 131072
+	case strings.Contains(lower, "gemini-3.7-flash"), strings.Contains(lower, "gemini-3-7-flash"),
+		strings.Contains(lower, "gemini-3.6-flash"), strings.Contains(lower, "gemini-3-6-flash"),
+		strings.Contains(lower, "gemini-3.5-flash"), strings.Contains(lower, "gemini-3-5-flash"),
+		strings.Contains(lower, "gemini-3-flash"):
+		return 1048576
 	case strings.Contains(lower, "gemini-2.5-flash"):
 		return 1048576
 	case strings.Contains(lower, "gemini-2.5-pro"):
+		return 1048576
+	case strings.Contains(lower, "gemini-4-argon"), strings.Contains(lower, "gemini-4"):
 		return 1048576
 	default:
 		return 0
@@ -53,13 +60,19 @@ func antigravityContextPrecheckError(modelName string, info *registry.ModelInfo,
 		return nil
 	}
 	estimated := antigravityEstimateInputTokens(payload)
-	if estimated <= limit {
+	// bytes/4 under-estimates some tokenizers; only reject when clearly over a margin.
+	clearOver := estimated > limit+(limit/20) || estimated-limit > 2048
+	if estimated <= limit || !clearOver {
 		return nil
 	}
 	msg := fmt.Sprintf(
 		"context length exceeded: estimated %d input tokens > model limit %d for %s (local precheck; request was not forwarded upstream). Shorten the prompt or use a model with a larger context window.",
 		estimated, limit, strings.TrimSpace(modelName),
 	)
+	if antigravityContextTokenPrecheckObserveOnly() {
+		log.Warnf("antigravity: observe %s (mode=observe; not applied)", msg)
+		return nil
+	}
 	log.Warnf("antigravity: %s", msg)
 	return statusErr{code: http.StatusBadRequest, msg: msg}
 }
