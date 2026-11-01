@@ -114,6 +114,12 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	}
 
 	upstreamStatus := internallogging.GetResponseStatus(ctx)
+	if upstreamStatus <= 0 && failed && fail.StatusCode > 0 {
+		// Prefer the status embedded in the fail payload when the request-meta
+		// holder was never populated (common before SetResponseStatus was wired
+		// into RecordAPIResponseMetadata).
+		upstreamStatus = fail.StatusCode
+	}
 	detail := requestDetail{
 		Timestamp:          timestamp,
 		LatencyMs:          record.Latency.Milliseconds(),

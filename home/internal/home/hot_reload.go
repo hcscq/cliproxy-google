@@ -116,7 +116,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
 	logretention.Set(cfg.RequestLogRetentionDays)
 	logretention.SetBilling(cfg.BillingChargeRetentionDays)
-	errorsamples.Set(cfg.ErrorSamplesEnabled, cfg.ErrorSamplesPerType, cfg.ErrorSamplesMaxBytes, cfg.ErrorSamplesMaxTypes, cfg.ErrorSamplesExclude, cfg.ErrorSamplesOverrides)
+	errorsamples.Set(cfg.ErrorSamplesEnabled, cfg.ErrorSamplesPerType, cfg.ErrorSamplesMaxBytes, cfg.ErrorSamplesMaxTypes, cfg.ErrorSamplesRetentionDays, cfg.ErrorSamplesExclude, cfg.ErrorSamplesOverrides)
 	r.authDir = cfg.AuthDir
 	r.cfgMu.Unlock()
 

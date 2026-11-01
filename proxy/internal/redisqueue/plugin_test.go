@@ -331,6 +331,35 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndFailureAndGinRequestID(t 
 	})
 }
 
+func TestUsageQueuePluginFallsBackUpstreamStatusFromFail(t *testing.T) {
+	withEnabledQueue(t, func() {
+		ctx := internallogging.WithRequestID(context.Background(), "opaque-req")
+		ctx = internallogging.WithEndpoint(ctx, "POST /v1/messages")
+		ctx = internallogging.WithResponseStatusHolder(ctx)
+		// Intentionally do NOT SetResponseStatus — reproduces the pre-fix gap.
+
+		plugin := &usageQueuePlugin{}
+		plugin.HandleUsage(ctx, coreusage.Record{
+			Provider:  "antigravity",
+			Model:     "claude-opus-5-5-high",
+			APIKey:    "sk-test",
+			AuthIndex: "cred-1",
+			AuthType:  "oauth",
+			Failed:    true,
+			Fail: coreusage.Failure{
+				StatusCode: http.StatusInternalServerError,
+				Body:       "{\n  \"error\": {\n    \"code\": 500,\n    \"message\": \"Unknown Error.\",\n    \"status\": \"UNKNOWN\"\n  }\n}",
+			},
+			Detail: coreusage.Detail{TotalTokens: 0},
+		})
+
+		payload := popSinglePayload(t)
+		requireBoolField(t, payload, "failed", true)
+		requireIntField(t, payload, "upstream_status_code", http.StatusInternalServerError)
+		requireFailField(t, payload, http.StatusInternalServerError, "{\n  \"error\": {\n    \"code\": 500,\n    \"message\": \"Unknown Error.\",\n    \"status\": \"UNKNOWN\"\n  }\n}")
+	})
+}
+
 func TestUsageQueuePluginAsyncIgnoresRecycledGinContext(t *testing.T) {
 	withEnabledQueue(t, func() {
 		ginCtx := newTestGinContext(t, http.MethodPost, "/v1/chat/completions", http.StatusOK)

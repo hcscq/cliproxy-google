@@ -19,6 +19,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -115,6 +116,7 @@ func SetAntigravityHealthConfig(h config.AntigravityHealthConfig) {
 	antigravityHealthLive.Store(&h)
 	util.SetAntigravitySchemaSanitizeMode(string(h.SchemaSanitizeMode.ModeOr(config.CompatModeOn)))
 	thinking.SetClampUnsupportedLevels(h.ClampThinkingLevel == nil || *h.ClampThinkingLevel)
+	applyOpaqueErrorSampleSettings(h)
 	maxTTFB := defaultAntigravityTTFBMaxRetries
 	if h.TTFBTimeoutMaxRetries != nil {
 		maxTTFB = *h.TTFBTimeoutMaxRetries
@@ -552,4 +554,26 @@ func antigravityLocalSlow(key string, now time.Time, s antigravityHealthSettings
 		return 0
 	}
 	return antigravityHealth.slow(key, now, s)
+}
+
+
+func applyOpaqueErrorSampleSettings(h config.AntigravityHealthConfig) {
+	enabled := h.OpaqueErrorSampleEnabled == nil || *h.OpaqueErrorSampleEnabled
+	includeSig := h.OpaqueErrorSampleIncludeThinkingSignature400 == nil || *h.OpaqueErrorSampleIncludeThinkingSignature400
+	var matchers []string
+	for _, p := range strings.FieldsFunc(h.OpaqueErrorSampleMatchers, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	}) {
+		if p = strings.TrimSpace(p); p != "" {
+			matchers = append(matchers, p)
+		}
+	}
+	logging.SetOpaqueErrorSampleSettings(logging.OpaqueErrorSampleSettings{
+		Enabled:                     enabled,
+		IncludeThinkingSignature400: includeSig,
+		PerSession:                  h.OpaqueErrorSamplePerSession,
+		DailyCap:                    h.OpaqueErrorSampleDailyCap,
+		ExcerptBytes:                h.OpaqueErrorSampleExcerptBytes,
+		Matchers:                    matchers,
+	})
 }

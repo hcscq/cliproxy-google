@@ -341,6 +341,25 @@ type AntigravityHealthConfig struct {
 	// ContextTokenPrecheck rejects locally when estimated input clearly exceeds
 	// the model limit. Modes: on (default) / observe (log only) / off.
 	ContextTokenPrecheck *CompatMode `yaml:"context-token-precheck,omitempty" json:"context-token-precheck,omitempty"`
+	// OpaqueErrorSampleEnabled controls bounded diagnostic capture for opaque
+	// upstream errors (HTTP 500 "Unknown Error." / status UNKNOWN). nil = on.
+	OpaqueErrorSampleEnabled *bool `yaml:"opaque-error-sample-enabled,omitempty" json:"opaque-error-sample-enabled,omitempty"`
+	// OpaqueErrorSampleIncludeThinkingSignature400 also samples Claude
+	// invalid-thinking-signature 400s under the same caps. nil = on.
+	OpaqueErrorSampleIncludeThinkingSignature400 *bool `yaml:"opaque-error-sample-include-thinking-signature-400,omitempty" json:"opaque-error-sample-include-thinking-signature-400,omitempty"`
+	// OpaqueErrorSampleMatchers is a comma-separated list of lower-case needles
+	// matched against the upstream error body. Empty = built-in defaults
+	// ("unknown error", status UNKNOWN).
+	OpaqueErrorSampleMatchers string `yaml:"opaque-error-sample-matchers,omitempty" json:"opaque-error-sample-matchers,omitempty"`
+	// OpaqueErrorSamplePerSession caps samples per (error-type, session) per UTC
+	// day. 0 = default 1; max 5.
+	OpaqueErrorSamplePerSession int `yaml:"opaque-error-sample-per-session,omitempty" json:"opaque-error-sample-per-session,omitempty"`
+	// OpaqueErrorSampleDailyCap is the cluster-local (per proxy) daily cap across
+	// all opaque types. 0 = default 50; max 500.
+	OpaqueErrorSampleDailyCap int `yaml:"opaque-error-sample-daily-cap,omitempty" json:"opaque-error-sample-daily-cap,omitempty"`
+	// OpaqueErrorSampleExcerptBytes caps redacted body excerpts on opaque samples.
+	// 0 = default 8192; max 65536.
+	OpaqueErrorSampleExcerptBytes int `yaml:"opaque-error-sample-excerpt-bytes,omitempty" json:"opaque-error-sample-excerpt-bytes,omitempty"`
 	// BuiltinToolsWithFunctions handles requests that declare built-in tools
 	// (googleSearch / urlContext / codeExecution) together with function
 	// declarations. Antigravity rejects that mix with 400 "Please enable
