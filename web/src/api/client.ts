@@ -934,11 +934,13 @@ export interface DailyBillingCostInput {
   ultra_daily_cost: number;
   other_daily_cost: number;
   month_days: number;
+  query_timeout_seconds?: number;
 }
 
 export interface DailyBillingCostSettings extends DailyBillingCostInput {
   source?: 'panel' | 'config' | string;
   cost_configured?: boolean;
+  effective_query_timeout_seconds?: number;
 }
 
 export interface DailyBillingTotals {

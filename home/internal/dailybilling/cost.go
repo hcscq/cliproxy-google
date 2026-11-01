@@ -12,13 +12,14 @@ import (
 // A daily cost greater than zero replaces that tier's monthly amortization.
 // MonthDays 0 uses the calendar length of each reported day.
 type CostSettings struct {
-	ProMonthlyCost   float64 `json:"pro_monthly_cost"`
-	UltraMonthlyCost float64 `json:"ultra_monthly_cost"`
-	OtherMonthlyCost float64 `json:"other_monthly_cost"`
-	ProDailyCost     float64 `json:"pro_daily_cost"`
-	UltraDailyCost   float64 `json:"ultra_daily_cost"`
-	OtherDailyCost   float64 `json:"other_daily_cost"`
-	MonthDays        int     `json:"month_days"`
+	ProMonthlyCost      float64 `json:"pro_monthly_cost"`
+	UltraMonthlyCost    float64 `json:"ultra_monthly_cost"`
+	OtherMonthlyCost    float64 `json:"other_monthly_cost"`
+	ProDailyCost        float64 `json:"pro_daily_cost"`
+	UltraDailyCost      float64 `json:"ultra_daily_cost"`
+	OtherDailyCost      float64 `json:"other_daily_cost"`
+	MonthDays           int     `json:"month_days"`
+	QueryTimeoutSeconds int     `json:"query_timeout_seconds"`
 }
 
 // Configured reports whether any tier has a positive monthly or daily cost.
@@ -34,6 +35,9 @@ func (s CostSettings) Validate() error {
 		return ErrInvalidCost
 	}
 	if s.MonthDays < 0 || s.MonthDays > 31 {
+		return ErrInvalidCost
+	}
+	if s.QueryTimeoutSeconds < 0 || s.QueryTimeoutSeconds > MaxQueryTimeoutSeconds {
 		return ErrInvalidCost
 	}
 	return nil
@@ -62,13 +66,14 @@ func DecodeCostSettings(raw []byte) (CostSettings, error) {
 // CostSettings returns the cost basis currently on the config.
 func (c Config) CostSettings() CostSettings {
 	return CostSettings{
-		ProMonthlyCost:   c.ProMonthlyCost,
-		UltraMonthlyCost: c.UltraMonthlyCost,
-		OtherMonthlyCost: c.OtherMonthlyCost,
-		ProDailyCost:     c.ProDailyCost,
-		UltraDailyCost:   c.UltraDailyCost,
-		OtherDailyCost:   c.OtherDailyCost,
-		MonthDays:        c.CostMonthDays,
+		ProMonthlyCost:      c.ProMonthlyCost,
+		UltraMonthlyCost:    c.UltraMonthlyCost,
+		OtherMonthlyCost:    c.OtherMonthlyCost,
+		ProDailyCost:        c.ProDailyCost,
+		UltraDailyCost:      c.UltraDailyCost,
+		OtherDailyCost:      c.OtherDailyCost,
+		MonthDays:           c.CostMonthDays,
+		QueryTimeoutSeconds: c.QueryTimeoutSeconds,
 	}
 }
 
@@ -84,6 +89,11 @@ func (c Config) WithCost(settings CostSettings) Config {
 		c.CostMonthDays = 0
 	} else {
 		c.CostMonthDays = settings.MonthDays
+	}
+	if settings.QueryTimeoutSeconds < 0 || settings.QueryTimeoutSeconds > MaxQueryTimeoutSeconds {
+		c.QueryTimeoutSeconds = 0
+	} else {
+		c.QueryTimeoutSeconds = settings.QueryTimeoutSeconds
 	}
 	return c
 }
@@ -128,6 +138,22 @@ func daysInMonth(day string) int {
 		return 0
 	}
 	return time.Date(parsed.Year(), parsed.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+// EffectiveQueryTimeoutSeconds returns a panel override when set, else fallbackSeconds,
+// else DefaultQueryTimeoutSeconds. Values above MaxQueryTimeoutSeconds are clamped.
+func EffectiveQueryTimeoutSeconds(panel CostSettings, fallbackSeconds int) int {
+	seconds := fallbackSeconds
+	if panel.QueryTimeoutSeconds > 0 {
+		seconds = panel.QueryTimeoutSeconds
+	}
+	if seconds <= 0 {
+		seconds = DefaultQueryTimeoutSeconds
+	}
+	if seconds > MaxQueryTimeoutSeconds {
+		seconds = MaxQueryTimeoutSeconds
+	}
+	return seconds
 }
 
 func validMoney(value float64) bool {

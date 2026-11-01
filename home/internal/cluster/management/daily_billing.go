@@ -17,8 +17,9 @@ const dailyBillingCostKey = "management/daily-billing/cost"
 
 type dailyCostView struct {
 	dailybilling.CostSettings
-	Source         string `json:"source"`
-	CostConfigured bool   `json:"cost_configured"`
+	Source                string `json:"source"`
+	CostConfigured        bool   `json:"cost_configured"`
+	EffectiveQueryTimeout int    `json:"effective_query_timeout_seconds"`
 }
 
 // SetDailyBilling replaces the daily billing reporter. Tests use this to avoid a database.
@@ -74,7 +75,9 @@ func (h *Handler) PutDailyBillingSettings(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "daily_billing_cost_failed", errors.New("成本配置保存失败"))
 		return
 	}
-	c.JSON(http.StatusOK, costView(body, "panel"))
+	view := costView(body, "panel")
+	view.EffectiveQueryTimeout = dailybilling.EffectiveQueryTimeoutSeconds(body, h.fileDailyCost().QueryTimeoutSeconds)
+	c.JSON(http.StatusOK, view)
 }
 
 // GetDailyBilling reports estimated spend by day, subscription tier, and model.
@@ -98,13 +101,17 @@ func (h *Handler) GetDailyBilling(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := h.dailyBillingContext(c)
-	defer cancel()
-	if settings, found, errLoad := h.loadDailyCost(ctx); errLoad != nil {
+	settings, settingsFound, errLoad := h.loadDailyCost(context.Background())
+	if errLoad != nil {
 		log.Warnf("daily billing cost settings unreadable: %s", errLoad.Error())
-	} else if found {
+		settingsFound = false
+	}
+	if settingsFound {
 		query.Cost = &settings
 	}
+	timeout := h.dailyBillingTimeout(reporter, settings, settingsFound)
+	ctx, cancel := h.dailyBillingContext(c, timeout)
+	defer cancel()
 	report, errReport := reporter.Report(ctx, query)
 	if errReport != nil {
 		if errors.Is(errReport, dailybilling.ErrSourceUnavailable) {
@@ -123,10 +130,15 @@ func (h *Handler) dailyCostView(ctx context.Context) dailyCostView {
 		log.Warnf("daily billing cost settings unreadable: %s", errLoad.Error())
 		found = false
 	}
+	file := h.fileDailyCost()
 	if found {
-		return costView(settings, "panel")
+		view := costView(settings, "panel")
+		view.EffectiveQueryTimeout = dailybilling.EffectiveQueryTimeoutSeconds(settings, file.QueryTimeoutSeconds)
+		return view
 	}
-	return costView(h.fileDailyCost(), "config")
+	view := costView(file, "config")
+	view.EffectiveQueryTimeout = dailybilling.EffectiveQueryTimeoutSeconds(dailybilling.CostSettings{}, file.QueryTimeoutSeconds)
+	return view
 }
 
 func (h *Handler) fileDailyCost() dailybilling.CostSettings {
@@ -141,7 +153,28 @@ func (h *Handler) fileDailyCost() dailybilling.CostSettings {
 }
 
 func costView(settings dailybilling.CostSettings, source string) dailyCostView {
-	return dailyCostView{CostSettings: settings, Source: source, CostConfigured: settings.Configured()}
+	return dailyCostView{
+		CostSettings:          settings,
+		Source:                source,
+		CostConfigured:        settings.Configured(),
+		EffectiveQueryTimeout: dailybilling.EffectiveQueryTimeoutSeconds(settings, settings.QueryTimeoutSeconds),
+	}
+}
+
+func (h *Handler) dailyBillingTimeout(reporter dailybilling.Reporter, settings dailybilling.CostSettings, settingsFound bool) time.Duration {
+	fallback := dailybilling.DefaultQueryTimeoutSeconds
+	if source, ok := reporter.(interface{ QueryTimeout() time.Duration }); ok {
+		seconds := int(source.QueryTimeout() / time.Second)
+		if seconds > 0 {
+			fallback = seconds
+		}
+	}
+	panel := dailybilling.CostSettings{}
+	if settingsFound {
+		panel = settings
+	}
+	seconds := dailybilling.EffectiveQueryTimeoutSeconds(panel, fallback)
+	return time.Duration(seconds) * time.Second
 }
 
 func (h *Handler) loadDailyCost(ctx context.Context) (dailybilling.CostSettings, bool, error) {
@@ -186,10 +219,16 @@ func (h *Handler) saveDailyCost(ctx context.Context, settings dailybilling.CostS
 	return nil
 }
 
-func (h *Handler) dailyBillingContext(c *gin.Context) (context.Context, context.CancelFunc) {
+func (h *Handler) dailyBillingContext(c *gin.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	parent := context.Background()
 	if c != nil && c.Request != nil && c.Request.Context() != nil {
 		parent = c.Request.Context()
 	}
-	return context.WithTimeout(parent, 30*time.Second)
+	if timeout <= 0 {
+		timeout = time.Duration(dailybilling.DefaultQueryTimeoutSeconds) * time.Second
+	}
+	if timeout > time.Duration(dailybilling.MaxQueryTimeoutSeconds)*time.Second {
+		timeout = time.Duration(dailybilling.MaxQueryTimeoutSeconds) * time.Second
+	}
+	return context.WithTimeout(parent, timeout)
 }
