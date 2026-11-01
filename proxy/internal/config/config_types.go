@@ -243,11 +243,21 @@ type AntigravityHealthConfig struct {
 	// 400 "required oneof field 'data'" / "Unsupported input part type", and
 	// removes contents left with no parts. nil = on.
 	DropEmptyParts *bool `yaml:"drop-empty-parts,omitempty" json:"drop-empty-parts,omitempty"`
-	// RepairFunctionResponseNames sets functionResponse.name from the matching
-	// functionCall (by id, else by position) when the client sent an empty or
-	// placeholder name such as "unknown_function", which otherwise fails with
-	// 400 "functionResponse.name ... does not match functionCall.name". nil = on.
+	// RepairFunctionResponseNames rewrites functionResponse.name to the paired
+	// functionCall.name (by id first, else by position) when they differ — empty,
+	// placeholder (unknown_function), or a wrong real name such as list_files
+	// answering package_proxy. Avoids 400 "functionResponse.name ... does not
+	// match functionCall.name". nil = on.
 	RepairFunctionResponseNames *bool `yaml:"repair-function-response-names,omitempty" json:"repair-function-response-names,omitempty"`
+	// RetryStripInvalidThinkingOn400 retries once after stripping signed
+	// thinking/reasoning blocks when upstream returns 400 Invalid signature in
+	// thinking block (signatures are bound to the issuing credential/model;
+	// clients often replay them across credentials). nil = on.
+	RetryStripInvalidThinkingOn400 *bool `yaml:"retry-strip-invalid-thinking-on-400,omitempty" json:"retry-strip-invalid-thinking-on-400,omitempty"`
+	// ContextTokenPrecheck rejects locally with a clear 400 when the estimated
+	// input token count exceeds the model's input/context limit, instead of
+	// forwarding and wasting an upstream call. nil = on.
+	ContextTokenPrecheck *bool `yaml:"context-token-precheck,omitempty" json:"context-token-precheck,omitempty"`
 	// BuiltinToolsWithFunctions handles requests that declare built-in tools
 	// (googleSearch / urlContext / codeExecution) together with function
 	// declarations. Antigravity rejects that mix with 400 "Please enable

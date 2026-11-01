@@ -100,6 +100,9 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
 	translated = e.obfuscateSensitiveWords(translated)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
+	if errPre := antigravityContextPrecheckError(baseModel, modelInfo, translated); errPre != nil {
+		return resp, errPre
+	}
 	reporter.SetModelThinking(modelInfo)
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
@@ -205,10 +208,43 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			err = antigravityCapacityErr(auth, baseModel, health, httpResp.StatusCode, bodyBytes, httpResp.Header)
 			return resp, err
 		}
+		if httpResp.StatusCode == http.StatusBadRequest && antigravityRetryStripInvalidThinkingEnabled() && antigravityInvalidThinkingSignatureBody(bodyBytes) {
+			stripped, removed := stripAntigravitySignedThinkingForRetry(sendPayload)
+			if removed > 0 {
+				log.Warnf("antigravity: upstream invalid thinking signature; stripped %d signed thinking part(s) and retrying once on the same credential", removed)
+				httpReqRetry, errReqRetry := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, stripped, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+				if errReqRetry == nil {
+					httpRespRetry, errDoRetry := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReqRetry)
+					if errDoRetry == nil {
+						helps.RecordAPIResponseMetadata(ctx, e.cfg, httpRespRetry.StatusCode, httpRespRetry.Header.Clone())
+						if httpRespRetry.StatusCode >= http.StatusOK && httpRespRetry.StatusCode < http.StatusMultipleChoices {
+							sendPayload = stripped
+							requestPayload = stripped
+							bodyBytes, errRead = io.ReadAll(httpRespRetry.Body)
+							_ = httpRespRetry.Body.Close()
+							if errRead != nil {
+								err = errRead
+								return resp, err
+							}
+							httpResp = httpRespRetry
+							goto antigravityNonStreamSuccess
+						}
+						retryBody, errRetryRead := io.ReadAll(httpRespRetry.Body)
+						_ = httpRespRetry.Body.Close()
+						if errRetryRead == nil {
+							bodyBytes = retryBody
+						}
+					} else if httpRespRetry != nil && httpRespRetry.Body != nil {
+						_ = httpRespRetry.Body.Close()
+					}
+				}
+			}
+		}
 		err = newAntigravityStatusErrWithHeaders(httpResp.StatusCode, bodyBytes, httpResp.Header)
 		return resp, err
 	}
 
+antigravityNonStreamSuccess:
 	if text, retired := retiredModelText(bodyBytes); retired {
 		err = retiredModelErr(baseModel, text)
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -351,6 +387,9 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
 	translated = e.obfuscateSensitiveWords(translated)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
+	if errPre := antigravityContextPrecheckError(baseModel, modelInfo, translated); errPre != nil {
+		return resp, errPre
+	}
 	reporter.SetModelThinking(modelInfo)
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
@@ -462,10 +501,37 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			err = antigravityCapacityErr(auth, baseModel, health, httpResp.StatusCode, bodyBytes, httpResp.Header)
 			return resp, err
 		}
+		if httpResp.StatusCode == http.StatusBadRequest && antigravityRetryStripInvalidThinkingEnabled() && antigravityInvalidThinkingSignatureBody(bodyBytes) {
+			stripped, removed := stripAntigravitySignedThinkingForRetry(sendPayload)
+			if removed > 0 {
+				log.Warnf("antigravity: upstream invalid thinking signature; stripped %d signed thinking part(s) and retrying once on the same credential", removed)
+				httpReqRetry, errReqRetry := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, stripped, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+				if errReqRetry == nil {
+					httpRespRetry, errDoRetry := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReqRetry)
+					if errDoRetry == nil {
+						helps.RecordAPIResponseMetadata(ctx, e.cfg, httpRespRetry.StatusCode, httpRespRetry.Header.Clone())
+						if httpRespRetry.StatusCode >= http.StatusOK && httpRespRetry.StatusCode < http.StatusMultipleChoices {
+							sendPayload = stripped
+							requestPayload = stripped
+							httpResp = httpRespRetry
+							goto antigravityStreamSuccess
+						}
+						retryBody, errRetryRead := io.ReadAll(httpRespRetry.Body)
+						_ = httpRespRetry.Body.Close()
+						if errRetryRead == nil {
+							bodyBytes = retryBody
+						}
+					} else if httpRespRetry != nil && httpRespRetry.Body != nil {
+						_ = httpRespRetry.Body.Close()
+					}
+				}
+			}
+		}
 		err = newAntigravityStatusErrWithHeaders(httpResp.StatusCode, bodyBytes, httpResp.Header)
 		return resp, err
 	}
 
+antigravityStreamSuccess:
 	// Stream success
 	if peeked, errRetired := peekRetiredModelStream(httpResp.Body, baseModel); errRetired != nil {
 		if errClose := httpResp.Body.Close(); errClose != nil {

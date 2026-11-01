@@ -142,6 +142,7 @@ func cleanJSONSchema(jsonStr string, options jsonSchemaCleanOptions) string {
 
 	// Phase 3: Cleanup
 	jsonStr = removeUnsupportedKeywords(jsonStr, options)
+	jsonStr = dropEmptyEnums(jsonStr)
 	if options.removeGeminiMetadata {
 		// Gemini schema cleanup: remove nullable/title and placeholder-only fields.
 		jsonStr = removeKeywords(jsonStr, []string{"nullable", "title"})
@@ -1317,6 +1318,17 @@ func flattenTypeArrays(jsonStr string, preserveNativeNullable bool) string {
 	return jsonStr
 }
 
+func dropEmptyEnums(jsonStr string) string {
+	for _, path := range findPaths(jsonStr, "enum") {
+		enum := gjson.Get(jsonStr, path)
+		if !enum.IsArray() || len(enum.Array()) > 0 {
+			continue
+		}
+		jsonStr, _ = sjson.Delete(jsonStr, path)
+	}
+	return jsonStr
+}
+
 func removeUnsupportedKeywords(jsonStr string, options jsonSchemaCleanOptions) string {
 	keywords := append(constraintKeywords(options),
 		"$schema", "$defs", "definitions", "const", "$ref", "$id", "id", "additionalProperties",
@@ -1325,6 +1337,7 @@ func removeUnsupportedKeywords(jsonStr string, options jsonSchemaCleanOptions) s
 		"if", "then", "else",
 		"$comment", "enumDescriptions", "enumTitles", "prefill", "deprecated", "encrypted", // Schema metadata fields unsupported by Gemini
 		"additionalItems", "unevaluatedProperties", "unevaluatedItems", "contentSchema",
+		"loaderExpression", // Antigravity/Gemini reject this non-standard schema key (tool/response schemas)
 	)
 	if options.antigravitySemantics {
 		keywords = append(keywords, "not")

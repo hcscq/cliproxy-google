@@ -62,13 +62,13 @@ func TestAntigravity400CompatSettingsOff(t *testing.T) {
 	prev := antigravityHealthLive.Load()
 	defer antigravityHealthLive.Store(prev)
 	no, keep := false, "keep"
-	antigravityHealthLive.Store(&config.AntigravityHealthConfig{RepairFunctionResponseNames: &no, BuiltinToolsWithFunctions: &keep})
-	if antigravityRepairFunctionResponseNamesEnabled() || antigravityDropBuiltinToolsWithFunctions() {
+	antigravityHealthLive.Store(&config.AntigravityHealthConfig{RepairFunctionResponseNames: &no, BuiltinToolsWithFunctions: &keep, RetryStripInvalidThinkingOn400: &no, ContextTokenPrecheck: &no})
+	if antigravityRepairFunctionResponseNamesEnabled() || antigravityDropBuiltinToolsWithFunctions() || antigravityRetryStripInvalidThinkingEnabled() || antigravityContextTokenPrecheckEnabled() {
 		t.Fatal("settings off must disable the repairs")
 	}
 	antigravityHealthLive.Store(&config.AntigravityHealthConfig{})
-	if !antigravityRepairFunctionResponseNamesEnabled() || antigravityDropBuiltinToolsWithFunctions() {
-		t.Fatal("defaults: repair on, built-in tools kept")
+	if !antigravityRepairFunctionResponseNamesEnabled() || antigravityDropBuiltinToolsWithFunctions() || !antigravityRetryStripInvalidThinkingEnabled() || !antigravityContextTokenPrecheckEnabled() {
+		t.Fatal("defaults: repair on, built-in tools kept, thinking retry on, context precheck on")
 	}
 	drop := "drop-builtin"
 	antigravityHealthLive.Store(&config.AntigravityHealthConfig{BuiltinToolsWithFunctions: &drop})

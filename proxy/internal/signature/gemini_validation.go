@@ -280,10 +280,12 @@ func ValidateGeminiThoughtSignatures(inputRawJSON []byte, opts ...GeminiThoughtS
 }
 
 // ValidateGeminiFunctionCallPairing validates the replay shape around Gemini
-// functionCall and functionResponse parts. It checks id/name pairing and
-// prevents response parts from being interleaved inside the same content as
-// function calls. It allows a final pending functionCall group because callers
-// may validate a freshly returned model step before tool outputs exist.
+// functionCall and functionResponse parts. Responses are paired to pending
+// calls by id first, then by position; id and name must match the paired call.
+// It also prevents response parts from being interleaved inside the same
+// content as function calls. A final pending functionCall group is allowed
+// because callers may validate a freshly returned model step before tool
+// outputs exist.
 func ValidateGeminiFunctionCallPairing(inputRawJSON []byte) error {
 	contents, contentsPath := geminiContents(inputRawJSON)
 	if !contents.IsArray() {
@@ -383,17 +385,36 @@ func ValidateGeminiFunctionCallPairing(inputRawJSON []byte) error {
 			return false
 		}
 
+		used := make([]bool, len(pending))
 		for responseIndex, responseRef := range responses {
 			partPath := responseRef.path
 			response := responseRef.part.Get("functionResponse")
-			call := pending[responseIndex]
 			responseID := response.Get("id").String()
 			responseName := response.Get("name").String()
+
+			callIdx := -1
+			if responseID != "" {
+				for i, candidate := range pending {
+					if !used[i] && candidate.id != "" && candidate.id == responseID {
+						callIdx = i
+						break
+					}
+				}
+			}
+			if callIdx < 0 && !used[responseIndex] {
+				callIdx = responseIndex
+			}
+			if callIdx < 0 || callIdx >= len(pending) {
+				validationErr = fmt.Errorf("%s: functionResponse could not be paired with a pending functionCall", partPath)
+				return false
+			}
+			used[callIdx] = true
+			call := pending[callIdx]
 
 			switch {
 			case call.id != "" && responseID == "":
 				validationErr = fmt.Errorf("%s: missing functionResponse.id for %s", partPath, call.path)
-			case call.id != "" && responseID != call.id:
+			case call.id != "" && responseID != "" && responseID != call.id:
 				validationErr = fmt.Errorf(
 					"%s: functionResponse.id %q does not match functionCall.id %q at %s",
 					partPath,
