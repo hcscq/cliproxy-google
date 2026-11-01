@@ -44,6 +44,9 @@ type Config struct {
 	UltraDailyCost   float64
 	OtherDailyCost   float64
 	CostMonthDays    int
+	// QueryTimeoutSeconds caps the whole daily-billing report (new-api + CPA).
+	// 0 means DefaultQueryTimeoutSeconds after normalization.
+	QueryTimeoutSeconds int
 
 	channelExplicit bool
 	groupExplicit   bool
@@ -83,6 +86,7 @@ type rawSection struct {
 	UltraDaily    *float64 `yaml:"ultra-daily-cost"`
 	OtherDaily    *float64 `yaml:"other-daily-cost"`
 	CostMonthDays *int     `yaml:"cost-month-days"`
+	QueryTimeout  *int     `yaml:"query-timeout-seconds"`
 }
 
 // LoadConfig reads the optional new-api section of cluster.yaml, then applies
@@ -175,6 +179,9 @@ func (raw rawSection) config() Config {
 	cfg.OtherDailyCost = floatOrZero(raw.OtherDaily)
 	if raw.CostMonthDays != nil && *raw.CostMonthDays >= 0 && *raw.CostMonthDays <= 31 {
 		cfg.CostMonthDays = *raw.CostMonthDays
+	}
+	if raw.QueryTimeout != nil && *raw.QueryTimeout >= 0 && *raw.QueryTimeout <= MaxQueryTimeoutSeconds {
+		cfg.QueryTimeoutSeconds = *raw.QueryTimeout
 	}
 	return cfg
 }
@@ -278,6 +285,11 @@ func (c *Config) applyEnv() {
 			c.CostMonthDays = value
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv("NEW_API_BILLING_QUERY_TIMEOUT")); raw != "" {
+		if value, errValue := strconv.Atoi(raw); errValue == nil && value >= 0 && value <= MaxQueryTimeoutSeconds {
+			c.QueryTimeoutSeconds = value
+		}
+	}
 }
 
 func (c Config) normalized() Config {
@@ -333,6 +345,9 @@ func (c Config) normalized() Config {
 	c.OtherDailyCost = clampMoney(c.OtherDailyCost)
 	if c.CostMonthDays < 0 || c.CostMonthDays > 31 {
 		c.CostMonthDays = 0
+	}
+	if c.QueryTimeoutSeconds < 0 || c.QueryTimeoutSeconds > MaxQueryTimeoutSeconds {
+		c.QueryTimeoutSeconds = 0
 	}
 	c.PostgresURI = strings.TrimSpace(c.PostgresURI)
 	c.Host = strings.TrimSpace(c.Host)

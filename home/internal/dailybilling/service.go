@@ -3,6 +3,7 @@ package dailybilling
 import (
 	"context"
 	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -63,6 +64,15 @@ func (s *Service) DefaultTimezone() string {
 		return DefaultTimezone
 	}
 	return s.cfg.Timezone
+}
+
+// QueryTimeout is the effective report deadline. Zero/invalid config uses the default.
+func (s *Service) QueryTimeout() time.Duration {
+	seconds := DefaultQueryTimeoutSeconds
+	if s != nil && s.cfg.QueryTimeoutSeconds > 0 && s.cfg.QueryTimeoutSeconds <= MaxQueryTimeoutSeconds {
+		seconds = s.cfg.QueryTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // FileCost is the cost basis from cluster.yaml and the environment, before a panel override.

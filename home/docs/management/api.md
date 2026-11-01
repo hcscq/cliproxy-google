@@ -1572,6 +1572,7 @@ new-api:
 | `NEW_API_MODEL_PREFIX` | Model name prefix. Empty counts every model. | empty |
 | `NEW_API_MODELS` | Comma-separated exact model names. Replaces the prefix. | empty |
 | `NEW_API_MODEL_EXCLUDE` | Substring excluded from the model match. Empty disables it. | empty |
+| `NEW_API_BILLING_QUERY_TIMEOUT` | Whole-report deadline in seconds for new-api + CPA aggregates. Panel `query_timeout_seconds` overrides when > 0. | `90` |
 | `NEW_API_CREATED_AT` | `unix`, `unix_ms`, or `timestamptz`. | `unix` |
 | `NEW_API_PRO_TIER` | CPA metadata tier id counted as pro. | `g1-pro-tier` |
 | `NEW_API_ULTRA_TIER` | CPA metadata tier id counted as ultra. | `g1-ultra-tier` |

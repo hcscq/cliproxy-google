@@ -34,6 +34,10 @@ const (
 	DefaultTimezone     = "UTC"
 	DefaultCreatedAt    = "unix"
 	MaxRangeDays        = 93
+	// DefaultQueryTimeout covers new-api + CPA aggregates for ~1M+ req/day.
+	// Override with NEW_API_BILLING_QUERY_TIMEOUT or the panel setting.
+	DefaultQueryTimeoutSeconds = 90
+	MaxQueryTimeoutSeconds     = 300
 )
 
 var tierOrder = []string{TierPro, TierUltra, TierOther}

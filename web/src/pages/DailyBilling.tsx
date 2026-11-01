@@ -16,6 +16,7 @@ const EMPTY_COST: DailyBillingCostSettings = {
   ultra_daily_cost: 0,
   other_daily_cost: 0,
   month_days: 0,
+  query_timeout_seconds: 0,
 };
 
 export function isoDate(d: Date): string {
@@ -305,6 +306,7 @@ function CostForm({ settings, source, onSaved }: { settings?: DailyBillingCostSe
               ultra_daily_cost: num(draft.ultra_daily_cost),
               other_daily_cost: num(draft.other_daily_cost),
               month_days: Math.max(0, Math.round(num(draft.month_days))),
+              query_timeout_seconds: Math.max(0, Math.min(300, Math.round(num(draft.query_timeout_seconds)))),
             });
             setDirty(false);
             onSaved();
@@ -331,8 +333,19 @@ function CostForm({ settings, source, onSaved }: { settings?: DailyBillingCostSe
           <Money label={tr('ultra 日成本 / 凭据', 'ultra daily / credential')} value={draft.ultra_daily_cost} onChange={(v) => set('ultra_daily_cost', v)} />
           <Money label={tr('其他 日成本 / 凭据', 'other daily / credential')} value={draft.other_daily_cost} onChange={(v) => set('other_daily_cost', v)} />
           <Money label={tr('均摊天数（空=当月）', 'Days in month (empty = calendar)')} value={draft.month_days} step="1" onChange={(v) => set('month_days', v)} />
+          <Money
+            label={tr('查询超时（秒，空=默认 90）', 'Query timeout (s, empty = default 90)')}
+            value={draft.query_timeout_seconds ?? 0}
+            step="1"
+            onChange={(v) => set('query_timeout_seconds', v)}
+          />
           <div>
             <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>{saving ? t('loading') : t('save')}</button>
+            {!!settings?.effective_query_timeout_seconds && (
+              <span className="faint" style={{ marginLeft: 8 }}>
+                {tr(`当前生效 ${settings.effective_query_timeout_seconds}s`, `Effective ${settings.effective_query_timeout_seconds}s`)}
+              </span>
+            )}
           </div>
         </div>
       </form>
