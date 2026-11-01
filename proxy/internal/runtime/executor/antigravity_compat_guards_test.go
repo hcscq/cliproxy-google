@@ -28,16 +28,46 @@ func TestRepairGeminiFunctionResponseNamesByIDEvenWhenNameMatchesOtherCall(t *te
 }
 
 func TestRepairGeminiFunctionResponseNamesProdListFilesVsPackageProxy(t *testing.T) {
-	in := []byte(`{"request":{"contents":[
+	// Without ids, upstream accepts mismatched names — do not position-rewrite real names.
+	noID := []byte(`{"request":{"contents":[
 {"role":"user","parts":[{"text":"x"}]},
 {"role":"model","parts":[{"functionCall":{"name":"package_proxy","args":{}}}]},
 {"role":"user","parts":[{"functionResponse":{"name":"list_files","response":{"ok":true}}}]}]}}`)
-	out := repairGeminiFunctionResponseNames(in, "request.contents")
-	if got := gjson.GetBytes(out, "request.contents.2.parts.0.functionResponse.name").String(); got != "package_proxy" {
-		t.Fatalf("name = %q", got)
+	out := repairGeminiFunctionResponseNames(noID, "request.contents")
+	if got := gjson.GetBytes(out, "request.contents.2.parts.0.functionResponse.name").String(); got != "list_files" {
+		t.Fatalf("no-id mismatch should pass through, got %q", got)
 	}
-	if err := internalsignature.ValidateGeminiFunctionCallPairing(out); err != nil {
-		t.Fatalf("pairing: %v", err)
+	// With ids, upstream rejects — rewrite.
+	withID := []byte(`{"request":{"contents":[
+{"role":"user","parts":[{"text":"x"}]},
+{"role":"model","parts":[{"functionCall":{"id":"c1","name":"package_proxy","args":{}}}]},
+{"role":"user","parts":[{"functionResponse":{"id":"c1","name":"list_files","response":{"ok":true}}}]}]}}`)
+	out = repairGeminiFunctionResponseNames(withID, "request.contents")
+	if got := gjson.GetBytes(out, "request.contents.2.parts.0.functionResponse.name").String(); got != "package_proxy" {
+		t.Fatalf("id-paired mismatch should rewrite, got %q", got)
+	}
+}
+
+func TestRepairGeminiFunctionResponseNamesObserveOnly(t *testing.T) {
+	prev := antigravityHealthLive.Load()
+	defer antigravityHealthLive.Store(prev)
+	antigravityHealthLive.Store(&config.AntigravityHealthConfig{RepairFunctionResponseNames: modeObservePtr()})
+	in := []byte(`{"request":{"contents":[
+{"role":"model","parts":[{"functionCall":{"id":"c1","name":"package_proxy"}}]},
+{"role":"user","parts":[{"functionResponse":{"id":"c1","name":"list_files","response":{}}}]}]}}`)
+	out := repairGeminiFunctionResponseNames(in, "request.contents")
+	if got := gjson.GetBytes(out, "request.contents.1.parts.0.functionResponse.name").String(); got != "list_files" {
+		t.Fatalf("observe must not rewrite, got %q", got)
+	}
+}
+
+func TestRepairEmptyNameByPosition(t *testing.T) {
+	in := []byte(`{"request":{"contents":[
+{"role":"model","parts":[{"functionCall":{"name":"package_proxy"}}]},
+{"role":"user","parts":[{"functionResponse":{"name":"","response":{}}}]}]}}`)
+	out := repairGeminiFunctionResponseNames(in, "request.contents")
+	if got := gjson.GetBytes(out, "request.contents.1.parts.0.functionResponse.name").String(); got != "package_proxy" {
+		t.Fatalf("empty name by position = %q", got)
 	}
 }
 
@@ -64,8 +94,7 @@ func TestContextPrecheckRejectsOverLimit(t *testing.T) {
 	if !ok || se.StatusCode() != http.StatusBadRequest || !strings.Contains(err.Error(), "context length exceeded") {
 		t.Fatalf("bad error: %v", err)
 	}
-	off := false
-	antigravityHealthLive.Store(&config.AntigravityHealthConfig{ContextTokenPrecheck: &off})
+	antigravityHealthLive.Store(&config.AntigravityHealthConfig{ContextTokenPrecheck: modeOffPtr()})
 	if err := antigravityContextPrecheckError("gemini-3.8-flash", info, payload); err != nil {
 		t.Fatalf("disabled precheck should pass: %v", err)
 	}
@@ -94,3 +123,8 @@ func TestAntigravityInvalidThinkingSignatureBody(t *testing.T) {
 		t.Fatal("false positive")
 	}
 }
+
+
+func modeOffPtr() *config.CompatMode { m := config.CompatModeOff; return &m }
+func modeOnPtr() *config.CompatMode { m := config.CompatModeOn; return &m }
+func modeObservePtr() *config.CompatMode { m := config.CompatModeObserve; return &m }
