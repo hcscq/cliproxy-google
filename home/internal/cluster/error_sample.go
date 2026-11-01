@@ -50,6 +50,12 @@ func (r *Repository) InsertErrorSample(ctx context.Context, rec *ErrorSampleReco
 		if err := tx.Create(rec).Error; err != nil {
 			return err
 		}
+		if days := errorsamples.Get().RetentionDays; days > 0 {
+			cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+			if err := tx.Exec(`DELETE FROM error_sample WHERE created_at < ?`, cutoff).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Exec(`DELETE FROM error_sample WHERE type = ? AND id NOT IN (SELECT id FROM error_sample WHERE type = ? ORDER BY id DESC LIMIT ?)`, rec.Type, rec.Type, keep).Error; err != nil {
 			return err
 		}

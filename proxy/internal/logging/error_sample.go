@@ -152,6 +152,10 @@ func ErrorSampleType(status int, texts ...string) string {
 		return code + ":forbidden"
 	case strings.Contains(l, "unauthenticated") || strings.Contains(l, "invalid authentication") || strings.Contains(l, "invalid_grant"):
 		return code + ":unauthenticated"
+	case strings.Contains(l, "thinking") && strings.Contains(l, "signature") && strings.Contains(l, "invalid"):
+		return code + ":invalid-thinking-signature"
+	case strings.Contains(l, "unknown error") || (strings.Contains(l, `"status"`) && strings.Contains(l, "unknown") && (strings.Contains(l, `"code":500`) || strings.Contains(l, `"code": 500`) || code == "500")):
+		return code + ":unknown-error"
 	}
 	// Generic: normalize away quoted values, ids and numbers.
 	l = reErrSampleQuoted.ReplaceAllString(l, "*")
@@ -252,21 +256,26 @@ func capErrorSampleField(data []byte, source *FileBodySource) string {
 }
 
 type errorSamplePayload struct {
-	Type             string              `json:"type"`
-	RequestID        string              `json:"request_id,omitempty"`
-	Time             time.Time           `json:"time"`
-	Status           int                 `json:"status"`
-	Method           string              `json:"method,omitempty"`
-	URL              string              `json:"url,omitempty"`
-	ClientKeyPrefix  string              `json:"client_key_prefix,omitempty"`
-	RequestedModel   string              `json:"requested_model,omitempty"`
-	LatencyMs        int64               `json:"latency_ms,omitempty"`
-	RequestHeaders   map[string][]string `json:"request_headers,omitempty"`
-	RequestBody      string              `json:"request_body,omitempty"`
-	UpstreamRequest  string              `json:"upstream_request,omitempty"`
-	UpstreamResponse string              `json:"upstream_response,omitempty"`
-	Response         string              `json:"response,omitempty"`
-	Errors           []string            `json:"errors,omitempty"`
+	Type             string               `json:"type"`
+	RequestID        string               `json:"request_id,omitempty"`
+	SessionID        string               `json:"session_id,omitempty"`
+	AuthIndex        string               `json:"auth_index,omitempty"`
+	Time             time.Time            `json:"time"`
+	Status           int                  `json:"status"`
+	UpstreamStatus   int                  `json:"upstream_status_code,omitempty"`
+	Method           string               `json:"method,omitempty"`
+	URL              string               `json:"url,omitempty"`
+	ClientKeyPrefix  string               `json:"client_key_prefix,omitempty"`
+	RequestedModel   string               `json:"requested_model,omitempty"`
+	LatencyMs        int64                `json:"latency_ms,omitempty"`
+	RequestHeaders   map[string][]string  `json:"request_headers,omitempty"`
+	RequestBody      string               `json:"request_body,omitempty"`
+	UpstreamRequest  string               `json:"upstream_request,omitempty"`
+	UpstreamResponse string               `json:"upstream_response,omitempty"`
+	Response         string               `json:"response,omitempty"`
+	Errors           []string             `json:"errors,omitempty"`
+	RequestSummary   *RequestErrorSummary `json:"request_summary,omitempty"`
+	OpaqueSample     bool                 `json:"opaque_sample,omitempty"`
 }
 
 var reErrSampleModelPath = regexp.MustCompile(`/models/([^/:?]+)`)
@@ -293,10 +302,17 @@ func captureErrorSample(url, method string, requestHeaders map[string][]string, 
 	if status < 400 && len(errTexts) == 0 {
 		return
 	}
-	cands := append(append([]string{}, errTexts...), string(response))
+	cands := append(append([]string{}, errTexts...), string(response), string(apiResponse))
 	key := ErrorSampleType(status, cands...)
 	now := time.Now()
-	if !defaultErrorSampler.admit(key, now) {
+	opaqueBody := strings.Join(cands, "\n")
+	opaque := IsOpaqueUpstreamError(status, opaqueBody)
+	sessionID := ExtractSessionHintFromRequest(requestHeaders, body)
+	if opaque {
+		if !opaqueLimiter.admit(key, sessionID, now) {
+			return
+		}
+	} else if !defaultErrorSampler.admit(key, now) {
 		return
 	}
 	headers, keyPrefix := redactErrorSampleHeaders(requestHeaders)
@@ -306,14 +322,33 @@ func captureErrorSample(url, method string, requestHeaders map[string][]string, 
 			model = m[1]
 		}
 	}
+	summary := SummarizeRequestForErrorSample(body)
+	if summary.SessionHint == "" {
+		summary.SessionHint = sessionID
+	}
+	if sessionID == "" {
+		sessionID = summary.SessionHint
+	}
+	authIndex := ExtractAuthIndexFromErrorTexts(errTexts...)
 	p := errorSamplePayload{
-		Type: key, RequestID: requestID, Time: now.UTC(), Status: status, Method: method,
+		Type: key, RequestID: requestID, SessionID: sessionID, AuthIndex: authIndex,
+		Time: now.UTC(), Status: status, UpstreamStatus: status, Method: method,
 		URL: RedactErrorSampleText(url), ClientKeyPrefix: keyPrefix, RequestedModel: model,
-		RequestHeaders:   headers,
-		RequestBody:      capErrorSampleField(body, nil),
-		UpstreamRequest:  capErrorSampleField(apiRequest, apiRequestSource),
-		UpstreamResponse: capErrorSampleField(apiResponse, apiResponseSource),
-		Response:         capErrorSampleField(response, nil),
+		RequestHeaders: headers,
+		RequestSummary: &summary,
+		OpaqueSample:   opaque,
+	}
+	if opaque {
+		limit := GetOpaqueErrorSampleSettings().ExcerptBytes
+		p.RequestBody = capBytesRedacted(body, limit)
+		p.UpstreamRequest = capBytesRedacted(mergeSampleBytes(apiRequest, apiRequestSource), limit)
+		p.UpstreamResponse = capBytesRedacted(mergeSampleBytes(apiResponse, apiResponseSource), limit)
+		p.Response = capBytesRedacted(response, limit)
+	} else {
+		p.RequestBody = capErrorSampleField(body, nil)
+		p.UpstreamRequest = capErrorSampleField(apiRequest, apiRequestSource)
+		p.UpstreamResponse = capErrorSampleField(apiResponse, apiResponseSource)
+		p.Response = capErrorSampleField(response, nil)
 	}
 	if !requestTimestamp.IsZero() {
 		p.LatencyMs = now.Sub(requestTimestamp).Milliseconds()
@@ -329,4 +364,30 @@ func captureErrorSample(url, method string, requestHeaders map[string][]string, 
 		return
 	}
 	defaultErrorSampler.enqueue(raw)
+}
+
+func mergeSampleBytes(data []byte, source *FileBodySource) []byte {
+	if source == nil || !source.HasPayload() {
+		return data
+	}
+	w := &capWriter{limit: errorSampleFieldMax}
+	if len(data) > 0 {
+		_, _ = w.Write(data)
+		_, _ = w.Write([]byte("\n\n"))
+	}
+	_, _ = source.WriteTo(io.Writer(w))
+	return w.buf.Bytes()
+}
+
+func capBytesRedacted(data []byte, limit int) string {
+	if limit <= 0 {
+		limit = opaqueDefaultExcerptBytes
+	}
+	w := &capWriter{limit: limit}
+	_, _ = w.Write(data)
+	out := w.buf.String()
+	if w.total > int64(w.buf.Len()) {
+		out += "\n…[truncated for storage: " + strconv.FormatInt(w.total, 10) + " bytes total]"
+	}
+	return RedactErrorSampleText(out)
 }

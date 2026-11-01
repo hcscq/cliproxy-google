@@ -20,15 +20,15 @@ func TestCapErrorSample(t *testing.T) {
 }
 
 func TestErrorSampleKeep(t *testing.T) {
-	errorsamples.Set(nil, 0, 0, 0, "499", "429=2,503:no-capacity=1")
+	errorsamples.Set(nil, 0, 0, 0, 0, "499", "429=2,503:no-capacity=1")
 	s := errorsamples.Get()
 	if s.Keep("499:client-cancel") != 0 || s.Keep("429:quota") != 2 || s.Keep("503:no-capacity") != 1 || s.Keep("400:x") != 5 {
 		t.Fatal("keep wrong")
 	}
 	f := false
-	errorsamples.Set(&f, 0, 0, 0, "", "")
+	errorsamples.Set(&f, 0, 0, 0, 0, "", "")
 	if errorsamples.Get().Keep("400") != 0 {
 		t.Fatal("disabled")
 	}
-	errorsamples.Set(nil, 0, 0, 0, "", "")
+	errorsamples.Set(nil, 0, 0, 0, 0, "", "")
 }

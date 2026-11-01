@@ -115,6 +115,9 @@ type Config struct {
 	ErrorSamplesMaxTypes  int    `yaml:"error-samples-max-types,omitempty" json:"error-samples-max-types,omitempty"`
 	ErrorSamplesExclude   string `yaml:"error-samples-exclude,omitempty" json:"error-samples-exclude,omitempty"`
 	ErrorSamplesOverrides string `yaml:"error-samples-overrides,omitempty" json:"error-samples-overrides,omitempty"`
+	// ErrorSamplesRetentionDays deletes samples older than this many days
+	// (0 = default 7, negative = keep forever).
+	ErrorSamplesRetentionDays int `yaml:"error-samples-retention-days,omitempty" json:"error-samples-retention-days,omitempty"`
 
 	// CredentialRPM caps requests per minute per credential across all Home
 	// replicas (0 = unlimited). A credential at its cap is skipped like one at

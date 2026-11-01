@@ -21,21 +21,25 @@ const (
 
 // Settings is the normalized configuration.
 type Settings struct {
-	Enabled   bool
-	PerType   int
-	MaxBytes  int
-	MaxTypes  int
-	Exclude   []string
-	Overrides map[string]int
+	Enabled       bool
+	PerType       int
+	MaxBytes      int
+	MaxTypes      int
+	RetentionDays int
+	Exclude       []string
+	Overrides     map[string]int
 }
 
 var current atomic.Pointer[Settings]
 
-func init() { Set(nil, 0, 0, 0, "", "") }
+func init() { Set(nil, 0, 0, 0, 0, "", "") }
 
 // Set normalizes and stores the configured values.
-func Set(enabled *bool, perType, maxBytes, maxTypes int, exclude, overrides string) {
-	s := &Settings{Enabled: enabled == nil || *enabled, PerType: perType, MaxBytes: maxBytes, MaxTypes: maxTypes, Overrides: map[string]int{}}
+func Set(enabled *bool, perType, maxBytes, maxTypes, retentionDays int, exclude, overrides string) {
+	s := &Settings{Enabled: enabled == nil || *enabled, PerType: perType, MaxBytes: maxBytes, MaxTypes: maxTypes, RetentionDays: retentionDays, Overrides: map[string]int{}}
+	if s.RetentionDays == 0 {
+		s.RetentionDays = 7
+	}
 	if s.PerType <= 0 {
 		s.PerType = DefaultPerType
 	}

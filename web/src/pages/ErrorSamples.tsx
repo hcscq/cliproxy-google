@@ -29,6 +29,7 @@ function pretty(v: unknown): string {
 
 const FIELDS: [string, string, string][] = [
   ['errors', '错误信息', 'Errors'],
+  ['request_summary', '请求结构摘要', 'Request summary'],
   ['request_headers', '客户端请求头（已脱敏）', 'Client headers (redacted)'],
   ['request_body', '客户端请求体', 'Client request body'],
   ['upstream_request', '转换后的上游请求', 'Translated upstream request'],
@@ -48,6 +49,9 @@ function SampleView({ s }: { s: ErrorSample }) {
     [tr('请求模型', 'Model'), s.requested_model],
     ['request id', s.request_id],
     [tr('客户端 Key 前缀', 'Client key prefix'), sample.client_key_prefix],
+    [tr('会话', 'Session'), sample.session_id],
+    [tr('凭据', 'Credential'), sample.auth_index],
+    [tr('上游状态码', 'Upstream status'), sample.upstream_status_code],
     [tr('耗时', 'Latency'), sample.latency_ms != null ? `${sample.latency_ms} ms` : ''],
     [tr('代理节点', 'Proxy'), sample.proxy_node ?? s.proxy_ip],
     ['Home', s.home_ip],
@@ -64,6 +68,7 @@ function SampleView({ s }: { s: ErrorSample }) {
               {String(v)}
             </span>
           ))}
+          {sample.opaque_sample ? <Badge kind="warn">{tr('不透明错误采样', 'Opaque sample')}</Badge> : null}
           {sample.truncated ? <Badge kind="warn">{tr('已截断', 'Truncated')}</Badge> : null}
         </div>
         <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -74,7 +79,7 @@ function SampleView({ s }: { s: ErrorSample }) {
       {FIELDS.filter(([k]) => sample[k] != null && sample[k] !== '').map(([k, zh, en]) => {
         const text = pretty(sample[k]);
         return (
-          <details key={k} open={k === 'errors' || k === 'request_body' || k === 'upstream_response'} style={{ marginTop: 10 }}>
+          <details key={k} open={k === 'errors' || k === 'request_summary' || k === 'upstream_response'} style={{ marginTop: 10 }}>
             <summary style={{ cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'center' }}>
               <b>{tr(zh, en)}</b>
               <span className="muted" style={{ fontSize: 12 }}>{fmtBytes(text.length)}</span>

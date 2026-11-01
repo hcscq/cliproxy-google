@@ -277,7 +277,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 		errorbody.SetMaxBytes(cfg.ErrorBodyMaxBytes)
 		logretention.Set(cfg.RequestLogRetentionDays)
 		logretention.SetBilling(cfg.BillingChargeRetentionDays)
-		errorsamples.Set(cfg.ErrorSamplesEnabled, cfg.ErrorSamplesPerType, cfg.ErrorSamplesMaxBytes, cfg.ErrorSamplesMaxTypes, cfg.ErrorSamplesExclude, cfg.ErrorSamplesOverrides)
+		errorsamples.Set(cfg.ErrorSamplesEnabled, cfg.ErrorSamplesPerType, cfg.ErrorSamplesMaxBytes, cfg.ErrorSamplesMaxTypes, cfg.ErrorSamplesRetentionDays, cfg.ErrorSamplesExclude, cfg.ErrorSamplesOverrides)
 	}
 	runtime := &Runtime{
 		cfg:           cfg,

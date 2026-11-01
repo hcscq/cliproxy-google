@@ -135,6 +135,7 @@ func buildV8Paths() []configPath {
 		{"error-samples-max-types", "observability.logs.error-samples-max-types"},
 		{"error-samples-exclude", "observability.logs.error-samples-exclude"},
 		{"error-samples-overrides", "observability.logs.error-samples-overrides"},
+		{"error-samples-retention-days", "observability.logs.error-samples-retention-days"},
 		{"credential-rpm", "routing.rate-limits.credential-rpm"}, {"api-key-rpm", "routing.rate-limits.api-key-rpm"},
 		{"usage-statistics-enabled", "observability.usage.usage-statistics-enabled"},
 		{"redis-usage-queue-retention-seconds", "observability.usage.redis-usage-queue-retention-seconds"}, {"pprof", "observability.pprof"},
