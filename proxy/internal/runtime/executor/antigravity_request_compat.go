@@ -168,17 +168,32 @@ func antigravityRepairFunctionResponseNamesEnabled() bool {
 	return true
 }
 
+func antigravityRetryStripInvalidThinkingEnabled() bool {
+	if live := antigravityHealthLive.Load(); live != nil && live.RetryStripInvalidThinkingOn400 != nil {
+		return *live.RetryStripInvalidThinkingOn400
+	}
+	return true
+}
+
+func antigravityContextTokenPrecheckEnabled() bool {
+	if live := antigravityHealthLive.Load(); live != nil && live.ContextTokenPrecheck != nil {
+		return *live.ContextTokenPrecheck
+	}
+	return true
+}
+
 func antigravityDropBuiltinToolsWithFunctions() bool {
 	return antigravityBuiltinToolsMode() == builtinToolsModeDrop
 }
 
 type geminiPendingCall struct{ id, name string }
 
-// repairGeminiFunctionResponseNames fills functionResponse.name from the
-// functionCall it answers when the client sent an empty name or one that
-// matches none of the pending calls (OpenAI-style tool results carry only the
-// call id; some clients then emit "unknown_function"). The call is found by id,
-// else by position when the counts match. Valid names are never touched.
+// repairGeminiFunctionResponseNames rewrites functionResponse.name to the
+// paired functionCall.name. Pairing is by id first, then by position when the
+// counts match. Names that already match the paired call are left alone; any
+// other name (empty, placeholder, or a different real tool such as list_files
+// answering package_proxy) is rewritten and logged. Controlled by
+// RepairFunctionResponseNames (nil = on).
 func repairGeminiFunctionResponseNames(payload []byte, path string) []byte {
 	contents := util.GetGJSONBytesNoCopy(payload, path)
 	if !contents.IsArray() {
@@ -217,37 +232,45 @@ func repairGeminiFunctionResponseNames(payload []byte, path string) []byte {
 		if len(resps) == 0 || len(pending) == 0 {
 			continue
 		}
-		names := map[string]bool{}
-		for _, c := range pending {
-			names[c.name] = true
-		}
+		used := make([]bool, len(pending))
 		for ri, r := range resps {
-			if r.name != "" && names[r.name] {
-				continue
-			}
-			target := ""
+			targetIdx := -1
 			if r.id != "" {
-				for _, c := range pending {
-					if c.id == r.id {
-						target = c.name
+				for i, c := range pending {
+					if !used[i] && c.id != "" && c.id == r.id {
+						targetIdx = i
 						break
 					}
 				}
 			}
-			if target == "" && len(resps) == len(pending) {
-				target = pending[ri].name
+			if targetIdx < 0 && len(resps) == len(pending) && !used[ri] {
+				targetIdx = ri
 			}
-			if target == "" {
+			if targetIdx < 0 {
+				continue
+			}
+			used[targetIdx] = true
+			target := pending[targetIdx].name
+			if target == "" || r.name == target {
 				continue
 			}
 			p := path + "." + strconv.Itoa(ci) + ".parts." + strconv.Itoa(r.idx) + "." + r.key + ".name"
 			if updated, err := sjson.SetBytes(out, p, target); err == nil {
 				out = updated
+				log.Warnf("antigravity: repaired functionResponse.name %q -> %q (paired by %s to functionCall at pending[%d]; setting repair-function-response-names=false to disable)",
+					r.name, target, repairPairingMode(r.id, pending[targetIdx].id), targetIdx)
 			}
 		}
 		pending = nil
 	}
 	return out
+}
+
+func repairPairingMode(responseID, callID string) string {
+	if responseID != "" && callID != "" && responseID == callID {
+		return "id"
+	}
+	return "position"
 }
 
 var geminiBuiltinToolKeys = []string{"googleSearch", "google_search", "googleSearchRetrieval", "google_search_retrieval", "codeExecution", "code_execution", "urlContext", "url_context"}

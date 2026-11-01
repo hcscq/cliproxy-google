@@ -3039,3 +3039,20 @@ func TestCleanJSONSchema_EnforcesObjectTypeForProperties_Issue6394(t *testing.T)
 		}
 	})
 }
+
+func TestCleanJSONSchemaStripsLoaderExpressionAndEmptyEnum(t *testing.T) {
+	in := `{
+		"type":"object",
+		"properties":{
+			"x":{"type":"string","loaderExpression":"foo()","enum":[]}
+		},
+		"loaderExpression":"bar()"
+	}`
+	out := CleanJSONSchemaForAntigravity(in)
+	if strings.Contains(out, "loaderExpression") {
+		t.Fatalf("loaderExpression survived: %s", out)
+	}
+	if strings.Contains(out, `"enum":[]`) || strings.Contains(out, `"enum": []`) {
+		t.Fatalf("empty enum survived: %s", out)
+	}
+}
