@@ -519,6 +519,8 @@ func ensureAntigravityGeminiTrailingUserContent(modelName string, payload []byte
 // ensureAntigravityGeminiBoundaryUserContent normalizes both leading and trailing
 // turns for Gemini targets. Claude targets are left unchanged.
 func ensureAntigravityGeminiBoundaryUserContent(modelName string, payload []byte) []byte {
+	// role=tool is invalid for all Antigravity targets (Claude opaque 500 / Gemini 400).
+	payload = rewriteAntigravityToolRoles(payload, "request.contents")
 	if strings.Contains(strings.ToLower(modelName), "claude") {
 		return payload
 	}

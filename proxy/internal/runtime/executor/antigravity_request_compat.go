@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -209,6 +209,18 @@ func antigravityContextTokenPrecheckObserveOnly() bool {
 	return antigravityContextTokenPrecheckMode() == config.CompatModeObserve
 }
 
+func antigravityRewriteToolRoleMode() config.CompatMode {
+	return antigravityCompatMode(func(h *config.AntigravityHealthConfig) *config.CompatMode { return h.RewriteToolRoleMode })
+}
+
+func antigravityRewriteToolRoleEnabled() bool {
+	return antigravityRewriteToolRoleMode() != config.CompatModeOff
+}
+
+func antigravityRewriteToolRoleObserveOnly() bool {
+	return antigravityRewriteToolRoleMode() == config.CompatModeObserve
+}
+
 func antigravityDropBuiltinToolsWithFunctions() bool {
 	return antigravityBuiltinToolsMode() == builtinToolsModeDrop
 }
@@ -368,4 +380,164 @@ func dropGeminiBuiltinToolsWhenFunctions(payload []byte, path string) []byte {
 	}
 	log.Warnf("antigravity: dropped %d built-in tool(s) sent together with function declarations (upstream rejects the mix; setting builtin-tools-with-functions=keep to pass through)", dropped)
 	return updated
+}
+
+type geminiPendingToolCall struct {
+	id, name string
+}
+
+// rewriteAntigravityToolRoles rewrites contents with role "tool" (invalid for
+// Antigravity/Gemini upstream; Claude returns opaque 500 Unknown Error, Gemini
+// a clear 400). When the preceding model turn has functionCall(s), consecutive
+// tool turns are paired by id (if present on a functionResponse-shaped part or
+// tool_call_id) or by position into user+functionResponse turns. Unpaired tool
+// turns become role=user with parts/text preserved. Never drops content.
+// Controlled by RewriteToolRoleMode (nil = on); observe logs only.
+func rewriteAntigravityToolRoles(payload []byte, path string) []byte {
+	if !antigravityRewriteToolRoleEnabled() {
+		return payload
+	}
+	contents := util.GetGJSONBytesNoCopy(payload, path)
+	if !contents.IsArray() {
+		return payload
+	}
+	arr := contents.Array()
+	observeOnly := antigravityRewriteToolRoleObserveOnly()
+	pending := make([]geminiPendingToolCall, 0)
+	pendingUsed := make([]bool, 0)
+	changed := false
+	items := make([][]byte, 0, len(arr))
+	paired, unpaired := 0, 0
+
+	takePending := func(wantID string) (geminiPendingToolCall, bool) {
+		if wantID != "" {
+			for i, c := range pending {
+				if pendingUsed[i] {
+					continue
+				}
+				if c.id != "" && c.id == wantID {
+					pendingUsed[i] = true
+					return c, true
+				}
+			}
+		}
+		for i, c := range pending {
+			if pendingUsed[i] {
+				continue
+			}
+			pendingUsed[i] = true
+			return c, true
+		}
+		return geminiPendingToolCall{}, false
+	}
+
+	for _, content := range arr {
+		role := strings.ToLower(strings.TrimSpace(content.Get("role").String()))
+		raw := []byte(content.Raw)
+
+		if role == "model" || role == "assistant" {
+			pending = pending[:0]
+			pendingUsed = pendingUsed[:0]
+			parts := content.Get("parts")
+			if parts.IsArray() {
+				for _, part := range parts.Array() {
+					for _, k := range []string{"functionCall", "function_call"} {
+						if c := part.Get(k); c.Exists() {
+							pending = append(pending, geminiPendingToolCall{
+								id:   c.Get("id").String(),
+								name: c.Get("name").String(),
+							})
+							pendingUsed = append(pendingUsed, false)
+						}
+					}
+				}
+			}
+			items = append(items, raw)
+			continue
+		}
+
+		if role != "tool" {
+			items = append(items, raw)
+			continue
+		}
+
+		// role == tool
+		parts := content.Get("parts")
+		toolCallID := content.Get("tool_call_id").String()
+		if toolCallID == "" {
+			toolCallID = content.Get("toolCallId").String()
+		}
+
+		// Prefer existing functionResponse id for pairing.
+		hasFR := false
+		if parts.IsArray() {
+			for _, part := range parts.Array() {
+				for _, k := range []string{"functionResponse", "function_response"} {
+					if r := part.Get(k); r.Exists() {
+						hasFR = true
+						if toolCallID == "" {
+							toolCallID = r.Get("id").String()
+						}
+					}
+				}
+			}
+		}
+
+		call, ok := takePending(toolCallID)
+		newRaw := raw
+		if ok && call.name != "" && !hasFR {
+			// Pairable: rebuild as user + functionResponse, preserving text/result.
+			resultText := ""
+			if parts.IsArray() {
+				var texts []string
+				for _, part := range parts.Array() {
+					if t := part.Get("text"); t.Exists() {
+						texts = append(texts, t.String())
+					}
+				}
+				resultText = strings.Join(texts, "\n")
+			}
+			fr := []byte(`{"role":"user","parts":[{"functionResponse":{"name":"","response":{"result":""}}}]}`)
+			fr, _ = sjson.SetBytes(fr, "parts.0.functionResponse.name", call.name)
+			if call.id != "" {
+				fr, _ = sjson.SetBytes(fr, "parts.0.functionResponse.id", call.id)
+			}
+			fr, _ = sjson.SetBytes(fr, "parts.0.functionResponse.response.result", resultText)
+			newRaw = fr
+			paired++
+		} else if ok && hasFR {
+			newRaw, _ = sjson.SetBytes(raw, "role", "user")
+			paired++
+		} else {
+			newRaw, _ = sjson.SetBytes(raw, "role", "user")
+			unpaired++
+		}
+
+		if string(newRaw) != string(raw) {
+			changed = true
+			if observeOnly {
+				log.Warnf("antigravity: observe rewrite role=tool -> %s (paired=%v; mode=observe; not applied)",
+					gjson.GetBytes(newRaw, "role").String(), ok && (call.name != "" || hasFR))
+				items = append(items, raw)
+				continue
+			}
+			items = append(items, newRaw)
+			continue
+		}
+		items = append(items, raw)
+	}
+
+	if !changed {
+		return payload
+	}
+	if observeOnly {
+		log.Warnf("antigravity: observe rewrite-tool-role would rewrite %d paired and %d unpaired tool turn(s) (mode=observe; not applied)", paired, unpaired)
+		return payload
+	}
+	out, err := sjson.SetRawBytes(payload, path, translatorcommon.JoinRawArray(items))
+	if err != nil {
+		return payload
+	}
+	log.Warnf("antigravity: rewrite-tool-role rewrote %d paired and %d unpaired tool turn(s) (setting rewrite-tool-role-mode=off to disable)", paired, unpaired)
+	return out
 }

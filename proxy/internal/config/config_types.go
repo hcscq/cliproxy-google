@@ -1,8 +1,8 @@
 package config
 
 import (
-	"encoding/json"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -258,7 +258,6 @@ func (m *CompatMode) ModeOr(defaultMode CompatMode) CompatMode {
 	return m.Normalized(defaultMode)
 }
 
-
 type AntigravityHealthConfig struct {
 	// TTFBTimeoutSeconds abandons a streaming attempt with no first upstream
 	// byte after this long and switches credential. Default 75.
@@ -341,6 +340,10 @@ type AntigravityHealthConfig struct {
 	// ContextTokenPrecheck rejects locally when estimated input clearly exceeds
 	// the model limit. Modes: on (default) / observe (log only) / off.
 	ContextTokenPrecheck *CompatMode `yaml:"context-token-precheck,omitempty" json:"context-token-precheck,omitempty"`
+	// RewriteToolRoleMode rewrites Gemini/Antigravity contents with role "tool"
+	// (invalid upstream). Pairable prior functionCall/tool_use → user+functionResponse;
+	// unpaired → role=user keeping parts/text. Modes: on (default) / observe / off.
+	RewriteToolRoleMode *CompatMode `yaml:"rewrite-tool-role-mode,omitempty" json:"rewrite-tool-role-mode,omitempty"`
 	// OpaqueErrorSampleEnabled controls bounded diagnostic capture for opaque
 	// upstream errors (HTTP 500 "Unknown Error." / status UNKNOWN). nil = on.
 	OpaqueErrorSampleEnabled *bool `yaml:"opaque-error-sample-enabled,omitempty" json:"opaque-error-sample-enabled,omitempty"`
