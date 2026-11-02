@@ -56,7 +56,10 @@ func (s *Server) homeHeartbeatMiddleware() gin.HandlerFunc {
 			}
 		}
 		if !waitForHome(c.Request.Context()) {
-			c.AbortWithStatus(http.StatusServiceUnavailable)
+			recordHomePreDispatchUnavailable(c.Request.Context(), "home_unavailable: control center unavailable")
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{"code": "home_unavailable", "message": "home_unavailable: control center unavailable", "status": "home_unavailable"},
+			})
 			return
 		}
 		c.Next()

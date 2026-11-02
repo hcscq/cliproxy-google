@@ -992,6 +992,8 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 	client := bundle.client
 	registry := bundle.registry
 	if !client.HeartbeatOK() {
+		noteHomeUnavailable(client)
+		reportHomeDispatchUnavailable(ctx, "home control center unavailable")
 		return nil, &Error{Code: "home_unavailable", Message: "home control center unavailable", HTTPStatus: http.StatusServiceUnavailable}
 	}
 	if pinnedAuthID != "" {
@@ -1065,9 +1067,12 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 		if errors.Is(errRPop, home.ErrAuthNotFound) {
 			return nil, &Error{Code: "auth_not_found", Message: errRPop.Error(), HTTPStatus: http.StatusServiceUnavailable}
 		}
+		noteHomeUnavailable(client)
+		reportHomeDispatchUnavailable(ctx, errRPop.Error())
 		return nil, &Error{Code: "home_unavailable", Message: errRPop.Error(), Retryable: true, HTTPStatus: http.StatusServiceUnavailable}
 	}
 
+	noteHomeAvailable(client)
 	envelope, errEnvelope := decodeHomeDispatchConcurrencyEnvelope(raw)
 	if errEnvelope != nil {
 		if envelope.Present {

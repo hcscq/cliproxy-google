@@ -264,6 +264,12 @@ type Client struct {
 	reassignPending      bool
 	lastReassignAt       time.Time
 	reconnectFailures    int
+	// Failover stickiness: after switching away from a bad home, refuse
+	// assigned/refreshBestClusterNode pull-back for stickUntil.
+	stickUntil        time.Time
+	stickPrefer       stickTarget
+	stickAvoid        stickTarget
+	unavailableStreak int
 }
 
 func New(homeCfg config.HomeConfig) *Client {
@@ -292,6 +298,10 @@ func (c *Client) NewLifetime() *Client {
 		testOperationTimeout: c.testOperationTimeout,
 		instanceID:           c.instanceID,
 		legacyMembership:     c.legacyMembership,
+		stickUntil:           c.stickUntil,
+		stickPrefer:          c.stickPrefer,
+		stickAvoid:           c.stickAvoid,
+		unavailableStreak:    c.unavailableStreak,
 	}
 	next.recoveryState.Store(c.recoveryState.Load())
 	return next
@@ -877,6 +887,9 @@ func (c *Client) refreshClusterNodes(ctx context.Context) (bool, error) {
 	nodes = orderClusterNodes(nodes, assigned, c.instanceID)
 	c.clusterNodes = nodes
 	c.reconnectFailures = 0
+	if stick, ok := c.pickStickHomeLocked(nodes); ok {
+		return c.switchToNodeLocked(clusterNode{IP: stick.ip, Port: stick.port}), nil
+	}
 	return c.switchToNodeLocked(nodes[0]), nil
 }
 
@@ -959,6 +972,15 @@ func (c *Client) updateClusterNodesFromPayload(raw []byte) error {
 	}
 	if strings.TrimSpace(c.homeCfg.Host) == first.IP && c.homeCfg.Port == first.Port {
 		return nil
+	}
+	// During failover stickiness, refuse assigned pull-back to the avoided home
+	// (or any home other than the sticky prefer while prefer is still live).
+	if c.stickActiveLocked() {
+		if stick, ok := c.pickStickHomeLocked(c.clusterNodes); ok {
+			if !stick.equal(first.IP, first.Port) {
+				return nil
+			}
+		}
 	}
 	currentListed := false
 	for _, n := range c.clusterNodes {
@@ -1092,7 +1114,11 @@ func (c *Client) switchToNextNodeLocked() (bool, string) {
 		if host == currentHost && node.Port == currentPort {
 			continue
 		}
+		from := stickTarget{ip: currentHost, port: currentPort}
 		if c.switchToNodeLocked(clusterNode{IP: host, Port: node.Port}) {
+			to := stickTarget{ip: strings.TrimSpace(c.homeCfg.Host), port: c.homeCfg.Port}
+			c.setStickLocked(to, from)
+			c.reassignPending = false
 			addr, _ := c.addrLocked()
 			return true, addr
 		}
