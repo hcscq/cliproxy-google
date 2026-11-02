@@ -70,6 +70,11 @@ spec:
             - {name: HOME_CERT_DIR, value: /identity}
             - {name: WRITABLE_PATH, value: /tmp/cliproxy}
             - {name: HOME, value: /tmp}
+            # Optional Home failover stickiness (defaults shown):
+            # HOME_FAILOVER_STICK_COOLDOWN=2m  — after failover, refuse assigned pull-back
+            # HOME_UNAVAILABLE_FORCE_SWITCH=8  — consecutive home_unavailable before force switch (0=off)
+            # HOME_READY_GRACE=15s             — readyz stay-ready after last healthy heartbeat
+            # HOME_READY_GRACE_UNHEALTHY=2s    — shorter grace when alternate Home exists
           ports:
             - name: http
               containerPort: 8317   # port distributed by Home config (server.port)

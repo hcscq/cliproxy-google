@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
@@ -67,6 +68,50 @@ func (m *Manager) reportHomeUnauthorized(ctx context.Context, auth *Auth, provid
 		Fail: coreusage.Failure{
 			StatusCode: http.StatusUnauthorized,
 			Body:       failureBody,
+		},
+	})
+}
+
+func noteHomeUnavailable(_ homeAuthDispatcher) {
+	if c := home.Current(); c != nil {
+		c.NoteHomeUnavailable()
+	}
+}
+
+func noteHomeAvailable(_ homeAuthDispatcher) {
+	if c := home.Current(); c != nil {
+		c.NoteHomeAvailable()
+	}
+}
+
+const homeDispatchUnavailableExecutorType = "home-dispatch"
+
+// reportHomeDispatchUnavailable records a pre-auth home_unavailable 503 in usage.
+func reportHomeDispatchUnavailable(ctx context.Context, message string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "home_unavailable"
+	}
+	if !strings.Contains(strings.ToLower(message), "home_unavailable") {
+		message = "home_unavailable: " + message
+	}
+	clientMeta := logging.GetClientRequestMetadata(ctx)
+	alias := strings.TrimSpace(coreusage.RequestedModelAliasFromContext(ctx))
+	coreusage.PublishRecord(ctx, coreusage.Record{
+		Provider:        "home",
+		ExecutorType:    homeDispatchUnavailableExecutorType,
+		Model:           "home_unavailable",
+		Alias:           alias,
+		SessionID:       clientMeta.SessionID,
+		ParentSessionID: clientMeta.ParentSessionID,
+		RequestedAt:     time.Now(),
+		Failed:          true,
+		Fail: coreusage.Failure{
+			StatusCode: http.StatusServiceUnavailable,
+			Body:       message,
 		},
 	})
 }
