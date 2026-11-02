@@ -72,7 +72,13 @@ func ConvertGeminiRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 			role := value.Get("role").String()
 			content := []byte(value.Raw)
 			if role != "user" && role != "model" {
-				if translatorcommon.ContentHasGeminiFunctionResponse([]byte(value.Raw)) {
+				lowerRole := strings.ToLower(strings.TrimSpace(role))
+				if lowerRole == "tool" {
+					// Preserve role=tool for executor rewriteAntigravityToolRoles (pair or
+					// promote to user). Do not map to model — that caused Gemini 400s when
+					// unpaired tool text followed a user turn.
+					role = "tool"
+				} else if translatorcommon.ContentHasGeminiFunctionResponse([]byte(value.Raw)) {
 					role = "user"
 				} else if previousRole == "" || previousRole == "model" {
 					role = "user"
@@ -81,7 +87,11 @@ func ConvertGeminiRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 				}
 				content, _ = sjson.SetBytes(content, "role", role)
 			}
-			previousRole = role
+			if role == "tool" {
+				previousRole = "user"
+			} else {
+				previousRole = role
+			}
 			contentItems = append(contentItems, content)
 			return true
 		})
