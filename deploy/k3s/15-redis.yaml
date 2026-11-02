@@ -65,7 +65,8 @@ data:
     sentinel monitor cpg ${MASTER} 6379 2
     sentinel auth-pass cpg ${REDIS_PASSWORD}
     sentinel sentinel-pass ${REDIS_PASSWORD}
-    sentinel down-after-milliseconds cpg 5000
+    # 15s: tolerate brief DNS/flannel blips without +sdown/+tilt (was 5s; 2026-11-02 incident)
+    sentinel down-after-milliseconds cpg 15000
     sentinel failover-timeout cpg 60000
     sentinel parallel-syncs cpg 1
     CONF
@@ -87,6 +88,16 @@ spec:
     spec:
       securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999}
       affinity:
+        # Soft: prefer not rainyun-hgurzfiw (noisy/contended in 2026-11-02 incident). Soft so
+        # pods still schedule if every other node is full.
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: [rainyun-hgurzfiw]
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -94,6 +105,12 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
                   matchLabels: {app: cliproxy-redis}
+            # Soft: avoid co-locating Redis with Home (shared node pressure / DNS / net).
+            - weight: 50
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: cliproxy-home}
       initContainers:
         - name: config
           image: redis:7.4-alpine
@@ -118,9 +135,11 @@ spec:
           readinessProbe:
             exec: {command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]}
             periodSeconds: 5
+            timeoutSeconds: 5
           livenessProbe:
             exec: {command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]}
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 6
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -139,6 +158,12 @@ spec:
           readinessProbe:
             exec: {command: ["sh", "-c", "redis-cli -p 26379 -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]}
             periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec: {command: ["sh", "-c", "redis-cli -p 26379 -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]}
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests: {cpu: 20m, memory: 16Mi}
             limits: {memory: 64Mi}
