@@ -47,13 +47,28 @@ spec:
         runAsGroup: 10001
         fsGroup: 10001
       affinity:
-        podAntiAffinity:
+        # Soft: prefer not rainyun-hgurzfiw (contended node in 2026-11-02 DNS/Redis incident).
+        nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: [rainyun-hgurzfiw]
+        podAntiAffinity:
+          # Hard: two Home replicas must land on different nodes.
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: {app: cliproxy-home}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            # Soft: avoid co-locating Home with Redis.
+            - weight: 50
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
-                  matchLabels: {app: cliproxy-home}
+                  matchLabels: {app: cliproxy-redis}
       initContainers:
         # Home reads ./cluster.yaml from its working directory; copy it from the Secret.
         - name: copy-cluster-yaml
