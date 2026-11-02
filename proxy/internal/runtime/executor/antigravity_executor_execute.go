@@ -208,12 +208,9 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			err = antigravityCapacityErr(auth, baseModel, health, httpResp.StatusCode, bodyBytes, httpResp.Header)
 			return resp, err
 		}
-		if httpResp.StatusCode == http.StatusBadRequest && antigravityRetryStripInvalidThinkingEnabled() && antigravityInvalidThinkingSignatureBody(bodyBytes) {
-			stripped, removed := stripAntigravitySignedThinkingForRetry(sendPayload)
-			if removed > 0 && antigravityRetryStripInvalidThinkingObserveOnly() {
-				log.Warnf("antigravity: observe invalid thinking signature; would strip %d signed thinking part(s) and retry (mode=observe; not applied)", removed)
-			} else if removed > 0 {
-				log.Warnf("antigravity: upstream invalid thinking signature; stripped %d signed thinking part(s) and retrying once on the same credential", removed)
+		if httpResp.StatusCode == http.StatusBadRequest && antigravityInvalidThinkingSignatureBody(bodyBytes) {
+			stripped, _, doRetry := antigravityStripInvalidThinkingForRetryDecision(sendPayload)
+			if doRetry {
 				httpReqRetry, errReqRetry := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, stripped, false, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 				if errReqRetry == nil {
 					httpRespRetry, errDoRetry := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReqRetry)
@@ -503,12 +500,9 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			err = antigravityCapacityErr(auth, baseModel, health, httpResp.StatusCode, bodyBytes, httpResp.Header)
 			return resp, err
 		}
-		if httpResp.StatusCode == http.StatusBadRequest && antigravityRetryStripInvalidThinkingEnabled() && antigravityInvalidThinkingSignatureBody(bodyBytes) {
-			stripped, removed := stripAntigravitySignedThinkingForRetry(sendPayload)
-			if removed > 0 && antigravityRetryStripInvalidThinkingObserveOnly() {
-				log.Warnf("antigravity: observe invalid thinking signature; would strip %d signed thinking part(s) and retry (mode=observe; not applied)", removed)
-			} else if removed > 0 {
-				log.Warnf("antigravity: upstream invalid thinking signature; stripped %d signed thinking part(s) and retrying once on the same credential", removed)
+		if httpResp.StatusCode == http.StatusBadRequest && antigravityInvalidThinkingSignatureBody(bodyBytes) {
+			stripped, _, doRetry := antigravityStripInvalidThinkingForRetryDecision(sendPayload)
+			if doRetry {
 				httpReqRetry, errReqRetry := e.buildRequest(attemptTimer.ctx, auth, token, baseModel, stripped, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
 				if errReqRetry == nil {
 					httpRespRetry, errDoRetry := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReqRetry)

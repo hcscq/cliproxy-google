@@ -271,10 +271,36 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			err = capErr
 			return nil, err
 		}
+		if httpResp.StatusCode == http.StatusBadRequest && antigravityInvalidThinkingSignatureBody(bodyBytes) {
+			stripped, _, doRetry := antigravityStripInvalidThinkingForRetryDecision(sendPayload)
+			if doRetry {
+				httpReqRetry, errReqRetry := e.buildRequest(attemptCtx, auth, token, baseModel, stripped, !emulateStream, streamAlt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+				if errReqRetry == nil {
+					httpRespRetry, errDoRetry := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate_stream").Do(httpReqRetry)
+					if errDoRetry == nil {
+						helps.RecordAPIResponseMetadata(ctx, e.cfg, httpRespRetry.StatusCode, httpRespRetry.Header.Clone())
+						if httpRespRetry.StatusCode >= http.StatusOK && httpRespRetry.StatusCode < http.StatusMultipleChoices {
+							sendPayload = stripped
+							requestPayload = stripped
+							httpResp = httpRespRetry
+							goto antigravityExecuteStreamSuccess
+						}
+						retryBody, errRetryRead := io.ReadAll(httpRespRetry.Body)
+						_ = httpRespRetry.Body.Close()
+						if errRetryRead == nil {
+							bodyBytes = retryBody
+						}
+					} else if httpRespRetry != nil && httpRespRetry.Body != nil {
+						_ = httpRespRetry.Body.Close()
+					}
+				}
+			}
+		}
 		err = newAntigravityStatusErrWithHeaders(httpResp.StatusCode, bodyBytes, httpResp.Header)
 		return nil, err
 	}
 
+antigravityExecuteStreamSuccess:
 	// Stream success
 	if emulateStream {
 		replayed, errReplay := replayNonStreamAsSSE(httpResp.Body)

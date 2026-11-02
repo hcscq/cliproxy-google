@@ -85,6 +85,26 @@ func antigravityInvalidThinkingSignatureBody(body []byte) bool {
 	return strings.Contains(lower, "invalid") && strings.Contains(lower, "signature")
 }
 
+// antigravityStripInvalidThinkingForRetryDecision applies the off/observe/on
+// switch for a same-credential strip-and-retry after an upstream invalid
+// thinking-signature 400. retry=true only in mode=on with parts removed.
+func antigravityStripInvalidThinkingForRetryDecision(sendPayload []byte) (stripped []byte, removed int, retry bool) {
+	if !antigravityRetryStripInvalidThinkingEnabled() {
+		return sendPayload, 0, false
+	}
+	stripped, removed = stripAntigravitySignedThinkingForRetry(sendPayload)
+	if removed == 0 {
+		log.Warnf("antigravity: upstream invalid thinking signature but no signed thinking parts to strip; not retrying")
+		return sendPayload, 0, false
+	}
+	if antigravityRetryStripInvalidThinkingObserveOnly() {
+		log.Warnf("antigravity: observe invalid thinking signature; would strip %d signed thinking part(s) and retry (mode=observe; not applied)", removed)
+		return sendPayload, removed, false
+	}
+	log.Warnf("antigravity: upstream invalid thinking signature; stripped %d signed thinking part(s) and retrying once on the same credential", removed)
+	return stripped, removed, true
+}
+
 // stripAntigravitySignedThinkingForRetry removes signature-bearing thinking /
 // thought parts so a foreign credential signature cannot be replayed. Used only
 // as a one-shot recovery after upstream 400 Invalid signature in thinking block.
