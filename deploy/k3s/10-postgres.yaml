@@ -56,8 +56,10 @@ spec:
             periodSeconds: 30
             failureThreshold: 5
           resources:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {memory: 1Gi}
+            # Steady RSS is ~839Mi; the 1Gi cgroup was OOM-killed (signal 9)
+            # during a long checkpoint. Request covers steady state; limit is burst.
+            requests: {cpu: 100m, memory: 1Gi}
+            limits: {memory: 4Gi}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
