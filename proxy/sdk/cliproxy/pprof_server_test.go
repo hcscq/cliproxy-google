@@ -8,6 +8,18 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
+func TestPprofEnvRequiresLoopback(t *testing.T) {
+	t.Setenv("CPA_PPROF_ADDR", "0.0.0.0:6060")
+	if _, ok := loopbackPprofAddrFromEnv(); ok {
+		t.Fatal("CPA_PPROF_ADDR accepted a non-loopback address")
+	}
+	t.Setenv("CPA_PPROF_ADDR", "127.0.0.1:6060")
+	addr, ok := loopbackPprofAddrFromEnv()
+	if !ok || addr != "127.0.0.1:6060" {
+		t.Fatalf("loopback addr = %q ok=%v", addr, ok)
+	}
+}
+
 func TestPprofServerStopOwnedServerKeepsReplacement(t *testing.T) {
 	pprof := newPprofServer()
 	oldServer := &http.Server{}

@@ -46,7 +46,7 @@ func (s *Server) homeHeartbeatMiddleware() gin.HandlerFunc {
 			path := c.Request.URL.Path
 			// Probes answer for themselves: liveness must not depend on Home
 			// (a Home outage restarted proxies and dropped their unsent usage).
-			if path == "/healthz" || path == "/readyz" {
+			if path == "/healthz" || path == "/livez" || path == "/readyz" {
 				c.Next()
 				return
 			}

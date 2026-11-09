@@ -15,6 +15,10 @@ import (
 
 const defaultHomeAppLogQueueSize = 1024
 
+// homeAppLogPushTimeout bounds one background push so a half-open Home
+// connection cannot stall the forwarder, and therefore cannot stall Fire.
+var homeAppLogPushTimeout = 3 * time.Second
+
 type homeAppLogClient interface {
 	HeartbeatOK() bool
 	RPushAppLog(ctx context.Context, payload []byte) error
@@ -37,6 +41,7 @@ type HomeAppLogForwarder struct {
 	wg        sync.WaitGroup
 	enabled   atomic.Bool
 	stopped   atomic.Bool
+	dropped   atomic.Int64
 	ownerMu   sync.Mutex
 	owner     homeAppLogClient
 }
@@ -201,8 +206,17 @@ func (f *HomeAppLogForwarder) Fire(entry *log.Entry) error {
 	select {
 	case f.queue <- payload:
 	default:
+		f.dropped.Add(1)
 	}
 	return nil
+}
+
+// Dropped reports how many log lines were discarded because the forward queue was full.
+func (f *HomeAppLogForwarder) Dropped() int64 {
+	if f == nil {
+		return 0
+	}
+	return f.dropped.Load()
 }
 
 func appLogRequestID(entry *log.Entry) string {
@@ -256,7 +270,10 @@ func (f *HomeAppLogForwarder) forward(payload homeAppLogPayload) {
 	if errMarshal != nil {
 		return
 	}
-	if errPush := client.RPushAppLog(context.Background(), raw); errPush != nil && isHomeAppLogUnsupported(errPush) {
+	pushCtx, cancel := context.WithTimeout(context.Background(), homeAppLogPushTimeout)
+	errPush := client.RPushAppLog(pushCtx, raw)
+	cancel()
+	if errPush != nil && isHomeAppLogUnsupported(errPush) {
 		f.disableIfCurrentOwner(client)
 	}
 }

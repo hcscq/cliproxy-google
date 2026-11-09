@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,8 @@ const (
 	homeRefreshOperationTimeout               = 35 * time.Second
 	homePluginSyncOperationTimeout            = 2 * time.Minute
 	homeSubscriptionReceiveTimeout            = 3 * time.Second
+	homeConnKeepAlive                         = 30 * time.Second
+	homeConnReapInterval                      = 5 * time.Second
 	credentialConcurrencyNodeHeartbeatTimeout = 20 * time.Second
 	redisChannelCluster                       = "cluster"
 )
@@ -270,15 +273,41 @@ type Client struct {
 	stickPrefer       stickTarget
 	stickAvoid        stickTarget
 	unavailableStreak int
+
+	// enabled mirrors homeCfg.Enabled without taking mu, so log hooks and
+	// probes can call HeartbeatOK while a caller holds mu.
+	enabled atomic.Bool
+	// connGen invalidates dials that complete after detach/close.
+	connGen atomic.Uint64
+	// stop ends the dead-connection reaper. Closed once.
+	stop       chan struct{}
+	stopOnce   sync.Once
+	reaperOnce sync.Once
 }
 
+// errStaleHomeConn is returned when a dial finishes after its client generation
+// was closed or replaced. The socket is closed before the error is returned.
+var errStaleHomeConn = errors.New("home: connection closed before use")
+
 func New(homeCfg config.HomeConfig) *Client {
-	return &Client{
+	client := &Client{
 		homeCfg:    homeCfg,
 		seedHost:   strings.TrimSpace(homeCfg.Host),
 		seedPort:   homeCfg.Port,
 		instanceID: uuid.NewString(),
 	}
+	client.prepare()
+	return client
+}
+
+func (c *Client) prepare() {
+	if c == nil {
+		return
+	}
+	if c.stop == nil {
+		c.stop = make(chan struct{})
+	}
+	c.enabled.Store(c.homeCfg.Enabled)
 }
 
 // NewLifetime creates a fresh client while preserving cluster failover state.
@@ -303,6 +332,7 @@ func (c *Client) NewLifetime() *Client {
 		stickAvoid:           c.stickAvoid,
 		unavailableStreak:    c.unavailableStreak,
 	}
+	next.prepare()
 	next.recoveryState.Store(c.recoveryState.Load())
 	return next
 }
@@ -339,22 +369,38 @@ func (c *Client) EnableLegacyMembership() {
 }
 
 func (c *Client) Enabled() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.homeCfg.Enabled
+	return c != nil && c.enabled.Load()
 }
 
 func (c *Client) HeartbeatOK() bool {
-	if c == nil {
-		return false
-	}
-	if !c.Enabled() {
+	if c == nil || !c.enabled.Load() {
 		return false
 	}
 	return c.heartbeatOK.Load()
+}
+
+// ProbeCriticalSection reports whether mu can be acquired within budget.
+// The request path and the log hook share this lock; a stuck holder wedges
+// every route except the shallow liveness check. The probe only TryLocks, so
+// a brief critical section does not fail it.
+func (c *Client) ProbeCriticalSection(budget time.Duration) bool {
+	if c == nil {
+		return true
+	}
+	if budget <= 0 {
+		budget = time.Second
+	}
+	deadline := time.Now().Add(budget)
+	for {
+		if c.mu.TryLock() {
+			c.mu.Unlock()
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // Close permanently ends this client's dispatch lifetime.
@@ -362,6 +408,7 @@ func (c *Client) Close() {
 	if c == nil {
 		return
 	}
+	c.signalStop()
 	c.dispatchFenced.Store(true)
 	c.heartbeatOK.Store(false)
 	c.mu.Lock()
@@ -399,6 +446,7 @@ func (c *Client) AbortAmbiguousDispatch() {
 	c.ambiguousDispatch.Store(true)
 	c.dispatchFenced.Store(true)
 	c.heartbeatOK.Store(false)
+	c.signalStop()
 	c.mu.Lock()
 	commandClient, subscriptionClient, connections := c.detachClientsLocked()
 	releaseClient := c.release
@@ -439,7 +487,16 @@ func (c *Client) SuppressTakeover() {
 	}
 }
 
+func (c *Client) signalStop() {
+	if c == nil || c.stop == nil {
+		return
+	}
+	c.stopOnce.Do(func() { close(c.stop) })
+}
+
 func (c *Client) detachClientsLocked() (*redis.Client, *redis.Client, []*homeDispatchConn) {
+	// In-flight dials that loaded the previous generation close themselves.
+	c.connGen.Add(1)
 	connections := make([]*homeDispatchConn, 0, len(c.connections))
 	for conn := range c.connections {
 		connections = append(connections, conn)
@@ -552,6 +609,7 @@ func (c *Client) ensureClients() error {
 	if !c.Enabled() {
 		return ErrDisabled
 	}
+	c.ensureReaper()
 	c.waitForClientsClosed()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -627,27 +685,144 @@ type homeDispatchConn struct {
 
 func (c *Client) trackedRedisDialer(dialer func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network string, address string) (net.Conn, error) {
+		var gen uint64
+		if c != nil {
+			gen = c.connGen.Load()
+		}
 		conn, errDial := dialer(ctx, network, address)
 		if errDial != nil {
 			return nil, errDial
 		}
+		enableTCPKeepAlive(conn)
 		wrapped := &homeDispatchConn{Conn: conn, client: c}
 		if c == nil {
 			return wrapped, nil
 		}
 		c.mu.Lock()
+		stale := c.dispatchFenced.Load() || c.connGen.Load() != gen
+		if !stale {
+			if c.connections == nil {
+				c.connections = make(map[*homeDispatchConn]struct{})
+			}
+			c.connections[wrapped] = struct{}{}
+		}
+		c.mu.Unlock()
+		if !stale {
+			return wrapped, nil
+		}
+		_ = wrapped.Close()
 		if c.dispatchFenced.Load() {
-			c.mu.Unlock()
-			_ = wrapped.Close()
 			return nil, ErrDispatchFenced
 		}
-		if c.connections == nil {
-			c.connections = make(map[*homeDispatchConn]struct{})
-		}
-		c.connections[wrapped] = struct{}{}
-		c.mu.Unlock()
-		return wrapped, nil
+		return nil, errStaleHomeConn
 	}
+}
+
+func (c *Client) ensureReaper() {
+	if c == nil || c.stop == nil {
+		return
+	}
+	c.reaperOnce.Do(func() {
+		go c.reapLoop()
+	})
+}
+
+func (c *Client) reapLoop() {
+	ticker := time.NewTicker(homeConnReapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-ticker.C:
+			c.reapDeadConns()
+		}
+	}
+}
+
+// reapDeadConns closes sockets the peer has already reset or shut down.
+// go-redis can drop its reference (handoff, failed init) while this client
+// still holds the fd; those show up as TCP_CLOSE with the descriptor open.
+func (c *Client) reapDeadConns() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	conns := make([]*homeDispatchConn, 0, len(c.connections))
+	for conn := range c.connections {
+		conns = append(conns, conn)
+	}
+	c.mu.Unlock()
+	for _, conn := range conns {
+		if connDead(conn) {
+			_ = conn.Close()
+		}
+	}
+}
+
+func enableTCPKeepAlive(conn net.Conn) {
+	tcp := underlyingTCPConn(conn)
+	if tcp == nil {
+		return
+	}
+	_ = tcp.SetKeepAlive(true)
+	_ = tcp.SetKeepAlivePeriod(homeConnKeepAlive)
+}
+
+func underlyingTCPConn(conn net.Conn) *net.TCPConn {
+	seen := 0
+	for conn != nil && seen < 8 {
+		seen++
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			return tcp
+		}
+		switch unwrapped := conn.(type) {
+		case *tls.Conn:
+			conn = unwrapped.NetConn()
+		case interface{ NetConn() net.Conn }:
+			next := unwrapped.NetConn()
+			if next == nil || next == conn {
+				return nil
+			}
+			conn = next
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+func connDead(conn net.Conn) bool {
+	sysConn, ok := conn.(syscall.Conn)
+	if !ok || conn == nil {
+		return false
+	}
+	raw, errRaw := sysConn.SyscallConn()
+	if errRaw != nil {
+		return true
+	}
+	dead := false
+	if errRead := raw.Read(func(fd uintptr) bool {
+		var buf [1]byte
+		n, _, errRecv := syscall.Recvfrom(int(fd), buf[:], syscall.MSG_PEEK|syscall.MSG_DONTWAIT)
+		switch {
+		case errRecv == syscall.EAGAIN || errRecv == syscall.EWOULDBLOCK:
+			dead = false
+		case n > 0:
+			// Unread payload means the app stopped reading, not that the fd is gone.
+			dead = false
+		case n == 0 && errRecv == nil:
+			dead = true
+		case errRecv != nil:
+			dead = true
+		default:
+			dead = false
+		}
+		return true
+	}); errRead != nil {
+		return true
+	}
+	return dead
 }
 
 func (c *homeDispatchConn) untrack() {
@@ -676,6 +851,36 @@ func (c *homeDispatchConn) NetConn() net.Conn {
 		return nil
 	}
 	return c.Conn
+}
+
+// SyscallConn exposes the underlying socket so go-redis connCheck can see a
+// reset peer. The wrapper otherwise hides syscall.Conn and dead sockets stay
+// in the pool until something else closes them.
+func (c *homeDispatchConn) SyscallConn() (syscall.RawConn, error) {
+	if c == nil || c.Conn == nil {
+		return nil, syscall.EINVAL
+	}
+	current := c.Conn
+	seen := 0
+	for current != nil && seen < 8 {
+		seen++
+		if raw, ok := current.(syscall.Conn); ok {
+			return raw.SyscallConn()
+		}
+		switch unwrapped := current.(type) {
+		case *tls.Conn:
+			current = unwrapped.NetConn()
+		case interface{ NetConn() net.Conn }:
+			next := unwrapped.NetConn()
+			if next == nil || next == current {
+				return nil, syscall.EINVAL
+			}
+			current = next
+		default:
+			return nil, syscall.EINVAL
+		}
+	}
+	return nil, syscall.EINVAL
 }
 
 func cloneRedisOptions(options *redis.Options) *redis.Options {
@@ -811,7 +1016,36 @@ func (c *Client) subscriptionClient() (*redis.Client, error) {
 	return sub, nil
 }
 
+func boundHomeContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || timeout <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (c *Client) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return c.callContextTimeout(ctx, 0)
+}
+
+func (c *Client) callContextTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = homeRedisOperationTimeout
+		if c != nil && c.testOperationTimeout > 0 {
+			timeout = c.testOperationTimeout
+		}
+	}
+	return boundHomeContext(ctx, timeout)
+}
+
 func (c *Client) Ping(ctx context.Context) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -853,9 +1087,8 @@ func (c *Client) refreshClusterNodes(ctx context.Context) (bool, error) {
 	if !c.clusterDiscoveryEnabled() {
 		return false, nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return false, fmt.Errorf("%w: %w", errClusterDiscoveryTransport, errClient)
@@ -1143,6 +1376,8 @@ func (c *Client) resetReconnectFailures() {
 }
 
 func (c *Client) GetConfig(ctx context.Context) ([]byte, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	if errRefresh := c.refreshBestClusterNode(ctx); errors.Is(errRefresh, errClusterDiscoveryTransport) {
 		return nil, errRefresh
 	}
@@ -1164,6 +1399,8 @@ func (c *Client) GetConfig(ctx context.Context) ([]byte, error) {
 }
 
 func (c *Client) GetModels(ctx context.Context, headers http.Header, query url.Values) ([]byte, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return nil, errClient
@@ -1229,6 +1466,8 @@ func durationCeil(value time.Duration, unit time.Duration) int64 {
 }
 
 func (c *Client) KVGet(ctx context.Context, key string) ([]byte, bool, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return nil, false, errClient
@@ -1244,6 +1483,8 @@ func (c *Client) KVGet(ctx context.Context, key string) ([]byte, bool, error) {
 }
 
 func (c *Client) KVSet(ctx context.Context, key string, value []byte, opts KVSetOptions) (bool, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return false, errClient
@@ -1266,6 +1507,8 @@ func (c *Client) KVSet(ctx context.Context, key string, value []byte, opts KVSet
 }
 
 func (c *Client) KVSetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	opts := KVSetOptions{NX: true}
 	if ttl > 0 {
 		opts.EX = ttl
@@ -1284,6 +1527,8 @@ func (c *Client) KVSetNX(ctx context.Context, key string, value []byte, ttl time
 // predate CAS reject the command, which latches ErrCompareAndSwapUnsupported for
 // this client lifetime so later calls skip the round trip.
 func (c *Client) KVCompareAndSwap(ctx context.Context, key string, expected []byte, expectedExists bool, value []byte, ttl time.Duration) (bool, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	if c == nil {
 		return false, ErrNotConnected
 	}
@@ -1317,6 +1562,8 @@ func (c *Client) KVCompareAndSwap(ctx context.Context, key string, expected []by
 }
 
 func (c *Client) KVDel(ctx context.Context, keys ...string) (int64, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	if len(keys) == 0 {
 		return 0, nil
 	}
@@ -1328,6 +1575,8 @@ func (c *Client) KVDel(ctx context.Context, keys ...string) (int64, error) {
 }
 
 func (c *Client) KVExpire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return false, errClient
@@ -1336,6 +1585,8 @@ func (c *Client) KVExpire(ctx context.Context, key string, ttl time.Duration) (b
 }
 
 func (c *Client) KVTTL(ctx context.Context, key string) (time.Duration, bool, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return 0, false, errClient
@@ -1355,6 +1606,8 @@ func (c *Client) KVTTL(ctx context.Context, key string) (time.Duration, bool, er
 }
 
 func (c *Client) KVIncrBy(ctx context.Context, key string, delta int64) (int64, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return 0, errClient
@@ -1363,6 +1616,8 @@ func (c *Client) KVIncrBy(ctx context.Context, key string, delta int64) (int64, 
 }
 
 func (c *Client) KVMGet(ctx context.Context, keys ...string) ([][]byte, []bool, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	if len(keys) == 0 {
 		return nil, nil, nil
 	}
@@ -1394,6 +1649,8 @@ func (c *Client) KVMGet(ctx context.Context, keys ...string) ([][]byte, []bool, 
 }
 
 func (c *Client) KVMSet(ctx context.Context, pairs map[string][]byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	if len(pairs) == 0 {
 		return nil
 	}
@@ -1553,9 +1810,8 @@ func (c *Client) rPopAuth(ctx context.Context, requestedModel string, sessionID 
 	if c == nil || c.dispatchFenced.Load() {
 		return nil, ErrDispatchFenced
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	if errContext := ctx.Err(); errContext != nil {
 		return nil, errContext
 	}
@@ -1622,6 +1878,8 @@ func isAmbiguousIssuedRPopAuthError(err error) bool {
 }
 
 func (c *Client) GetRefreshAuth(ctx context.Context, authIndex string, accessTokenSHA256 string) ([]byte, error) {
+	ctx, cancel := c.callContextTimeout(ctx, homeRefreshOperationTimeout)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return nil, errClient
@@ -1654,6 +1912,8 @@ func (c *Client) GetRefreshAuth(ctx context.Context, authIndex string, accessTok
 }
 
 func (c *Client) LPushUsage(ctx context.Context, payload []byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -1667,6 +1927,8 @@ func (c *Client) LPushUsage(ctx context.Context, payload []byte) error {
 // LPushUsageBatch sends several usage payloads in one LPUSH. Homes before
 // batching reject more than one value; IsUsageBatchUnsupported detects that.
 func (c *Client) LPushUsageBatch(ctx context.Context, payloads [][]byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -1688,6 +1950,8 @@ func IsUsageBatchUnsupported(err error) bool {
 
 // LPushInFlightSnapshot publishes a bounded in-flight observation frame.
 func (c *Client) LPushInFlightSnapshot(ctx context.Context, payload []byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -1697,6 +1961,8 @@ func (c *Client) LPushInFlightSnapshot(ctx context.Context, payload []byte) erro
 
 // PushConcurrencyRelease sends one cumulative concurrency release frame through an independent client.
 func (c *Client) PushConcurrencyRelease(ctx context.Context, frame ConcurrencyReleaseFrame) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	if frame.CredentialID == "" || frame.Model == "" || frame.ReleaseSeq <= 0 {
 		return fmt.Errorf("invalid concurrency release frame")
 	}
@@ -1743,12 +2009,13 @@ func (c *Client) concurrencyReleaseClient() (*redis.Client, error) {
 	if errOptions != nil {
 		return nil, errOptions
 	}
-	options.Dialer = redis.NewDialer(options)
 	c.release = redis.NewClient(options)
 	return c.release, nil
 }
 
 func (c *Client) RPushRequestLog(ctx context.Context, payload []byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -1761,6 +2028,8 @@ func (c *Client) RPushRequestLog(ctx context.Context, payload []byte) error {
 
 // RPushErrorSample forwards one failed-request sample to Home.
 func (c *Client) RPushErrorSample(ctx context.Context, payload []byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -1772,6 +2041,8 @@ func (c *Client) RPushErrorSample(ctx context.Context, payload []byte) error {
 }
 
 func (c *Client) RPushAppLog(ctx context.Context, payload []byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -1783,6 +2054,8 @@ func (c *Client) RPushAppLog(ctx context.Context, payload []byte) error {
 }
 
 func (c *Client) RPushPluginStatus(ctx context.Context, payload []byte) error {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return errClient
@@ -1794,6 +2067,8 @@ func (c *Client) RPushPluginStatus(ctx context.Context, payload []byte) error {
 }
 
 func (c *Client) GetPluginTasks(ctx context.Context) ([]PluginTask, error) {
+	ctx, cancel := c.callContext(ctx)
+	defer cancel()
 	cmd, errClient := c.commandClient()
 	if errClient != nil {
 		return nil, errClient
@@ -1816,6 +2091,8 @@ func (c *Client) GetPluginTasks(ctx context.Context) ([]PluginTask, error) {
 }
 
 func (c *Client) GetPluginSync(ctx context.Context, request pluginstore.PluginSyncRequest) (pluginstore.PluginSyncResponse, error) {
+	ctx, cancel := c.callContextTimeout(ctx, homePluginSyncOperationTimeout)
+	defer cancel()
 	options, errOptions := c.pluginSyncCommandOptions()
 	if errOptions != nil {
 		return pluginstore.PluginSyncResponse{}, errOptions
@@ -1865,6 +2142,11 @@ func processPluginSyncCommand(ctx context.Context, options *redis.Options, comma
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, homePluginSyncOperationTimeout)
+		defer cancel()
 	}
 	pluginSyncClient := newPluginSyncCommandClient(ctx, options)
 	if pluginSyncClient == nil {
@@ -2143,6 +2425,14 @@ func (c *Client) RunConfigSubscriberLifetime(ctx context.Context, onConfig func(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Always release the subscription socket, including when the reader returns
+	// after the peer disappears or the callback path stops consuming it.
+	var pubsub *redis.PubSub
+	defer func() {
+		if pubsub != nil {
+			_ = pubsub.Close()
+		}
+	}()
 
 	c.closeBootstrapPools()
 	if errEnsure := c.ensureClients(); errEnsure != nil {
@@ -2171,7 +2461,7 @@ func (c *Client) RunConfigSubscriberLifetime(ctx context.Context, onConfig func(
 		return c.endConfigSubscriberLifetime(errSubClient)
 	}
 	args, receiveTimeout := c.subscriptionParameters()
-	pubsub := sub.Subscribe(ctx, args...)
+	pubsub = sub.Subscribe(ctx, args...)
 	if pubsub == nil {
 		if ctx.Err() == nil {
 			c.markReconnectFailure("subscribe")
