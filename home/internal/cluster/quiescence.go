@@ -158,10 +158,11 @@ func (r *Repository) CleanupStaleMemberships(ctx context.Context) error {
 		return errFind
 	}
 	for _, membership := range active {
-		if membership.CPAHeartbeatTimeout <= 0 || !membership.LastSeenAt.Before(now.Add(-membership.CPAHeartbeatTimeout)) {
+		window := CPALivenessStaleWindow(membership.CPAHeartbeatTimeout)
+		if window <= 0 || !membership.LastSeenAt.Before(now.Add(-window)) {
 			continue
 		}
-		if errCleanup := r.cleanupStaleMembership(ctx, membership.CertificateFingerprint, membership.CPAHeartbeatTimeout); errCleanup != nil {
+		if errCleanup := r.cleanupStaleMembership(ctx, membership.CertificateFingerprint, window); errCleanup != nil {
 			return errCleanup
 		}
 	}
@@ -186,7 +187,8 @@ func (r *Repository) cleanupStaleMembership(ctx context.Context, fingerprint str
 		if errLock != nil {
 			return errLock
 		}
-		if !membership.LastSeenAt.Before(now.Add(-membership.CPAHeartbeatTimeout)) {
+		window := CPALivenessStaleWindow(membership.CPAHeartbeatTimeout)
+		if window <= 0 || !membership.LastSeenAt.Before(now.Add(-window)) {
 			return nil
 		}
 		_, errBegin := beginFingerprintCancellationForMembershipTx(ctx, tx, &membership, now)
@@ -370,6 +372,8 @@ func completeFingerprintCancellationTx(ctx context.Context, tx *gorm.DB, fingerp
 }
 
 // RefreshCPALiveness records a subscription pong only while its Home and membership lifetime remain active.
+// A successful write suppresses another write for SubscriptionLivenessWriteInterval. The transaction sets
+// the same local lock_timeout as heartbeat and ownership so a stalled row lock fails fast.
 func (r *Repository) RefreshCPALiveness(ctx context.Context, lifetime ConnectionLifetime) error {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -379,7 +383,13 @@ func (r *Repository) RefreshCPALiveness(ctx context.Context, lifetime Connection
 	if fingerprint == "" || lifetime.ConnectedAt.IsZero() {
 		return ErrMembershipNotActive
 	}
-	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+	if r.skipCPALivenessWrite(lifetime) {
+		return nil
+	}
+	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if errLT := setLocalLockTimeoutFn(tx); errLT != nil {
+			return errLT
+		}
 		membership := CPANodeMembershipRecord{}
 		errMember := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("certificate_fingerprint = ?", fingerprint).First(&membership).Error
 		if errors.Is(errMember, gorm.ErrRecordNotFound) {
@@ -400,6 +410,11 @@ func (r *Repository) RefreshCPALiveness(ctx context.Context, lifetime Connection
 		}
 		return tx.Model(&membership).Updates(map[string]any{"last_seen_at": now, "updated_at": now}).Error
 	})
+	if errTransaction != nil {
+		return errTransaction
+	}
+	r.noteCPALivenessWrite(lifetime)
+	return nil
 }
 
 // ListPendingQuiescence returns the exact pending fence rows owned by a Home incarnation.

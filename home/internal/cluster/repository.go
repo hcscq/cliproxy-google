@@ -30,6 +30,9 @@ type Repository struct {
 	leaseDB            *gorm.DB
 	affinityWriterOnce sync.Once
 	affinityQueue      chan RequestAffinityRecord
+	livenessMu         sync.Mutex
+	livenessNow        func() time.Time
+	livenessSamples    map[string]cpaLivenessSample
 }
 
 type UpsertResult string

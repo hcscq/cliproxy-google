@@ -587,7 +587,7 @@ Example response:
 | `summary.plugin_attention_count` | integer | CPA nodes with missing, partial, or failed plugin reports when plugin reports are required. |
 | `summary.attention_count` | integer | Combined operational attention count: stale/unknown Home nodes, CPA nodes needing attention counted once each, plus missing master. |
 | `summary.missing_master` | boolean | Whether no healthy Home can currently be selected as master. |
-| `summary.stale_after_seconds` | integer | Home heartbeat timeout used to classify Home health and select the current master. CPA health additionally uses each membership's CPA heartbeat timeout. |
+| `summary.stale_after_seconds` | integer | Home heartbeat timeout used to classify Home health and select the current master. CPA health uses each membership's CPA heartbeat timeout, widened when that timeout is shorter than the subscription liveness sample gap (5s write interval plus one 5s lock timeout) so a live subscription is not marked stale between database samples. |
 | `summary.retention_after_seconds` | integer | Topology snapshot retention window. Records older than this are omitted from `homes[]` and `cpas[]`. |
 | `management.home_id` | string | Current Management runtime Home identity, formatted as `home_ip:home_port`. |
 | `management.home_ip` | string | Current Management runtime Home IP or advertised cluster identity. |

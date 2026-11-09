@@ -176,22 +176,40 @@ func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedC
 		heartbeatTicker := time.NewTicker(subscriptionHeartbeatInterval)
 		defer heartbeatTicker.Stop()
 
+		var liveness subscriptionLivenessState
 		for {
 			select {
 			case <-runCtx.Done():
 				return
 			case <-heartbeatTicker.C:
 				lifetime := tracked.Lifetime()
-				if errLiveness := s.refreshSubscriptionLiveness(runCtx, lifetime); errLiveness != nil {
-					log.Warnf("failed to refresh subscription liveness: %v", errLiveness)
-					if s.fingerprints != nil {
-						if errFence := s.fingerprints.Fence(context.WithoutCancel(runCtx), lifetime, s.fingerprints.LatestFenceRevision(lifetime)); errFence != nil {
-							log.Warnf("failed to fence subscription after liveness failure: %v", errFence)
-						}
+				if liveness.confirmed() {
+					// The proxy's receive timeout is the SSE ping, not the DB write.
+					if errSend := writer.WriteDispatchReply(subscriptionPong([]byte{})); errSend != nil {
+						log.Warnf("failed to publish subscription heartbeat: %v", errSend)
+						cancel()
+						return
 					}
+					if !liveness.begin() {
+						continue
+					}
+					go func() {
+						errRefresh := s.refreshSubscriptionLiveness(runCtx, lifetime)
+						liveness.end()
+						if errRefresh == nil || runCtx.Err() != nil {
+							return
+						}
+						s.failSubscriptionLiveness(runCtx, lifetime, errRefresh)
+						cancel()
+					}()
+					continue
+				}
+				if errLiveness := s.refreshSubscriptionLiveness(runCtx, lifetime); errLiveness != nil {
+					s.failSubscriptionLiveness(runCtx, lifetime, errLiveness)
 					cancel()
 					return
 				}
+				liveness.confirm()
 				if errSend := writer.WriteDispatchReply(subscriptionPong([]byte{})); errSend != nil {
 					log.Warnf("failed to publish subscription heartbeat: %v", errSend)
 					cancel()
@@ -249,13 +267,6 @@ func (s *Server) PublishClusterUpdateNow() {
 	}
 	s.clusterKick = make(chan struct{})
 	s.kickMu.Unlock()
-}
-
-func (s *Server) refreshSubscriptionLiveness(ctx context.Context, lifetime cluster.ConnectionLifetime) error {
-	if s == nil || s.cluster == nil {
-		return fmt.Errorf("cluster lifecycle unavailable")
-	}
-	return s.cluster.RefreshCPALiveness(ctx, lifetime)
 }
 
 func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *safeWriter, nodeID string) error {
@@ -561,6 +572,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		hasReply := false
 		closeConnection := false
 		var livenessFailure *cluster.ConnectionLifetime
+		var errLivenessRefresh error
 		func() {
 			if len(args) == 0 {
 				_ = writer.WriteRedisError("ERR empty command")
@@ -633,8 +645,8 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				if unsubscribeConfig != nil {
 					lifetime := tracked.Lifetime()
 					if errLiveness := s.refreshSubscriptionLiveness(connectionCtx, lifetime); errLiveness != nil {
-						log.Warnf("failed to refresh subscription liveness: %v", errLiveness)
 						livenessFailure = &lifetime
+						errLivenessRefresh = errLiveness
 						closeConnection = true
 						return
 					}
@@ -682,9 +694,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 			node.GlobalRegistry().UpdateFingerprintState(clientCertificateFingerprint, clientNodeID, clientIP, 0, -1, s.fingerprints.LatestFenceRevision(tracked.Lifetime()))
 		}
 		if livenessFailure != nil {
-			if errFence := s.fingerprints.Fence(context.WithoutCancel(connectionCtx), *livenessFailure, s.fingerprints.LatestFenceRevision(*livenessFailure)); errFence != nil {
-				log.Warnf("failed to fence subscription after client PING liveness failure: %v", errFence)
-			}
+			s.failSubscriptionLiveness(connectionCtx, *livenessFailure, errLivenessRefresh)
 		}
 		if closeConnection {
 			return

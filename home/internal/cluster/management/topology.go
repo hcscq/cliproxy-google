@@ -349,7 +349,7 @@ func topologyCPASnapshotHealth(state string, membership cluster.CPANodeMembershi
 	if membership.CPAHeartbeatTimeout <= 0 || now.IsZero() {
 		return topologyHealthUnknown
 	}
-	return topologyHealth(membership.LastSeenAt, now.Add(-membership.CPAHeartbeatTimeout))
+	return topologyHealth(membership.LastSeenAt, now.Add(-cluster.CPALivenessStaleWindow(membership.CPAHeartbeatTimeout)))
 }
 
 func topologyLogicalCPAKey(record cluster.CPANodeRecord) string {

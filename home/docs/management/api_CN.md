@@ -586,7 +586,7 @@ Home 在数据库和下发配置中保留兼容的
 | `summary.plugin_attention_count` | integer | 插件上报为必需时，插件状态缺失、部分上报或失败的 CPA 节点数量。 |
 | `summary.attention_count` | integer | 合计关注数量：stale/unknown Home 节点、需要关注的 CPA 节点各计一次，再加缺失 master。 |
 | `summary.missing_master` | boolean | 当前是否无法选出健康 Home master。 |
-| `summary.stale_after_seconds` | integer | 用于判断 Home 节点健康状态及选择当前 master 的 heartbeat timeout；CPA 健康状态还会使用各 membership 自身的 CPA heartbeat timeout。 |
+| `summary.stale_after_seconds` | integer | 用于判断 Home 节点健康状态及选择当前 master 的 heartbeat timeout。CPA 健康状态使用各 membership 自身的 CPA heartbeat timeout；当该值短于订阅 liveness 采样间隔（5s 写间隔加上一次 5s lock timeout）时会放宽，避免存活订阅在两次数据库采样之间被标成 stale。 |
 | `summary.retention_after_seconds` | integer | 拓扑快照保留窗口；早于该窗口的记录不会出现在 `homes[]` 和 `cpas[]` 中。 |
 | `management.home_id` | string | 当前 Management runtime 的 Home 身份，格式为 `home_ip:home_port`。 |
 | `management.home_ip` | string | 当前 Management runtime 的 Home IP 或集群广播身份。 |
