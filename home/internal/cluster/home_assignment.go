@@ -211,7 +211,11 @@ func (r *Repository) RebalanceHomeAssignments(ctx context.Context, homeTimeout t
 			if timeout <= 0 {
 				timeout = homeTimeout
 			}
-			if m.State != MembershipStateActive || seen[m.NodeID] || m.LastSeenAt.Before(now.Add(-2*timeout)) {
+			liveFor := 2 * timeout
+			if stale := CPALivenessStaleWindow(timeout); stale > liveFor {
+				liveFor = stale
+			}
+			if m.State != MembershipStateActive || seen[m.NodeID] || m.LastSeenAt.Before(now.Add(-liveFor)) {
 				continue
 			}
 			seen[m.NodeID] = true

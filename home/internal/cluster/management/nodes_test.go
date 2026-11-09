@@ -211,8 +211,14 @@ func TestTopologyCPASnapshotHealthUsesMembershipHeartbeatTimeout(t *testing.T) {
 		wantHealth string
 	}{
 		{
-			name:       "expired default membership timeout",
+			name:       "sample inside the liveness write gap stays healthy",
 			lastSeen:   now.Add(-config.DefaultCPAHeartbeatTimeout - time.Second),
+			timeout:    config.DefaultCPAHeartbeatTimeout,
+			wantHealth: topologyHealthHealthy,
+		},
+		{
+			name:       "expired default membership timeout",
+			lastSeen:   now.Add(-cluster.CPALivenessStaleWindow(config.DefaultCPAHeartbeatTimeout) - time.Second),
 			timeout:    config.DefaultCPAHeartbeatTimeout,
 			wantHealth: topologyHealthStale,
 		},
