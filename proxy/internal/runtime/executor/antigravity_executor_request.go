@@ -58,7 +58,10 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	}
 	payload = geminiToAntigravity(modelName, payload, projectID, derivedSessionIDs...)
 
-	// Cap maxOutputTokens to model's max_completion_tokens from registry
+	// Cap maxOutputTokens to model's max_completion_tokens from registry.
+	// Reconcile a Claude thinking budget afterwards: the earlier thinking pass
+	// only compared the budget with the pre-cap max, so a cap down to the
+	// model limit can leave budget == max, which upstream rejects.
 	if maxOut := gjson.GetBytes(payload, "request.generationConfig.maxOutputTokens"); maxOut.Exists() && maxOut.Type == gjson.Number {
 		if modelInfo := registry.LookupModelInfo(modelName, "antigravity"); modelInfo != nil && modelInfo.MaxCompletionTokens > 0 {
 			if int(maxOut.Int()) > modelInfo.MaxCompletionTokens {
@@ -66,6 +69,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 			}
 		}
 	}
+	payload = helps.ReconcileAntigravityClaudeThinkingBudget(payload, modelName)
 
 	useAntigravitySchema := strings.Contains(modelName, "claude") || strings.Contains(modelName, "gemini-3-pro") || strings.Contains(modelName, "gemini-3.1-pro")
 	var (
