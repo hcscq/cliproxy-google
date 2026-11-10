@@ -382,3 +382,58 @@ func TestHomeAppLogForwarder_DisablesForwardingWhenBoundOwnerDoesNotSupportAppLo
 		t.Fatal("forwarder still enabled, want disabled after unsupported app-log response")
 	}
 }
+
+func TestHomeAppLogForwarder_DropsWhenQueueFull(t *testing.T) {
+	stub := &stubHomeAppLogClient{heartbeatOK: true}
+	forwarder := &HomeAppLogForwarder{
+		formatter: &LogFormatter{},
+		queue:     make(chan homeAppLogPayload, 1),
+		stop:      make(chan struct{}),
+	}
+	forwarder.enabled.Store(true)
+	forwarder.bind(stub)
+
+	entry := log.NewEntry(log.StandardLogger())
+	entry.Time = time.Now()
+	entry.Level = log.InfoLevel
+	entry.Message = "queued"
+
+	if errFire := forwarder.Fire(entry); errFire != nil {
+		t.Fatalf("Fire error: %v", errFire)
+	}
+	started := time.Now()
+	if errFire := forwarder.Fire(entry); errFire != nil {
+		t.Fatalf("Fire error: %v", errFire)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("full-queue Fire took %s", elapsed)
+	}
+	if got := forwarder.Dropped(); got != 1 {
+		t.Fatalf("dropped = %d, want 1", got)
+	}
+}
+
+type deadlineHomeAppLogClient struct {
+	stubHomeAppLogClient
+	hasDeadline bool
+}
+
+func (c *deadlineHomeAppLogClient) RPushAppLog(ctx context.Context, payload []byte) error {
+	_, c.hasDeadline = ctx.Deadline()
+	return c.stubHomeAppLogClient.RPushAppLog(ctx, payload)
+}
+
+func TestHomeAppLogForwarder_PushHasDeadline(t *testing.T) {
+	stub := &deadlineHomeAppLogClient{stubHomeAppLogClient: stubHomeAppLogClient{heartbeatOK: true}}
+	forwarder := &HomeAppLogForwarder{
+		formatter: &LogFormatter{},
+		queue:     make(chan homeAppLogPayload, 1),
+		stop:      make(chan struct{}),
+	}
+	forwarder.enabled.Store(true)
+	forwarder.bind(stub)
+	forwarder.forward(homeAppLogPayload{Line: "bounded", client: stub})
+	if !stub.hasDeadline {
+		t.Fatal("RPushAppLog context has no deadline")
+	}
+}

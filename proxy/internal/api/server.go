@@ -107,6 +107,12 @@ type Server struct {
 
 	exampleAPIKeySafeModeEnabled bool
 	exampleAPIKeySafeModeActive  atomic.Bool
+
+	stallOnce     sync.Once
+	stallStopOnce sync.Once
+	stallStop     chan struct{}
+	stallLastOK   atomic.Int64
+	stallStarted  atomic.Bool
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -302,6 +308,8 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to start HTTP server: server not initialized")
 	}
 
+	s.startStallWatch()
+
 	addr := s.server.Addr
 	listener, errListen := net.Listen("tcp", addr)
 	if errListen != nil {
@@ -420,6 +428,7 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+	s.stopStallWatch()
 
 	if s.keepAliveEnabled {
 		select {

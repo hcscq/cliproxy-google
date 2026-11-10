@@ -3,8 +3,10 @@ package cliproxy
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/pprof"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +70,12 @@ func (p *pprofServer) ApplyContext(ctx context.Context, cfg *config.Config) bool
 		addr = config.DefaultPprofAddr
 	}
 	enabled := cfg.Pprof.Enable
+	if envAddr, ok := loopbackPprofAddrFromEnv(); ok {
+		// CPA_PPROF_ADDR opts in a pod-local listener. It is not a Service port;
+		// operators reach it with kubectl port-forward.
+		enabled = true
+		addr = envAddr
+	}
 
 	p.mu.Lock()
 	p.owner++
@@ -205,6 +213,31 @@ func (p *pprofServer) stopServerWithContext(ctx context.Context, server *http.Se
 	}
 	log.Infof("pprof server stopped on %s (%s)", addr, reason)
 	return nil
+}
+
+// loopbackPprofAddrFromEnv reads CPA_PPROF_ADDR. Only loopback addresses are
+// accepted so the listener cannot be published through a Service by mistake.
+func loopbackPprofAddrFromEnv() (string, bool) {
+	addr := strings.TrimSpace(os.Getenv("CPA_PPROF_ADDR"))
+	if addr == "" {
+		return "", false
+	}
+	host, port, errSplit := net.SplitHostPort(addr)
+	if errSplit != nil || strings.TrimSpace(port) == "" || !pprofHostIsLoopback(host) {
+		log.Warnf("CPA_PPROF_ADDR %q ignored: want a loopback host:port", addr)
+		return "", false
+	}
+	return addr, true
+}
+
+func pprofHostIsLoopback(host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func newPprofMux() *http.ServeMux {

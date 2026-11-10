@@ -61,6 +61,11 @@ func GinLogrusLogger() gin.HandlerFunc {
 		c.Next()
 
 		// Keep failed health probes visible, including responses from global middleware.
+		// /livez is the stall-aware liveness probe: never log it. A logrus hook that
+		// re-enters a stuck lock would pin the probe goroutine after the status is set.
+		if path == "/livez" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) {
+			return
+		}
 		if path == "/healthz" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) &&
 			c.Writer.Status() >= http.StatusOK && c.Writer.Status() < http.StatusMultipleChoices {
 			return

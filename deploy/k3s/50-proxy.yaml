@@ -75,6 +75,9 @@ spec:
             # HOME_UNAVAILABLE_FORCE_SWITCH=8  — consecutive home_unavailable before force switch (0=off)
             # HOME_READY_GRACE=15s             — readyz stay-ready after last healthy heartbeat
             # HOME_READY_GRACE_UNHEALTHY=2s    — shorter grace when alternate Home exists
+            # CPA_PPROF_ADDR=127.0.0.1:6060    — optional loopback pprof (not a Service port).
+            #   kubectl port-forward deploy/cliproxy 6060:6060
+            #   curl -s localhost:6060/debug/pprof/goroutine?debug=2
           ports:
             - name: http
               containerPort: 8317   # port distributed by Home config (server.port)
@@ -83,8 +86,11 @@ spec:
             periodSeconds: 5
             failureThreshold: 120   # Home may be restarting; the proxy retries with backoff
           livenessProbe:
-            httpGet: {path: /healthz, port: http}
-            periodSeconds: 20
+            # /livez fails when the Home client lock or config lock is stuck.
+            # /healthz stays shallow so startup is not coupled to that check.
+            httpGet: {path: /livez, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 2
             failureThreshold: 3
           readinessProbe:
             httpGet: {path: /readyz, port: http}

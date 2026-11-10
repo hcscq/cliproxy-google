@@ -145,28 +145,27 @@ func (c *Client) NoteHomeUnavailable() {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.unavailableStreak++
-	if c.unavailableStreak < homeUnavailableForceSwitch {
-		return
-	}
-	if c.stickActiveLocked() {
-		// Already stuck to a failover target; do not flip again (both-homes-bad).
-		return
-	}
-	if !c.hasAlternateHomeLocked() {
+	if c.unavailableStreak < homeUnavailableForceSwitch || c.stickActiveLocked() || !c.hasAlternateHomeLocked() {
+		c.mu.Unlock()
 		return
 	}
 	from := stickTarget{ip: strings.TrimSpace(c.homeCfg.Host), port: c.homeCfg.Port}
 	switched, _ := c.switchToNextNodeLocked()
 	if !switched {
+		c.mu.Unlock()
 		return
 	}
 	to := stickTarget{ip: strings.TrimSpace(c.homeCfg.Host), port: c.homeCfg.Port}
 	c.setStickLocked(to, from)
 	c.unavailableStreak = 0
 	c.reassignPending = false
-	log.Warnf("home_unavailable streak forced failover to %s (stick %s, avoid %s)", to.addr(), homeFailoverStickCooldown, from.addr())
+	cooldown := homeFailoverStickCooldown
+	c.mu.Unlock()
+	// Log after releasing mu. The process-wide logrus hook calls HeartbeatOK
+	// and, historically, Enabled took this same mutex, so logging here wedged
+	// the goroutine that still held mu and every request waiting on it.
+	log.Warnf("home_unavailable streak forced failover to %s (stick %s, avoid %s)", to.addr(), cooldown, from.addr())
 }
 
 // NoteHomeAvailable resets the unavailable streak after a successful dispatch.
@@ -180,11 +179,15 @@ func (c *Client) NoteHomeAvailable() {
 }
 
 // HasAlternateHome reports whether a live alternate home exists (for readyz).
+// TryLock keeps a stuck mu from hanging the readiness probe; a busy lock
+// reports no alternate so the longer ready grace stays in force.
 func (c *Client) HasAlternateHome() bool {
 	if c == nil {
 		return false
 	}
-	c.mu.Lock()
+	if !c.mu.TryLock() {
+		return false
+	}
 	defer c.mu.Unlock()
 	return c.hasAlternateHomeLocked()
 }

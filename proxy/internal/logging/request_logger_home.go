@@ -68,6 +68,11 @@ func (l *FileRequestLogger) forwardRequestLogToHome(ctx context.Context, headers
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+	}
 	return client.RPushRequestLog(ctx, raw)
 }
 
@@ -242,5 +247,7 @@ func (w *homeStreamingLogWriter) Close() error {
 	if errMarshal != nil {
 		return errMarshal
 	}
-	return client.RPushRequestLog(context.Background(), raw)
+	pushCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return client.RPushRequestLog(pushCtx, raw)
 }
