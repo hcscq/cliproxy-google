@@ -311,10 +311,13 @@ func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now ti
 	if full == nil {
 		return false
 	}
+	// Capture the previous tier before metadata is overwritten. An empty old tier
+	// is the first write after import and is not an audit-worthy transition.
+	oldTier := strings.TrimSpace(metaString(full, SubscriptionTierKey))
 	if full.Metadata == nil {
 		full.Metadata = map[string]any{}
 	}
-	changed := full.Metadata[SubscriptionTierKey] != tier
+	changed := oldTier != tier
 	full.Metadata[SubscriptionTierKey] = tier
 	full.Metadata[SubscriptionTierNameKey] = name
 	full.Metadata[subscriptionCheckedKey] = now.Format(time.RFC3339)
@@ -324,12 +327,40 @@ func (r *Runtime) refreshSubscriptionTier(ctx context.Context, id string, now ti
 	}
 	setQuotaTier(id, tier)
 	if changed {
-		log.Infof("subscription tier: %s (%s) -> %s (%s)", id, full.Label, tier, name)
+		shown := oldTier
+		if shown == "" {
+			shown = "-"
+		}
+		log.Infof("subscription tier: %s (%s) %s -> %s (%s)", id, full.Label, shown, tier, name)
+		if oldTier != "" {
+			r.recordSubscriptionTierChange(cctx, id, oldTier, tier, name)
+		}
 	}
 	if fn, _ := r.subscriptionTierHook.Load().(func(context.Context, string, string)); fn != nil {
-		fn(context.WithoutCancel(cctx), id, tier) // keeps the health-check 非Pro verdict in step
+		fn(context.WithoutCancel(cctx), id, tier) // keeps the health-check non-Pro verdict in step; does not audit tier changes
 	}
 	return true
+}
+
+// subscriptionTierRecorder is the optional reserve-audit half of ReserveStore.
+// syncHealthTier must not implement this: it runs on every successful check.
+type subscriptionTierRecorder interface {
+	RecordSubscriptionTierChange(ctx context.Context, authID, oldTier, newTier, tierName string) error
+}
+
+// recordSubscriptionTierChange audits a real tier transition. Insert failures are logged
+// and ignored so a reserve-table problem cannot fail the tier refresh.
+func (r *Runtime) recordSubscriptionTierChange(ctx context.Context, id, oldTier, newTier, name string) {
+	if r == nil || strings.TrimSpace(oldTier) == "" || oldTier == newTier {
+		return
+	}
+	rec, ok := r.reserveStore().(subscriptionTierRecorder)
+	if !ok || rec == nil {
+		return
+	}
+	if err := rec.RecordSubscriptionTierChange(ctx, id, oldTier, newTier, name); err != nil {
+		log.WithError(err).Warnf("subscription tier: record %s failed", id)
+	}
 }
 
 // SetSubscriptionTierHook registers a callback run after every successful

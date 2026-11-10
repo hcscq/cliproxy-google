@@ -14,8 +14,8 @@ import (
 // Credential reserve (凭据储备) state lives in its own tables, never in auth_json, so
 // it is not subject to light runtime metadata persistence. credential_reserve holds
 // the current state; credential_reserve_event is the audit trail (reserve, unreserve,
-// promote, ban, clear-on-disable with was_reserved) used to compare ban rates of
-// reserved vs active and to record reserve clears on disable.
+// promote, ban, clear-on-disable, tier_changed with was_reserved) used to compare ban
+// rates of reserved vs active and to record reserve clears and subscription-tier changes.
 
 // CredentialReserve is the current reserve state of one credential.
 type CredentialReserve struct {
@@ -304,6 +304,74 @@ func clipRunes(s string, n int) string {
 	return string(r[:n])
 }
 
+const reserveTierChangedKind = "tier_changed"
+
+func subscriptionTierChangeDetail(oldTier, newTier, tierName string) string {
+	detail := "订阅等级变更：" + oldTier + " → " + newTier
+	if tierName = strings.TrimSpace(tierName); tierName != "" {
+		detail += "（" + tierName + "）"
+	}
+	return clipRunes(detail+"· loadCodeAssist paidTier", 200)
+}
+
+// tierChangeEndpoints parses "订阅等级变更：<from> → <to>…" written by subscriptionTierChangeDetail.
+func tierChangeEndpoints(detail string) (from, to string, ok bool) {
+	rest, found := strings.CutPrefix(detail, "订阅等级变更：")
+	if !found {
+		return "", "", false
+	}
+	if i := strings.IndexAny(rest, "（·"); i >= 0 {
+		rest = rest[:i]
+	}
+	from, to, ok = strings.Cut(rest, " → ")
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	return from, to, ok && from != "" && to != ""
+}
+
+// RecordSubscriptionTierChange inserts one tier_changed row when oldTier is set and
+// the credential's latest tier_changed row is not already this from→to. was_reserved
+// and reserved_since snapshot credential_reserve. A no-op returns nil. Callers must
+// not fail the tier refresh when this returns an error.
+func (r *Repository) RecordSubscriptionTierChange(ctx context.Context, authID, oldTier, newTier, tierName string) error {
+	if r == nil {
+		return nil
+	}
+	authID, oldTier, newTier = strings.TrimSpace(authID), strings.TrimSpace(oldTier), strings.TrimSpace(newTier)
+	if authID == "" || oldTier == "" || newTier == "" || oldTier == newTier {
+		return nil
+	}
+	db, err := r.database()
+	if err != nil {
+		return err
+	}
+	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		var latest CredentialReserveEvent
+		if err := tx.Where("auth_uuid = ? AND kind = ?", authID, reserveTierChangedKind).Order("id DESC").Limit(1).Find(&latest).Error; err != nil {
+			return err
+		}
+		if latest.ID != 0 {
+			if from, to, ok := tierChangeEndpoints(latest.Detail); ok && from == oldTier && to == newTier {
+				return nil
+			}
+		}
+		var cur CredentialReserve
+		if err := tx.Where("auth_uuid = ?", authID).Limit(1).Find(&cur).Error; err != nil {
+			return err
+		}
+		ev := CredentialReserveEvent{
+			AuthUUID: authID,
+			Kind:     reserveTierChangedKind,
+			At:       time.Now().UTC(),
+			Detail:   subscriptionTierChangeDetail(oldTier, newTier, tierName),
+		}
+		if cur.AuthUUID != "" {
+			ev.WasReserved = cur.Reserved
+			ev.ReservedSince = cur.ReservedSince
+		}
+		return tx.Create(&ev).Error
+	})
+}
+
 // UnreserveDisabledCredentials clears reserved on disabled credentials and writes
 // one clear-on-disable event per cleared row (batched). Egress pauses
 // (metadata.auto_paused_reason egress_down / egress_removed) are left reserved so a
@@ -384,7 +452,6 @@ func (r *Repository) UnreserveDisabledCredentials(ctx context.Context) (int, err
 	})
 	return n, err
 }
-
 
 // RecordReserveBans audits credentials newly disabled as banned (403 terms/disabled
 // account), noting whether they were in reserve at the time. Postgres only.
@@ -503,6 +570,14 @@ func (a *RuntimeAdapter) RecordReserveBans(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return r.RecordReserveBans(ctx)
+}
+
+func (a *RuntimeAdapter) RecordSubscriptionTierChange(ctx context.Context, authID, oldTier, newTier, tierName string) error {
+	r, err := a.reserveRepo()
+	if err != nil {
+		return err
+	}
+	return r.RecordSubscriptionTierChange(ctx, authID, oldTier, newTier, tierName)
 }
 
 func (a *RuntimeAdapter) UnreserveDisabledCredentials(ctx context.Context) (int, error) {
