@@ -428,13 +428,72 @@ func buildRequestBodyFromPayload(t *testing.T, modelName string) map[string]any 
 	}`))
 }
 
+func TestAntigravityBuildRequest_ClaudeThinkingBudgetAfterMaxCap(t *testing.T) {
+	// Official claude-opus-4-6 allows 128000 output tokens. The antigravity
+	// alias caps completion at 64000 after thinking normalization, so a
+	// budget already at that cap would otherwise be sent equal to max.
+	payload := []byte(`{
+		"request": {
+			"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+			"generationConfig": {
+				"maxOutputTokens": 128000,
+				"thinkingConfig": {"thinkingBudget": 64000}
+			}
+		}
+	}`)
+	for _, stream := range []bool{false, true} {
+		body := buildRequestBodyFromRawPayloadStream(t, "claude-opus-4-6-thinking", payload, stream)
+		assertClaudeThinkingPair(t, body, 63999, 64000)
+	}
+}
+
+func TestAntigravityBuildRequest_ClaudeThinkingBudgetAlreadyValid(t *testing.T) {
+	body := buildRequestBodyFromRawPayload(t, "claude-opus-4-6-thinking", []byte(`{
+		"request": {
+			"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+			"generationConfig": {
+				"maxOutputTokens": 128000,
+				"thinkingConfig": {"thinkingBudget": 8191}
+			}
+		}
+	}`))
+	assertClaudeThinkingPair(t, body, 8191, 64000)
+}
+
+func assertClaudeThinkingPair(t *testing.T, body map[string]any, budget, maxOut float64) {
+	t.Helper()
+	request, ok := body["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("request missing")
+	}
+	generationConfig, ok := request["generationConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("generationConfig missing: %#v", request)
+	}
+	if got, ok := generationConfig["maxOutputTokens"].(float64); !ok || got != maxOut {
+		t.Fatalf("maxOutputTokens = %v, want %v", generationConfig["maxOutputTokens"], maxOut)
+	}
+	thinking, ok := generationConfig["thinkingConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinkingConfig missing: %#v", generationConfig)
+	}
+	if got, ok := thinking["thinkingBudget"].(float64); !ok || got != budget {
+		t.Fatalf("thinkingBudget = %v, want %v", thinking["thinkingBudget"], budget)
+	}
+}
+
 func buildRequestBodyFromRawPayload(t *testing.T, modelName string, payload []byte) map[string]any {
+	t.Helper()
+	return buildRequestBodyFromRawPayloadStream(t, modelName, payload, false)
+}
+
+func buildRequestBodyFromRawPayloadStream(t *testing.T, modelName string, payload []byte, stream bool) map[string]any {
 	t.Helper()
 
 	executor := &AntigravityExecutor{}
 	auth := &cliproxyauth.Auth{Metadata: map[string]any{"project_id": "project-1"}}
 
-	req, err := executor.buildRequest(context.Background(), auth, "token", modelName, payload, false, "", "https://example.com")
+	req, err := executor.buildRequest(context.Background(), auth, "token", modelName, payload, stream, "", "https://example.com")
 	if err != nil {
 		t.Fatalf("buildRequest error: %v", err)
 	}

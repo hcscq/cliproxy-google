@@ -168,6 +168,10 @@ func (a *Applier) Apply(body []byte, config thinking.ThinkingConfig, modelInfo *
 
 // normalizeClaudeBudget applies Claude-specific constraints to ensure max_tokens > budget_tokens.
 // Anthropic API requires this constraint; violating it returns a 400 error.
+//
+// This only sees the max that exists now. A later cap (Antigravity lowering
+// maxOutputTokens to the model completion limit) can make a pair that was
+// valid here become budget >= max. That cap reconciles the pair again.
 func (a *Applier) normalizeClaudeBudget(body []byte, budgetTokens int, modelInfo *registry.ModelInfo) []byte {
 	if budgetTokens <= 0 {
 		return body
@@ -175,9 +179,12 @@ func (a *Applier) normalizeClaudeBudget(body []byte, budgetTokens int, modelInfo
 
 	// Ensure the request satisfies Claude constraints:
 	//  1) Determine effective max_tokens (request overrides model default)
-	//  2) If budget_tokens >= max_tokens, reduce budget_tokens to max_tokens-1
-	//  3) If the adjusted budget falls below the model minimum, leave the request unchanged
-	//  4) If max_tokens came from model default, write it back into the request
+	//  2) If max_tokens came from the model default, write it into the request
+	//  3) If budget_tokens >= max_tokens, the budget we would send is max_tokens-1
+	//  4) If that budget would fall below Thinking.Min, do not lower it and do
+	//     not remove thinking. Apply has already written the original budget.
+	//     The default max from step 2 may already be present, so this return is
+	//     not always byte-identical, but the invalid budget is left in place.
 
 	effectiveMax, setDefaultMax := a.effectiveMaxTokens(body, modelInfo)
 	if setDefaultMax && effectiveMax > 0 {
@@ -195,8 +202,9 @@ func (a *Applier) normalizeClaudeBudget(body []byte, budgetTokens int, modelInfo
 		minBudget = modelInfo.Thinking.Min
 	}
 	if minBudget > 0 && adjustedBudget > 0 && adjustedBudget < minBudget {
-		// If enforcing the max_tokens constraint would push the budget below the model minimum,
-		// leave the request unchanged.
+		// max-1 is below Thinking.Min. Keep the budget Apply already wrote and
+		// do not drop thinking. The pair may still be invalid; removing thinking
+		// would change the request more than the upstream rejection.
 		return body
 	}
 
