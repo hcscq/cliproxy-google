@@ -264,3 +264,17 @@ func TestAntigravityApplyPatchReuse(t *testing.T) {
 		t.Fatalf("inconsistent input: delta=%q done=%q item=%q final=%q", delta.String(), done, item, final)
 	}
 }
+
+func TestConvertAntigravityResponseToOpenAIResponsesNonStream_PromptBlock(t *testing.T) {
+	raw := []byte(`{"response":{"promptFeedback":{"blockReason":"PROHIBITED_CONTENT","blockReasonMessage":"The prompt is blocked due to safety"},"usageMetadata":{"promptTokenCount":2,"totalTokenCount":2},"modelVersion":"gemini-test","responseId":"resp_block"}}`)
+	out := ConvertAntigravityResponseToOpenAIResponsesNonStream(context.Background(), "gemini-test", nil, nil, raw, nil)
+	if gjson.GetBytes(out, "status").String() != "incomplete" || gjson.GetBytes(out, "incomplete_details.reason").String() != "content_filter" {
+		t.Fatalf("payload = %s", out)
+	}
+	if gjson.GetBytes(out, "incomplete_details.block_reason").String() != "PROHIBITED_CONTENT" {
+		t.Fatalf("block_reason = %s", out)
+	}
+	if !strings.Contains(string(out), "blockReason: PROHIBITED_CONTENT") {
+		t.Fatalf("missing explanation: %s", out)
+	}
+}

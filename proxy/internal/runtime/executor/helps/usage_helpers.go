@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
@@ -862,6 +863,8 @@ type StreamUsageBuffer struct {
 	detail        usage.Detail
 	ok            bool
 	responseModel string
+	block         translatorcommon.ContentBlock
+	blocked       bool
 }
 
 var (
@@ -947,11 +950,15 @@ func (b *StreamUsageBuffer) ObserveClaudeStream(line []byte) {
 
 // Publish emits the latest observed usage detail, if any.
 func (b *StreamUsageBuffer) Publish(ctx context.Context, reporter *UsageReporter) bool {
-	if b == nil || !b.ok || reporter == nil {
+	if b == nil || reporter == nil || (!b.ok && !b.blocked) {
 		return false
 	}
 	if b.responseModel != "" && reporter.ResponseModel() == "" {
 		reporter.SetResponseModel(b.responseModel)
+	}
+	if b.blocked {
+		reporter.PublishContentBlock(ctx, b.detail, b.block)
+		return true
 	}
 	reporter.Publish(ctx, b.detail)
 	return true

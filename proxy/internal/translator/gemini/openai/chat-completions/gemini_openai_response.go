@@ -129,7 +129,8 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 	candidates := gjson.GetBytes(rawJSON, "candidates")
 
 	// Iterate over all candidates to support candidate_count > 1.
-	if candidates.IsArray() {
+	// An empty array is candidate-less: a promptFeedback block must not be skipped.
+	if candidates.IsArray() && len(candidates.Array()) > 0 {
 		candidates.ForEach(func(_, candidate gjson.Result) bool {
 			// Clone the template for the current candidate.
 			template := append([]byte(nil), baseTemplate...)
@@ -139,7 +140,9 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 			template, _ = sjson.SetBytes(template, "choices.0.index", candidateIndex)
 
 			if finishReasonResult := candidate.Get("finishReason"); finishReasonResult.Exists() {
-				p.UpstreamFinishReason[candidateIndex] = strings.ToUpper(finishReasonResult.String())
+				if finishReason := strings.TrimSpace(finishReasonResult.String()); finishReason != "" {
+					p.UpstreamFinishReason[candidateIndex] = strings.ToUpper(finishReason)
+				}
 			}
 
 			partsResult := candidate.Get("content.parts")
@@ -249,21 +252,35 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 			isFinalChunk := upstreamFinishReason != "" && usageExists
 
 			if isFinalChunk {
-				var finishReason string
+				finishReason := openAIFinishReasonFromGemini(upstreamFinishReason)
 				if sawToolCall {
 					finishReason = "tool_calls"
-				} else if upstreamFinishReason == "MAX_TOKENS" {
-					finishReason = "length"
-				} else {
-					finishReason = "stop"
 				}
 				template, _ = sjson.SetBytes(template, "choices.0.finish_reason", finishReason)
-				template, _ = sjson.SetBytes(template, "choices.0.native_finish_reason", strings.ToLower(upstreamFinishReason))
+				native := upstreamFinishReason
+				if native == "" {
+					native = "stop"
+				}
+				template, _ = sjson.SetBytes(template, "choices.0.native_finish_reason", strings.ToLower(native))
+				content := gjson.GetBytes(template, "choices.0.delta.content")
+				if finishReason == "content_filter" && !sawToolCall && (!content.Exists() || content.Type == gjson.Null || content.String() == "") {
+					template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
+					template, _ = sjson.SetBytes(template, "choices.0.delta.content", translatorcommon.ContentBlock{FinishReason: upstreamFinishReason}.Text())
+				}
 			}
 
 			responseStrings = append(responseStrings, template)
 			return true // continue loop
 		})
+	} else if block, blocked := translatorcommon.ReadContentBlock(rawJSON); blocked && block.Reason != "" {
+		// Candidate-less promptFeedback.blockReason is a terminal content filter,
+		// not an empty completion and not a truncated stream.
+		template := append([]byte(nil), baseTemplate...)
+		template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
+		template, _ = sjson.SetBytes(template, "choices.0.delta.content", block.Text())
+		template, _ = sjson.SetBytes(template, "choices.0.finish_reason", "content_filter")
+		template, _ = sjson.SetBytes(template, "choices.0.native_finish_reason", strings.ToLower(block.Reason))
+		responseStrings = append(responseStrings, template)
 	} else {
 		// If there are no candidates (e.g., a pure usageMetadata chunk), return the usage chunk if present.
 		if gjson.GetBytes(rawJSON, "usageMetadata").Exists() && len(responseStrings) == 0 {
@@ -347,13 +364,13 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 
 			partsResult := candidate.Get("content.parts")
 			hasFunctionCall := false
+			hasTextContent := false
 			if partsResult.IsArray() {
 				partsResults := partsResult.Array()
 				var toolCalls [][]byte
 				var images [][]byte
 				var textContent strings.Builder
 				var reasoningContent strings.Builder
-				hasTextContent := false
 				hasReasoningContent := false
 
 				for i := 0; i < len(partsResults); i++ {
@@ -428,6 +445,8 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 			if hasFunctionCall {
 				choiceTemplate, _ = sjson.SetBytes(choiceTemplate, "finish_reason", "tool_calls")
 				choiceTemplate, _ = sjson.SetBytes(choiceTemplate, "native_finish_reason", "tool_calls")
+			} else if gjson.GetBytes(choiceTemplate, "finish_reason").String() == "content_filter" && strings.TrimSpace(gjson.GetBytes(choiceTemplate, "message.content").String()) == "" {
+				choiceTemplate, _ = sjson.SetBytes(choiceTemplate, "message.content", translatorcommon.ContentBlock{FinishReason: candidate.Get("finishReason").String()}.Text())
 			}
 
 			// Append the constructed choice to the main choices array.
@@ -439,6 +458,15 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 		}
 	}
 
+	if len(gjson.GetBytes(template, "choices").Array()) == 0 {
+		if block, blocked := translatorcommon.ReadContentBlock(rawJSON); blocked && block.Reason != "" {
+			choice := []byte(`{"index":0,"message":{"role":"assistant","content":"","reasoning_content":null,"tool_calls":null},"finish_reason":"content_filter","native_finish_reason":""}`)
+			choice, _ = sjson.SetBytes(choice, "message.content", block.Text())
+			choice, _ = sjson.SetBytes(choice, "native_finish_reason", strings.ToLower(block.Reason))
+			template = translatorcommon.SetRawArrayItems(template, "choices", [][]byte{choice})
+		}
+	}
+
 	return template
 }
 
@@ -446,12 +474,6 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 // finish_reason vocabulary (stop, length, content_filter); the raw value stays
 // available in native_finish_reason.
 func openAIFinishReasonFromGemini(reason string) string {
-	switch strings.ToUpper(strings.TrimSpace(reason)) {
-	case "MAX_TOKENS":
-		return "length"
-	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
-		return "content_filter"
-	default:
-		return "stop"
-	}
+	finish, _ := translatorcommon.OpenAIChatFinishReason(reason, false, "")
+	return finish
 }

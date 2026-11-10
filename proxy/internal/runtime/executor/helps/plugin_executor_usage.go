@@ -67,6 +67,7 @@ func ObservePluginExecutorStreamUsage(protocol string, payload []byte, buffer *S
 			if detail, ok := ParseGeminiStreamUsage(line); ok {
 				buffer.Observe(detail, ok)
 			}
+			buffer.ObserveContentBlock(line)
 		})
 	case "interactions", "interactions-response":
 		IterateStreamLines(payload, func(line []byte) {
@@ -79,6 +80,7 @@ func ObservePluginExecutorStreamUsage(protocol string, payload []byte, buffer *S
 			if detail, ok := ParseAntigravityStreamUsage(line); ok {
 				buffer.Observe(detail, ok)
 			}
+			buffer.ObserveContentBlock(line)
 		})
 	case "codex", "openai-response":
 		IterateStreamLines(payload, func(line []byte) {

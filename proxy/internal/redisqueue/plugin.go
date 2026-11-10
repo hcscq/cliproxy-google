@@ -235,12 +235,14 @@ type tokenStats struct {
 type failDetail struct {
 	StatusCode int    `json:"status_code"`
 	Body       string `json:"body"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 func resolveFail(ctx context.Context, record coreusage.Record, failed bool) failDetail {
 	fail := failDetail{
 		StatusCode: record.Fail.StatusCode,
 		Body:       strings.TrimSpace(record.Fail.Body),
+		Reason:     strings.TrimSpace(record.Fail.Reason),
 	}
 	if !failed {
 		return failDetail{StatusCode: 200}

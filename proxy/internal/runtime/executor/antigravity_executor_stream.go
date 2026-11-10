@@ -420,6 +420,7 @@ antigravityExecuteStreamSuccess:
 			line = builtinEmu.adjustSSELine(line)
 			// Capture accounting before the client-facing filter renames usage.
 			streamUsage.Observe(helps.ParseAntigravityStreamUsage(line))
+			streamUsage.ObserveContentBlock(line)
 
 			// Filter usage metadata for all models
 			// Only retain usage statistics in the terminal chunk

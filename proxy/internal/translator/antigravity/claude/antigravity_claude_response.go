@@ -76,6 +76,9 @@ type Params struct {
 	HasSentFinalEvents   bool   // Indicates if final content/message events have been sent
 	HasToolUse           bool   // Indicates if tool use was observed in the stream
 	HasContent           bool   // Tracks whether any content (text, thinking, or tool use) has been output
+	BlockReason          string // promptFeedback.blockReason, when the prompt itself was blocked
+	BlockReasonMessage   string // bounded upstream blockReasonMessage
+	BlockAnnounced       bool   // the block explanation was already written as text
 	HasSemanticContent   bool
 	LastSemanticKind     string
 	HasWebSearchTool     bool
@@ -136,9 +139,7 @@ func ConvertAntigravityResponseToClaude(ctx context.Context, _ string, originalR
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		output := make([]byte, 0, 256)
 		if params.HasFirstResponse && !params.HasContent {
-			output = translatorcommon.AppendSSEEventString(output, "content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, params.ResponseIndex), 3)
-			params.ResponseType = 1
-			params.HasContent = true
+			appendClaudeBlockOrEmptyText(&output, params)
 		}
 		if params.HasContent {
 			appendFinalEvents(params, &output, true)
@@ -413,8 +414,20 @@ func ConvertAntigravityResponseToClaude(ctx context.Context, _ string, originalR
 
 	if finishReasonResult := gjson.GetBytes(rawJSON, "response.candidates.0.finishReason"); finishReasonResult.Exists() {
 		params.HasFinishReason = true
-		params.FinishReason = finishReasonResult.String()
+		// A trailing usage chunk can repeat finishReason as "". Keep the real
+		// reason so a safety stop is not overwritten by that empty token.
+		if finishReason := strings.TrimSpace(finishReasonResult.String()); finishReason != "" {
+			params.FinishReason = finishReason
+		}
 	}
+	if block, ok := translatorcommon.ReadContentBlock(rawJSON); ok && block.Reason != "" {
+		params.BlockReason = block.Reason
+		if block.Message != "" {
+			params.BlockReasonMessage = block.Message
+		}
+		params.HasFinishReason = true
+	}
+	announceAntigravityClaudeBlock(params, appendEvent)
 
 	if usageResult := gjson.GetBytes(rawJSON, "response.usageMetadata"); usageResult.Exists() {
 		params.HasUsageMetadata = true
@@ -508,18 +521,35 @@ func appendFinalEvents(params *Params, output *[]byte, force bool) {
 }
 
 func resolveStopReason(params *Params) string {
-	if params.HasToolUse {
-		return "tool_use"
-	}
+	return translatorcommon.ClaudeStopReason(params.FinishReason, params.HasToolUse, params.BlockReason)
+}
 
-	switch params.FinishReason {
-	case "MAX_TOKENS":
-		return "max_tokens"
-	case "STOP", "FINISH_REASON_UNSPECIFIED", "UNKNOWN":
-		return "end_turn"
+func announceAntigravityClaudeBlock(params *Params, appendEvent func(string, string)) {
+	if params == nil || params.BlockAnnounced || params.HasToolUse || params.HasSemanticContent || params.WebSearchTextBuffer.Len() > 0 {
+		return
 	}
+	notice := translatorcommon.ContentBlock{Reason: params.BlockReason, Message: params.BlockReasonMessage, FinishReason: params.FinishReason}.Text()
+	if notice == "" {
+		return
+	}
+	appendEvent("content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, params.ResponseIndex))
+	data, _ := sjson.SetBytes([]byte(fmt.Sprintf(`{"type":"content_block_delta","index":%d,"delta":{"type":"text_delta","text":""}}`, params.ResponseIndex)), "delta.text", notice)
+	appendEvent("content_block_delta", string(data))
+	params.ResponseType = 1
+	params.HasContent = true
+	params.BlockAnnounced = true
+}
 
-	return "end_turn"
+func appendClaudeBlockOrEmptyText(output *[]byte, params *Params) {
+	notice := translatorcommon.ContentBlock{Reason: params.BlockReason, Message: params.BlockReasonMessage, FinishReason: params.FinishReason}.Text()
+	*output = translatorcommon.AppendSSEEventString(*output, "content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, params.ResponseIndex), 3)
+	if notice != "" {
+		data, _ := sjson.SetBytes([]byte(fmt.Sprintf(`{"type":"content_block_delta","index":%d,"delta":{"type":"text_delta","text":""}}`, params.ResponseIndex)), "delta.text", notice)
+		*output = translatorcommon.AppendSSEEventString(*output, "content_block_delta", string(data), 3)
+		params.BlockAnnounced = true
+	}
+	params.ResponseType = 1
+	params.HasContent = true
 }
 
 // ConvertAntigravityResponseToClaudeNonStream converts a non-streaming Antigravity response to a non-streaming Claude response.
@@ -564,7 +594,8 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 		if groundingMetadata := antigravityGroundingMetadata(root); groundingMetadata.Exists() {
 			toolUseID := newClaudeWebSearchToolUseID()
 			responseJSON, _ = sjson.SetRawBytes(responseJSON, "content", buildClaudeWebSearchContent(toolUseID, antigravityTextContent(root), groundingMetadata))
-			responseJSON, _ = sjson.SetBytes(responseJSON, "stop_reason", "end_turn")
+			stopReason := translatorcommon.ClaudeStopReason(root.Get("response.candidates.0.finishReason").String(), false, root.Get("response.promptFeedback.blockReason").String())
+			responseJSON, _ = sjson.SetBytes(responseJSON, "stop_reason", stopReason)
 			responseJSON, _ = sjson.SetBytes(responseJSON, "usage.server_tool_use.web_search_requests", 1)
 			return responseJSON
 		}
@@ -731,6 +762,19 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 	flushThinking()
 	flushText()
 
+	block, _ := translatorcommon.ReadContentBlock(rawJSON)
+	finishReason := ""
+	if finish := root.Get("response.candidates.0.finishReason"); finish.Exists() {
+		finishReason = finish.String()
+	}
+	if len(blocks) == 0 && !hasToolCall {
+		if notice := block.Text(); notice != "" {
+			noticeBlock := []byte(`{"type":"text","text":""}`)
+			noticeBlock, _ = sjson.SetBytes(noticeBlock, "text", notice)
+			blocks = append(blocks, noticeBlock)
+		}
+	}
+
 	if groundingMetadata := antigravityPresearchGrounding(root); groundingMetadata.Exists() {
 		blocks = append(buildClaudePresearchBlocks(newClaudeWebSearchToolUseID(), groundingMetadata), blocks...)
 		responseJSON, _ = sjson.SetBytes(responseJSON, "usage.server_tool_use.web_search_requests", 1)
@@ -740,21 +784,7 @@ func ConvertAntigravityResponseToClaudeNonStream(_ context.Context, _ string, or
 		responseJSON, _ = sjson.SetRawBytes(responseJSON, "content", translatorcommon.JoinRawArray(blocks))
 	}
 
-	stopReason := "end_turn"
-	if hasToolCall {
-		stopReason = "tool_use"
-	} else {
-		if finish := root.Get("response.candidates.0.finishReason"); finish.Exists() {
-			switch finish.String() {
-			case "MAX_TOKENS":
-				stopReason = "max_tokens"
-			case "STOP", "FINISH_REASON_UNSPECIFIED", "UNKNOWN":
-				stopReason = "end_turn"
-			default:
-				stopReason = "end_turn"
-			}
-		}
-	}
+	stopReason := translatorcommon.ClaudeStopReason(finishReason, hasToolCall, block.Reason)
 	responseJSON, _ = sjson.SetBytes(responseJSON, "stop_reason", stopReason)
 
 	if promptTokens == 0 && outputTokens == 0 {

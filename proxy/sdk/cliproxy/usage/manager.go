@@ -77,6 +77,9 @@ type Record struct {
 type Failure struct {
 	StatusCode int
 	Body       string
+	// Reason is an optional bounded machine code (for example a content-safety
+	// blockReason). It is not a credential fault by itself.
+	Reason string
 }
 
 // Detail holds the token usage breakdown.
