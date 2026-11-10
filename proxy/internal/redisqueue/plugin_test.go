@@ -360,6 +360,47 @@ func TestUsageQueuePluginFallsBackUpstreamStatusFromFail(t *testing.T) {
 	})
 }
 
+func TestUsageQueuePluginRecordsContentBlockReason(t *testing.T) {
+	withEnabledQueue(t, func() {
+		ctx := internallogging.WithRequestID(context.Background(), "block-req")
+		ctx = internallogging.WithEndpoint(ctx, "POST /v1/messages")
+		ctx = internallogging.WithResponseStatusHolder(ctx)
+		internallogging.SetResponseStatus(ctx, http.StatusOK)
+
+		plugin := &usageQueuePlugin{}
+		plugin.HandleUsage(ctx, coreusage.Record{
+			Provider:  "antigravity",
+			Model:     "gemini-test",
+			AuthIndex: "cred-1",
+			AuthType:  "oauth",
+			Failed:    true,
+			Fail: coreusage.Failure{
+				StatusCode: http.StatusOK,
+				Body:       `{"type":"content_block","block_reason":"PROHIBITED_CONTENT"}`,
+				Reason:     "PROHIBITED_CONTENT",
+			},
+			Detail: coreusage.Detail{InputTokens: 9, TotalTokens: 9},
+		})
+
+		payload := popSinglePayload(t)
+		requireBoolField(t, payload, "failed", true)
+		requireFailField(t, payload, http.StatusOK, `{"type":"content_block","block_reason":"PROHIBITED_CONTENT"}`)
+		raw, ok := payload["fail"]
+		if !ok {
+			t.Fatal("missing fail")
+		}
+		var fail struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(raw, &fail); err != nil {
+			t.Fatalf("unmarshal fail: %v", err)
+		}
+		if fail.Reason != "PROHIBITED_CONTENT" {
+			t.Fatalf("fail.reason = %q", fail.Reason)
+		}
+	})
+}
+
 func TestUsageQueuePluginAsyncIgnoresRecycledGinContext(t *testing.T) {
 	withEnabledQueue(t, func() {
 		ginCtx := newTestGinContext(t, http.MethodPost, "/v1/chat/completions", http.StatusOK)

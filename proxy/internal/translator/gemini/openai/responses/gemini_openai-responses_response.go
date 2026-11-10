@@ -92,11 +92,35 @@ func (usage geminiResponsesUsage) JSON() []byte {
 	return out
 }
 
-func geminiResponsesTerminalState(finishReason string) (eventType, status string, incompleteDetails []byte) {
-	if strings.EqualFold(strings.TrimSpace(finishReason), "MAX_TOKENS") {
+func geminiResponsesTerminalState(finishReason string, block translatorcommon.ContentBlock, hasTool bool) (eventType, status string, incompleteDetails []byte) {
+	upper := strings.ToUpper(strings.TrimSpace(finishReason))
+	if block.FinishReason == "" {
+		block.FinishReason = upper
+	}
+	if upper == "MAX_TOKENS" && strings.TrimSpace(block.Reason) == "" {
+		return "response.incomplete", "incomplete", []byte(`{"reason":"max_output_tokens"}`)
+	}
+	// A prompt block or safety finish is an incomplete content filter. Tool
+	// calls stay completed so a real tool_use is not hidden behind the filter.
+	if !hasTool && (strings.TrimSpace(block.Reason) != "" || translatorcommon.IsSafetyFinishReason(upper)) {
+		return "response.incomplete", "incomplete", block.ResponsesIncompleteDetails()
+	}
+	if upper == "MAX_TOKENS" {
 		return "response.incomplete", "incomplete", []byte(`{"reason":"max_output_tokens"}`)
 	}
 	return "response.completed", "completed", nil
+}
+
+func geminiCandidateHasToolCall(root gjson.Result) bool {
+	found := false
+	root.Get("candidates.0.content.parts").ForEach(func(_, part gjson.Result) bool {
+		if part.Get("functionCall").Exists() || part.Get("function_call").Exists() {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 type geminiToResponsesState struct {
@@ -107,6 +131,8 @@ type geminiToResponsesState struct {
 	Started      bool
 	Completed    bool
 	FinishReason string
+	BlockReason  string
+	BlockMessage string
 	Usage        geminiResponsesUsage
 
 	// message aggregation
@@ -210,7 +236,7 @@ func unwrapGeminiResponseRoot(root gjson.Result) gjson.Result {
 		return root
 	}
 	// Vertex-style Gemini responses wrap the actual payload in a "response" object.
-	if resp.Get("candidates").Exists() || resp.Get("responseId").Exists() || resp.Get("usageMetadata").Exists() || resp.Get("cpaUsageMetadata").Exists() {
+	if resp.Get("candidates").Exists() || resp.Get("responseId").Exists() || resp.Get("usageMetadata").Exists() || resp.Get("cpaUsageMetadata").Exists() || resp.Get("promptFeedback").Exists() {
 		return resp
 	}
 	return root
@@ -360,10 +386,16 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		if !st.Started {
 			return [][]byte{}
 		}
-		if st.FinishReason == "" {
+		switch {
+		case st.FinishReason != "":
+		case st.BlockReason != "":
+			st.FinishReason = st.BlockReason
+		default:
 			st.FinishReason = "STOP"
 		}
 		rawJSON = []byte(`{}`)
+	} else {
+		rawJSON = translatorcommon.AttachPromptBlockCandidate(rawJSON)
 	}
 
 	root := gjson.ParseBytes(rawJSON)
@@ -371,6 +403,12 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		return [][]byte{}
 	}
 	root = unwrapGeminiResponseRoot(root)
+	if block, ok := translatorcommon.ReadContentBlock(rawJSON); ok && block.Reason != "" {
+		st.BlockReason = block.Reason
+		if block.Message != "" {
+			st.BlockMessage = block.Message
+		}
+	}
 	hasUsage := st.Usage.Merge(root)
 	messageStatus := "completed"
 
@@ -1298,7 +1336,7 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		if !done && !hasUsage {
 			return out
 		}
-		eventType, status, incompleteDetails := geminiResponsesTerminalState(st.FinishReason)
+		eventType, status, incompleteDetails := geminiResponsesTerminalState(st.FinishReason, translatorcommon.ContentBlock{Reason: st.BlockReason, Message: st.BlockMessage, FinishReason: st.FinishReason}, len(st.FuncCallIDs) > 0)
 		messageStatus = status
 		if st.PendingReasoningSignature != "" {
 			emitTrailingDetachedReasoning(st.PendingReasoningSignature)
@@ -1526,6 +1564,7 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 
 // ConvertGeminiResponseToOpenAIResponsesNonStream aggregates Gemini response JSON into a single OpenAI Responses JSON object.
 func ConvertGeminiResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []byte {
+	rawJSON = translatorcommon.AttachPromptBlockCandidate(rawJSON)
 	root := gjson.ParseBytes(rawJSON)
 	root = unwrapGeminiResponseRoot(root)
 	reqJSON := pickRequestJSON(originalRequestRawJSON, requestRawJSON)
@@ -1534,7 +1573,8 @@ func ConvertGeminiResponseToOpenAIResponsesNonStream(_ context.Context, _ string
 
 	// Base response scaffold
 	resp := []byte(`{"id":"","object":"response","created_at":0,"status":"completed","background":false,"error":null,"incomplete_details":null}`)
-	_, status, incompleteDetails := geminiResponsesTerminalState(root.Get("candidates.0.finishReason").String())
+	block, _ := translatorcommon.ReadContentBlock(rawJSON)
+	_, status, incompleteDetails := geminiResponsesTerminalState(root.Get("candidates.0.finishReason").String(), block, geminiCandidateHasToolCall(root))
 	resp, _ = sjson.SetBytes(resp, "status", status)
 	if incompleteDetails != nil {
 		resp, _ = sjson.SetRawBytes(resp, "incomplete_details", incompleteDetails)

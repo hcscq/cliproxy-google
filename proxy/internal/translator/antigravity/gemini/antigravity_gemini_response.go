@@ -31,6 +31,11 @@ func (p *convertAntigravityGeminiParams) observe(rawJSON []byte) {
 		p.SawResponse = hasAntigravityResponsePayload(rawJSON)
 	}
 	if !p.SawFinishReason {
+		// A promptFeedback block is already terminal. Synthesizing finishReason
+		// STOP on [DONE] would hide the upstream block behind an empty completion.
+		if block, ok := translatorcommon.ReadContentBlock(rawJSON); ok && block.Reason != "" {
+			p.SawFinishReason = true
+		}
 		for _, path := range []string{"response.candidates", "candidates"} {
 			for _, candidate := range gjson.GetBytes(rawJSON, path).Array() {
 				if candidate.Get("finishReason").String() != "" {
@@ -211,7 +216,10 @@ func ConvertAntigravityResponseToGeminiNonStream(_ context.Context, _ string, or
 		chunk = restoreGeminiFunctionNames(rawJSON, originalRequestRawJSON)
 	}
 	candidates := gjson.GetBytes(chunk, "candidates")
-	if candidates.IsArray() {
+	block, blocked := translatorcommon.ReadContentBlock(chunk)
+	// A prompt block is the terminal signal. Do not invent finishReason STOP
+	// on top of promptFeedback.
+	if candidates.IsArray() && !(blocked && block.Reason != "") {
 		// Default every candidate, not just the first one, so a multi-candidate
 		// response cannot leave some of them unterminated.
 		for i, candidate := range candidates.Array() {

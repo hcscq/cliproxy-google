@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+func TestUsageRecordFromPayloadStoresContentBlockFailReason(t *testing.T) {
+	payload := `{"timestamp":"2026-11-10T01:02:03Z","provider":"antigravity","model":"gemini-test","failed":true,"fail":{"status_code":200,"body":"{\"type\":\"content_block\",\"block_reason\":\"PROHIBITED_CONTENT\"}","reason":"PROHIBITED_CONTENT"},"tokens":{"input_tokens":9,"output_tokens":0,"total_tokens":9}}`
+	record, errRecord := UsageRecordFromPayload(payload, "192.0.2.10")
+	if errRecord != nil {
+		t.Fatalf("UsageRecordFromPayload: %v", errRecord)
+	}
+	if !record.Failed || record.FailStatusCode != 200 {
+		t.Fatalf("failed=%v status=%d", record.Failed, record.FailStatusCode)
+	}
+	if !strings.Contains(record.FailBody, "PROHIBITED_CONTENT") {
+		t.Fatalf("fail body = %s", record.FailBody)
+	}
+	if !strings.Contains(string(record.FailJSON), `"reason":"PROHIBITED_CONTENT"`) && !strings.Contains(string(record.PayloadJSON), `"reason":"PROHIBITED_CONTENT"`) {
+		t.Fatalf("reason not retained in fail/payload json: fail=%s payload=%s", record.FailJSON, record.PayloadJSON)
+	}
+}
+
 func TestUsageRecordFromPayloadStoresRequestIDAndHomeIP(t *testing.T) {
 	payload := `{"timestamp":"2026-05-29T01:02:03Z","request_id":"req-usage-1","session_id":"slot:pi-worker-1","parent_session_id":"slot:pi-main-root","executor_type":"CodexWebsocketsExecutor","tokens":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}`
 

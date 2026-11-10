@@ -195,7 +195,7 @@ func (e *AIStudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 	if helps.ApplyPatchTranslationError(param) != nil || len(out) == 0 {
 		return cliproxyexecutor.Response{}, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
 	}
-	reporter.Publish(ctx, helps.ParseGeminiUsage(wsResp.Body))
+	helps.PublishUsage(ctx, reporter, helps.ParseGeminiUsage(wsResp.Body), wsResp.Body)
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		out = helps.EnsureResponsesUsageDetails(out)
 	}
@@ -367,6 +367,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 					if detail, ok := helps.ParseGeminiStreamUsage(filtered); ok {
 						streamUsage.Observe(detail, true)
 					}
+					streamUsage.ObserveContentBlock(filtered)
 					lines := helps.TranslateStreamWithClaudeInputTokens(ctx, body.toFormat, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translatedReq, filtered, &param, claudeInputTokens)
 					helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
 					for i := range lines {
@@ -419,6 +420,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				finishStream()
 				reporter.ObserveResponseModel(event.Payload)
 				streamUsage.Observe(helps.ParseGeminiUsage(event.Payload), true)
+				streamUsage.ObserveContentBlock(event.Payload)
 				return false
 			case wsrelay.MessageTypeError:
 				helps.RecordAPIResponseError(ctx, e.cfg, event.Err)

@@ -271,7 +271,9 @@ antigravityNonStreamSuccess:
 		err = statusErr{code: http.StatusBadGateway, msg: antigravityEmptyStreamMessage}
 		return cliproxyexecutor.Response{}, err
 	}
-	reporter.Publish(ctx, usageDetail)
+	// Content blocks are request-scoped: publish them as a blocked usage row
+	// and return the translated body. Do not retry them as empty responses.
+	helps.PublishUsage(ctx, reporter, usageDetail, bodyBytes)
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)
 	}
@@ -605,7 +607,7 @@ antigravityStreamSuccess:
 	if helps.ApplyPatchTranslationError(param) != nil || len(converted) == 0 {
 		return cliproxyexecutor.Response{}, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
 	}
-	reporter.Publish(ctx, helps.ParseAntigravityUsage(resp.Payload))
+	helps.PublishUsage(ctx, reporter, helps.ParseAntigravityUsage(resp.Payload), resp.Payload)
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)
 	}

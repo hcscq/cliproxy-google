@@ -31,6 +31,8 @@ type Params struct {
 	SawToolCall      bool
 	HasFinalEvents   bool
 	FinishReason     string
+	BlockReason      string
+	BlockMessage     string
 	InputTokens      int64
 	OutputTokens     int64
 	CachedTokens     int64
@@ -40,7 +42,7 @@ func resolveGeminiClaudeStopReason(finishReason string, sawToolCall bool) string
 	if sawToolCall {
 		return "tool_use"
 	}
-	switch finishReason {
+	switch strings.ToUpper(strings.TrimSpace(finishReason)) {
 	case "MAX_TOKENS":
 		return "max_tokens"
 	case "SAFETY", "RECITATION", "PROHIBITED_CONTENT", "SPII", "BLOCKLIST", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY":
@@ -50,6 +52,16 @@ func resolveGeminiClaudeStopReason(finishReason string, sawToolCall bool) string
 	default:
 		return "end_turn"
 	}
+}
+
+// geminiClaudeStopReason keeps the historical MALFORMED_FUNCTION_CALL -> refusal
+// mapping and also treats a candidate-less promptFeedback block as a refusal.
+func geminiClaudeStopReason(finishReason, blockReason string, sawToolCall bool) string {
+	stop := resolveGeminiClaudeStopReason(finishReason, sawToolCall)
+	if stop == "end_turn" && strings.TrimSpace(blockReason) != "" {
+		return "refusal"
+	}
+	return stop
 }
 
 // toolUseIDCounter provides a process-wide unique counter for tool use identifiers.
@@ -92,9 +104,7 @@ func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestR
 
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		if p.HasFirstResponse && !p.HasContent {
-			appendEvent("content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, p.ResponseIndex))
-			p.ResponseType = 1
-			p.HasContent = true
+			appendGeminiClaudeBlockOrEmpty(appendEvent, p)
 		}
 		if p.HasContent {
 			if p.ResponseType != 0 {
@@ -102,7 +112,7 @@ func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestR
 				p.ResponseType = 0
 			}
 			if !p.HasFinalEvents {
-				stopReason := resolveGeminiClaudeStopReason(p.FinishReason, p.SawToolCall)
+				stopReason := geminiClaudeStopReason(p.FinishReason, p.BlockReason, p.SawToolCall)
 				template := []byte(fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":"%s","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":0}}`, stopReason))
 				template, _ = sjson.SetBytes(template, "usage.output_tokens", p.OutputTokens)
 				template, _ = sjson.SetBytes(template, "usage.input_tokens", p.InputTokens)
@@ -313,8 +323,14 @@ func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestR
 		}
 	}
 
-	if finish := gjson.GetBytes(rawJSON, "candidates.0.finishReason"); finish.Exists() && finish.String() != "" {
+	if finish := gjson.GetBytes(rawJSON, "candidates.0.finishReason"); finish.Exists() && strings.TrimSpace(finish.String()) != "" {
 		(*param).(*Params).FinishReason = finish.String()
+	}
+	if block, ok := translatorcommon.ReadContentBlock(rawJSON); ok && block.Reason != "" {
+		(*param).(*Params).BlockReason = block.Reason
+		if block.Message != "" {
+			(*param).(*Params).BlockMessage = block.Message
+		}
 	}
 
 	usageResult := gjson.GetBytes(rawJSON, "usageMetadata")
@@ -336,11 +352,10 @@ func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestR
 		(*param).(*Params).CachedTokens = cachedTokens
 	}
 
-	if usageResult.Exists() && bytes.Contains(rawJSON, []byte(`"finishReason"`)) && !(*param).(*Params).HasFinalEvents {
+	blockStopsStream := (*param).(*Params).BlockReason != ""
+	if usageResult.Exists() && (bytes.Contains(rawJSON, []byte(`"finishReason"`)) || blockStopsStream) && !(*param).(*Params).HasFinalEvents {
 		if !(*param).(*Params).HasContent && (*param).(*Params).HasFirstResponse {
-			appendEvent("content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, (*param).(*Params).ResponseIndex))
-			(*param).(*Params).ResponseType = 1
-			(*param).(*Params).HasContent = true
+			appendGeminiClaudeBlockOrEmpty(appendEvent, (*param).(*Params))
 		}
 
 		if (*param).(*Params).HasContent {
@@ -349,7 +364,7 @@ func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestR
 				(*param).(*Params).ResponseType = 0
 			}
 
-			stopReason := resolveGeminiClaudeStopReason((*param).(*Params).FinishReason, (*param).(*Params).SawToolCall)
+			stopReason := geminiClaudeStopReason((*param).(*Params).FinishReason, (*param).(*Params).BlockReason, (*param).(*Params).SawToolCall)
 			template := []byte(fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":"%s","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":0}}`, stopReason))
 			template, _ = sjson.SetBytes(template, "usage.output_tokens", (*param).(*Params).OutputTokens)
 			template, _ = sjson.SetBytes(template, "usage.input_tokens", (*param).(*Params).InputTokens)
@@ -527,21 +542,41 @@ func ConvertGeminiResponseToClaudeNonStream(_ context.Context, _ string, origina
 	flushThinking()
 	flushText()
 
-	if len(blocks) > 0 {
-		out, _ = sjson.SetRawBytes(out, "content", translatorcommon.JoinRawArray(blocks))
-	}
-
+	block, _ := translatorcommon.ReadContentBlock(rawJSON)
 	var finishReason string
 	if finish := root.Get("candidates.0.finishReason"); finish.Exists() {
 		finishReason = finish.String()
 	}
-	out, _ = sjson.SetBytes(out, "stop_reason", resolveGeminiClaudeStopReason(finishReason, hasToolCall))
+	if len(blocks) == 0 && !hasToolCall {
+		if notice := block.Text(); notice != "" {
+			noticeBlock := []byte(`{"type":"text","text":""}`)
+			noticeBlock, _ = sjson.SetBytes(noticeBlock, "text", notice)
+			blocks = append(blocks, noticeBlock)
+		}
+	}
+
+	if len(blocks) > 0 {
+		out, _ = sjson.SetRawBytes(out, "content", translatorcommon.JoinRawArray(blocks))
+	}
+
+	out, _ = sjson.SetBytes(out, "stop_reason", geminiClaudeStopReason(finishReason, block.Reason, hasToolCall))
 
 	if inputTokens == int64(0) && outputTokens == int64(0) && !root.Get("usageMetadata").Exists() {
 		out, _ = sjson.DeleteBytes(out, "usage")
 	}
 
 	return out
+}
+
+func appendGeminiClaudeBlockOrEmpty(appendEvent func(string, string), p *Params) {
+	notice := translatorcommon.ContentBlock{Reason: p.BlockReason, Message: p.BlockMessage, FinishReason: p.FinishReason}.Text()
+	appendEvent("content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, p.ResponseIndex))
+	if notice != "" {
+		data, _ := sjson.SetBytes([]byte(fmt.Sprintf(`{"type":"content_block_delta","index":%d,"delta":{"type":"text_delta","text":""}}`, p.ResponseIndex)), "delta.text", notice)
+		appendEvent("content_block_delta", string(data))
+	}
+	p.ResponseType = 1
+	p.HasContent = true
 }
 
 func ClaudeTokenCount(ctx context.Context, count int64) []byte {

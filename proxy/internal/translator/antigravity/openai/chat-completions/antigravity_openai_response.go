@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/gemini/openai/chat-completions"
@@ -28,6 +29,9 @@ type convertCliResponseToOpenAIChatParams struct {
 	SawToolCall          bool   // Tracks if any tool call was seen in the entire stream
 	SawFinishReason      bool   // Tracks whether finish_reason has been emitted
 	UpstreamFinishReason string // Caches the upstream finish reason for final chunk
+	BlockReason          string // promptFeedback.blockReason when the prompt itself was blocked
+	BlockReasonMessage   string // bounded upstream blockReasonMessage
+	AnnouncedBlock       bool   // the block explanation was already written into a delta
 	ModelVersion         string
 	ResponseID           string
 	PendingUsageMetadata []byte
@@ -99,7 +103,7 @@ func convertAntigravityResponseToOpenAIStream(_ context.Context, _ string, origi
 		// Never finalize a stream that produced no response at all: an empty
 		// upstream body must stay detectable as a failure rather than be reported
 		// as a successful empty completion.
-		if params.SawResponse && !params.SawFinishReason {
+		if (params.SawResponse || params.BlockReason != "") && !params.SawFinishReason {
 			params.SawFinishReason = true
 			finishReason, nativeFinishReason := resolveOpenAIFinishReason(params)
 			template := []byte(`{"id":"","object":"chat.completion.chunk","created":0,"model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}]}`)
@@ -112,6 +116,13 @@ func convertAntigravityResponseToOpenAIStream(_ context.Context, _ string, origi
 			}
 			if len(params.PendingUsageMetadata) > 0 {
 				template = setOpenAIUsageMetadata(template, gjson.ParseBytes(params.PendingUsageMetadata))
+			}
+			if !params.AnnouncedBlock {
+				if notice := (translatorcommon.ContentBlock{Reason: params.BlockReason, Message: params.BlockReasonMessage, FinishReason: params.UpstreamFinishReason}).Text(); notice != "" {
+					template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
+					template, _ = sjson.SetBytes(template, "choices.0.delta.content", notice)
+					params.AnnouncedBlock = true
+				}
 			}
 			template, _ = sjson.SetBytes(template, "choices.0.finish_reason", finishReason)
 			template, _ = sjson.SetBytes(template, "choices.0.native_finish_reason", nativeFinishReason)
@@ -153,9 +164,19 @@ func convertAntigravityResponseToOpenAIStream(_ context.Context, _ string, origi
 		template, _ = sjson.SetBytes(template, "id", params.ResponseID)
 	}
 
-	// Cache the finish reason - do NOT set it in output yet (will be set on final chunk)
+	// Cache the finish reason - do NOT set it in output yet (will be set on final chunk).
+	// An empty trailing finishReason must not erase a safety reason seen earlier.
 	if finishReasonResult := gjson.GetBytes(rawJSON, "response.candidates.0.finishReason"); finishReasonResult.Exists() {
-		params.UpstreamFinishReason = strings.ToUpper(finishReasonResult.String())
+		if finishReason := strings.TrimSpace(finishReasonResult.String()); finishReason != "" {
+			params.UpstreamFinishReason = strings.ToUpper(finishReason)
+		}
+	}
+	if block, ok := translatorcommon.ReadContentBlock(rawJSON); ok && block.Reason != "" {
+		params.BlockReason = block.Reason
+		if block.Message != "" {
+			params.BlockReasonMessage = block.Message
+		}
+		params.SawResponse = true
 	}
 
 	// Extract and set usage metadata (token counts). FilterSSEUsageMetadata renames
@@ -261,13 +282,28 @@ func convertAntigravityResponseToOpenAIStream(_ context.Context, _ string, origi
 	// strict clients drop the remaining content. When upstream never sends
 	// finishReason at all, the [DONE] branch synthesizes the terminal chunk.
 	usageMetadata := gjson.GetBytes(rawJSON, "response.usageMetadata")
-	isFinalChunk := params.UpstreamFinishReason != "" && usageMetadata.Exists()
+	isFinalChunk := (params.UpstreamFinishReason != "" || params.BlockReason != "") && usageMetadata.Exists()
 
 	if isFinalChunk {
 		finishReason, nativeFinishReason := resolveOpenAIFinishReason(params)
+		if !params.AnnouncedBlock && !params.SawToolCall {
+			content := gjson.GetBytes(template, "choices.0.delta.content")
+			if notice := (translatorcommon.ContentBlock{Reason: params.BlockReason, Message: params.BlockReasonMessage, FinishReason: params.UpstreamFinishReason}).Text(); notice != "" && (!content.Exists() || content.Type == gjson.Null || content.String() == "") {
+				template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
+				template, _ = sjson.SetBytes(template, "choices.0.delta.content", notice)
+				params.AnnouncedBlock = true
+			}
+		}
 		template, _ = sjson.SetBytes(template, "choices.0.finish_reason", finishReason)
 		template, _ = sjson.SetBytes(template, "choices.0.native_finish_reason", nativeFinishReason)
 		params.SawFinishReason = true
+	} else if params.BlockReason != "" && !params.AnnouncedBlock && !params.SawToolCall {
+		content := gjson.GetBytes(template, "choices.0.delta.content")
+		if notice := (translatorcommon.ContentBlock{Reason: params.BlockReason, Message: params.BlockReasonMessage}).Text(); notice != "" && (!content.Exists() || content.Type == gjson.Null || content.String() == "") {
+			template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
+			template, _ = sjson.SetBytes(template, "choices.0.delta.content", notice)
+			params.AnnouncedBlock = true
+		}
 	}
 
 	return [][]byte{template}
@@ -301,19 +337,7 @@ func hasAntigravityResponsePayload(rawJSON []byte) bool {
 // finish_reason and native_finish_reason pair. Both the terminal upstream chunk
 // and the synthesized [DONE] chunk must agree on this mapping.
 func resolveOpenAIFinishReason(params *convertCliResponseToOpenAIChatParams) (finishReason, nativeFinishReason string) {
-	switch {
-	case params.SawToolCall:
-		finishReason = "tool_calls"
-	case params.UpstreamFinishReason == "MAX_TOKENS":
-		finishReason = "length"
-	default:
-		finishReason = "stop"
-	}
-	nativeFinishReason = "stop"
-	if params.UpstreamFinishReason != "" {
-		nativeFinishReason = strings.ToLower(params.UpstreamFinishReason)
-	}
-	return finishReason, nativeFinishReason
+	return translatorcommon.OpenAIChatFinishReason(params.UpstreamFinishReason, params.SawToolCall, params.BlockReason)
 }
 
 func setOpenAIUsageMetadata(template []byte, usageResult gjson.Result) []byte {
