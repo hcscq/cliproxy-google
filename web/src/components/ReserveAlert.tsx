@@ -78,8 +78,27 @@ export function ReserveChip({ stats }: { stats?: ReserveStats | null }) {
   );
 }
 
+/** Direction of a tier_changed detail: free = dropped to free, down = other downgrade, up = upgrade. */
+export function tierChangeDirection(detail?: string): 'up' | 'down' | 'free' | '' {
+  const m = /订阅等级变更：\s*([^\s→]+)\s*→\s*([^\s（·]+)/.exec(detail ?? '');
+  if (!m) return '';
+  const rank = (id: string) => {
+    const t = id.toLowerCase();
+    if (t.includes('ultra')) return 4;
+    if (t.includes('pro')) return 3;
+    if (t.startsWith('free')) return 1;
+    return 2;
+  };
+  if (m[2].toLowerCase().startsWith('free')) return 'free';
+  const from = rank(m[1]);
+  const to = rank(m[2]);
+  if (to > from) return 'up';
+  if (to < from) return 'down';
+  return '';
+}
+
 /** Human-readable label for a reserve audit event kind. */
-export function reserveEventKindLabel(kind: string, tr: (zh: string, en: string) => string): string {
+export function reserveEventKindLabel(kind: string, tr: (zh: string, en: string) => string, detail?: string): string {
   switch (kind) {
     case 'reserve':
       return tr('设为储备', 'Reserve');
@@ -91,12 +110,18 @@ export function reserveEventKindLabel(kind: string, tr: (zh: string, en: string)
       return tr('封禁', 'Ban');
     case 'clear-on-disable':
       return tr('停用时清除储备', 'Cleared on disable');
+    case 'tier_changed': {
+      const dir = tierChangeDirection(detail);
+      if (dir === 'up') return tr('订阅升档', 'Tier up');
+      if (dir === 'down' || dir === 'free') return tr('订阅掉档', 'Tier drop');
+      return tr('订阅变更', 'Tier change');
+    }
     default:
       return kind;
   }
 }
 
-export function reserveEventKindTone(kind: string): 'ok' | 'warn' | 'err' | 'primary' | undefined {
+export function reserveEventKindTone(kind: string, detail?: string): 'ok' | 'warn' | 'err' | 'primary' | undefined {
   switch (kind) {
     case 'promote':
       return 'primary';
@@ -107,6 +132,12 @@ export function reserveEventKindTone(kind: string): 'ok' | 'warn' | 'err' | 'pri
       return 'warn';
     case 'reserve':
       return 'ok';
+    case 'tier_changed': {
+      const dir = tierChangeDirection(detail);
+      if (dir === 'up') return 'ok';
+      if (dir === 'free') return 'err';
+      return 'warn';
+    }
     default:
       return undefined;
   }
@@ -122,6 +153,8 @@ export function shortReserveDetail(detail: string | undefined, tr: (zh: string, 
   if (/RESOURCE_EXHAUSTED|quota.?exhausted|额度耗尽/i.test(d)) {
     return tr('额度耗尽', 'Quota exhausted');
   }
+  const tier = /订阅等级变更：\s*([^\s→]+)\s*→\s*([^\s（·]+)/.exec(d);
+  if (tier) return `${tier[1]} → ${tier[2]}`;
   if (/disabled|已停用|已禁用/i.test(d) && d.length > 40) {
     return tr('账号已停用', 'Account disabled');
   }
@@ -133,6 +166,29 @@ export function shortReserveDetail(detail: string | undefined, tr: (zh: string, 
 function countEventsSince(events: ReserveEvent[] | null | undefined, kind: string, sinceMs: number): number {
   if (!events?.length) return 0;
   return events.reduce((n, e) => (e.kind === kind && new Date(e.at).getTime() >= sinceMs ? n + 1 : n), 0);
+}
+
+function countTierDropsSince(events: ReserveEvent[] | null | undefined, sinceMs: number): number {
+  if (!events?.length) return 0;
+  return events.reduce((n, e) => {
+    if (e.kind !== 'tier_changed' || new Date(e.at).getTime() < sinceMs) return n;
+    const dir = tierChangeDirection(e.detail);
+    return dir === 'free' || dir === 'down' ? n + 1 : n;
+  }, 0);
+}
+
+/** 24h summary line: promotions, bans, and tier drops (upgrades are not drops). */
+export function reserveRecentText(
+  stats: ReserveStats | null | undefined,
+  events: ReserveEvent[] | null | undefined,
+  tr: (zh: string, en: string) => string,
+  now = Date.now(),
+): string {
+  const since = now - 24 * 3600 * 1000;
+  const promotes = typeof stats?.promotions_24h === 'number' ? stats.promotions_24h : countEventsSince(events, 'promote', since);
+  const bans = countEventsSince(events, 'ban', since);
+  const drops = countTierDropsSince(events, since);
+  return tr(`近24h 自动启用 ${promotes} · 封禁 ${bans} · 掉档 ${drops}`, `24h promote ${promotes} · ban ${bans} · drop ${drops}`);
 }
 
 function fmtEventTime(at: string): string {
@@ -179,10 +235,7 @@ export function ReserveAlert({ stats, events }: { stats?: ReserveStats | null; e
     `Reserve ${stats.reserved} · ready ${stats.eligible >= 0 ? stats.eligible : '—'} · usable ${n(usable)}/${stats.min_active > 0 ? stats.min_active : '—'}`,
   );
 
-  const since = Date.now() - 24 * 3600 * 1000;
-  const promotes = typeof stats.promotions_24h === 'number' ? stats.promotions_24h : countEventsSince(events, 'promote', since);
-  const bans = countEventsSince(events, 'ban', since);
-  const recentLine = tr(`近24h 自动启用 ${promotes} · 封禁 ${bans}`, `24h promote ${promotes} · ban ${bans}`);
+  const recentLine = reserveRecentText(stats, events, tr);
 
   const list = events ?? [];
   const shown = open ? list.slice(0, EVENTS_SHOW) : [];
@@ -236,13 +289,13 @@ export function ReserveAlert({ stats, events }: { stats?: ReserveStats | null; e
             </thead>
             <tbody>
               {shown.map((e, i) => {
-                const tone = reserveEventKindTone(e.kind);
+                const tone = reserveEventKindTone(e.kind, e.detail);
                 const reason = shortReserveDetail(e.detail, tr);
                 return (
                   <tr key={`${e.auth_id}-${e.at}-${i}`}>
                     <td className="mono nowrap faint">{fmtEventTime(e.at)}</td>
                     <td>
-                      <span className={`reserve-ev-badge${tone ? ` ${tone}` : ''}`}>{reserveEventKindLabel(e.kind, tr)}</span>
+                      <span className={`reserve-ev-badge${tone ? ` ${tone}` : ''}`}>{reserveEventKindLabel(e.kind, tr, e.detail)}</span>
                     </td>
                     <td className="mono nowrap">
                       {e.seq ? `#${e.seq} · ` : ''}
@@ -275,7 +328,7 @@ export function ReserveEventsList({ events }: { events?: ReserveEvent[] | null }
     <div className="small muted" data-testid="reserve-events" style={{ margin: '4px 0' }}>
       {events.slice(0, 8).map((e, i) => (
         <div key={`${e.auth_id}-${e.at}-${i}`}>
-          {reserveEventKindLabel(e.kind, tr)}
+          {reserveEventKindLabel(e.kind, tr, e.detail)}
           {e.seq ? ` #${e.seq}` : ''} · {e.auth_id.slice(0, 8)}
           {e.detail ? ` · ${shortReserveDetail(e.detail, tr)}` : ''}
         </div>

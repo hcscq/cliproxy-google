@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   reserveShortText,
   reserveSummaryText,
+  reserveRecentText,
   shortReserveDetail,
   reserveEventKindLabel,
   reserveEventKindTone,
 } from './ReserveAlert';
-import type { ReserveStats } from '../api/client';
+import type { ReserveEvent, ReserveStats } from '../api/client';
 
 const zh = (z: string) => z;
 const base: ReserveStats = { reserved: 0, ever_reserved: 0, bans_reserved: 0, bans_active: 0, bans_after_promotion: 0, promotions_24h: 0, min_active: 10, active: 3, eligible: 0, short: true };
@@ -69,5 +70,34 @@ describe('reserveEventKindTone', () => {
     expect(reserveEventKindTone('ban')).toBe('err');
     expect(reserveEventKindTone('promote')).toBe('primary');
     expect(reserveEventKindTone('reserve')).toBe('ok');
+  });
+});
+
+const tierDrop = '订阅等级变更：g1-pro-tier → free-tier（Antigravity Starter Quota）· loadCodeAssist paidTier';
+const tierUp = '订阅等级变更：free-tier → g1-pro-tier（Google AI Pro）· loadCodeAssist paidTier';
+const tierDown = '订阅等级变更：g1-ultra-tier → g1-pro-tier（Google AI Pro）· loadCodeAssist paidTier';
+
+describe('tier_changed events', () => {
+  it('labels a drop to free as 订阅掉档 and an upgrade as 订阅升档', () => {
+    expect(reserveEventKindLabel('tier_changed', zh, tierDrop)).toBe('订阅掉档');
+    expect(reserveEventKindTone('tier_changed', tierDrop)).toBe('err');
+    expect(reserveEventKindLabel('tier_changed', zh, tierDown)).toBe('订阅掉档');
+    expect(reserveEventKindTone('tier_changed', tierDown)).toBe('warn');
+    expect(reserveEventKindLabel('tier_changed', zh, tierUp)).toBe('订阅升档');
+    expect(reserveEventKindTone('tier_changed', tierUp)).toBe('ok');
+  });
+  it('shows the from → to in the short reason', () => {
+    expect(shortReserveDetail(tierDrop, zh)).toBe('g1-pro-tier → free-tier');
+  });
+  it('counts 24h drops beside promote and ban, skipping upgrades and older rows', () => {
+    const now = 1_700_000_000_000;
+    const events: ReserveEvent[] = [
+      { auth_id: 'a', kind: 'tier_changed', at: new Date(now - 1000).toISOString(), was_reserved: true, detail: tierDrop },
+      { auth_id: 'a', kind: 'tier_changed', at: new Date(now - 1000).toISOString(), was_reserved: false, detail: tierDown },
+      { auth_id: 'a', kind: 'tier_changed', at: new Date(now - 1000).toISOString(), was_reserved: false, detail: tierUp },
+      { auth_id: 'a', kind: 'tier_changed', at: new Date(now - 48 * 3600 * 1000).toISOString(), was_reserved: false, detail: tierDrop },
+      { auth_id: 'b', kind: 'ban', at: new Date(now - 1000).toISOString(), was_reserved: false },
+    ];
+    expect(reserveRecentText({ ...base, promotions_24h: 2 }, events, zh, now)).toBe('近24h 自动启用 2 · 封禁 1 · 掉档 2');
   });
 });

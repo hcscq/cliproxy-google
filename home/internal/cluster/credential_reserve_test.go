@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -309,7 +310,6 @@ func TestUnreserveDisabledCredentialsLeavesLiveReserves(t *testing.T) {
 	}
 }
 
-
 // Egress pauses set Disabled=true but must keep reserve intact (probe flap).
 func TestClearReserveSkipsEgressPause(t *testing.T) {
 	repo, ctx := newTestKVRepository(t)
@@ -373,6 +373,82 @@ func TestUnreserveDisabledSkipsEgressPause(t *testing.T) {
 	}
 	if row := reserveFlag(t, repo, "real-ban"); row.Reserved {
 		t.Fatal("sweeper left real disable reserved")
+	}
+}
+
+func TestRecordSubscriptionTierChange(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	const id = "tier-1"
+	if _, err := repo.UpsertAuth(ctx, newReserveAuth(id), "create"); err != nil {
+		t.Fatal(err)
+	}
+	// First observation after import is not a transition.
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "", "g1-pro-tier", "Google AI Pro"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "tier_changed", time.Time{}); n != 0 {
+		t.Fatalf("first write recorded %d events", n)
+	}
+	if _, err := repo.SetCredentialsReserved(ctx, []string{id}, true, "reserve", "t"); err != nil {
+		t.Fatal(err)
+	}
+	const drop = "订阅等级变更：g1-pro-tier → free-tier（Antigravity Starter Quota）· loadCodeAssist paidTier"
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "g1-pro-tier", "free-tier", "Antigravity Starter Quota"); err != nil {
+		t.Fatal(err)
+	}
+	// Same from→to again, even with a different display name, is one event.
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "g1-pro-tier", "free-tier", "Starter"); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := repo.RecentReserveEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var drops []CredentialReserveEvent
+	for _, e := range evs {
+		if e.Kind == reserveTierChangedKind {
+			drops = append(drops, e)
+		}
+	}
+	if len(drops) != 1 || drops[0].Detail != drop || !drops[0].WasReserved || drops[0].ReservedSince == nil {
+		t.Fatalf("drop event = %+v", drops)
+	}
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "free-tier", "g1-pro-tier", "Google AI Pro"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "free-tier", "g1-pro-tier", "Google AI Pro"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "tier_changed", time.Time{}); n != 2 {
+		t.Fatalf("upgrade events = %d, want 2", n)
+	}
+	// A later repeat of the original drop is a new transition: dedup looks at the latest row only.
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "g1-pro-tier", "free-tier", "Antigravity Starter Quota"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "tier_changed", time.Time{}); n != 3 {
+		t.Fatalf("second drop events = %d, want 3", n)
+	}
+	longName := strings.Repeat("名", 300)
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "free-tier", "g1-ultra-tier", longName); err != nil {
+		t.Fatal(err)
+	}
+	evs, err = repo.RecentReserveEvents(ctx, 1)
+	if err != nil || len(evs) != 1 {
+		t.Fatal(err, evs)
+	}
+	if n := len([]rune(evs[0].Detail)); n > 200 {
+		t.Fatalf("detail runes = %d", n)
+	}
+	from, to, ok := tierChangeEndpoints(evs[0].Detail)
+	if !ok || from != "free-tier" || to != "g1-ultra-tier" {
+		t.Fatalf("truncated detail = %q", evs[0].Detail)
+	}
+	if err := repo.RecordSubscriptionTierChange(ctx, id, "free-tier", "g1-ultra-tier", longName); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := repo.CountReserveEvents(ctx, "tier_changed", time.Time{}); n != 4 {
+		t.Fatalf("truncated repeat events = %d, want 4", n)
 	}
 }
 
