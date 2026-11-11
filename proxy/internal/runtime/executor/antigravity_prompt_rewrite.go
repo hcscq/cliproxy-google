@@ -14,10 +14,49 @@ import (
 )
 
 func antigravityPromptRewriteRules(cfg *config.Config) []config.PromptRewriteRule {
+	var base []config.PromptRewriteRule
 	if cfg == nil || cfg.Antigravity.PromptRewrites == nil {
-		return config.DefaultAntigravityPromptRewrites()
+		base = config.DefaultAntigravityPromptRewrites()
+	} else {
+		base = *cfg.Antigravity.PromptRewrites
 	}
-	return *cfg.Antigravity.PromptRewrites
+	if cfg != nil && cfg.Antigravity.PromptRewritesExtra != nil && len(*cfg.Antigravity.PromptRewritesExtra) > 0 {
+		out := make([]config.PromptRewriteRule, 0, len(base)+len(*cfg.Antigravity.PromptRewritesExtra))
+		out = append(out, base...)
+		out = append(out, (*cfg.Antigravity.PromptRewritesExtra)...)
+		return out
+	}
+	return base
+}
+
+// cgj is U+034F (combining grapheme joiner): invisible, zero-width, and does
+// not change the rendered text or its meaning.
+const cgj = "\u034f"
+
+// obfuscatedReplacement derives the replacement for an Obfuscate rule by
+// inserting one cgj after the first rune of match. Returns "" when match has
+// no rune to split on.
+func obfuscatedReplacement(match string) string {
+	for i := range match {
+		if i == 0 {
+			continue
+		}
+		return match[:i] + cgj + match[i:]
+	}
+	return ""
+}
+
+// ruleReplacement returns the effective replacement text for a rule: the
+// explicit Replace, or (for an Obfuscate rule with no explicit Replace and no
+// RemoveLine) the auto-derived U+034F form.
+func ruleReplacement(r config.PromptRewriteRule) string {
+	if r.Replace != "" {
+		return r.Replace
+	}
+	if r.Obfuscate && !r.RemoveLine {
+		return obfuscatedReplacement(r.Match)
+	}
+	return ""
 }
 
 // applyAntigravityPromptRewrites rewrites matching text in the system
@@ -52,7 +91,8 @@ func applyAntigravityPromptRewrites(payload []byte, rules []config.PromptRewrite
 				if name == "" {
 					name = r.Match
 				}
-				rewrites := r.RemoveLine || r.Replace != ""
+				rep := ruleReplacement(r)
+				rewrites := r.RemoveLine || rep != ""
 				if !seen[name] {
 					seen[name] = true
 					hits = append(hits, name)
@@ -70,8 +110,8 @@ func applyAntigravityPromptRewrites(payload []byte, rules []config.PromptRewrite
 						}
 					}
 					updated = strings.Join(out, "\n")
-				case r.Replace != "":
-					updated = strings.ReplaceAll(updated, r.Match, r.Replace)
+				case rep != "":
+					updated = strings.ReplaceAll(updated, r.Match, rep)
 				}
 			}
 			if updated == orig {

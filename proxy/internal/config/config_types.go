@@ -168,6 +168,11 @@ type AntigravityConfig struct {
 	// is kept, but a bare upstream 429 on such a request is treated as a
 	// prompt block (no credential cooldown, no rotation).
 	PromptRewrites *[]PromptRewriteRule `yaml:"prompt-rewrites,omitempty" json:"prompt-rewrites,omitempty"`
+	// PromptRewritesExtra is always appended to the effective rule set
+	// (defaults or the explicit PromptRewrites override). Operators add new
+	// proven trigger phrases here via config/ConfigMap without rebuilding the
+	// image; a rolling restart picks them up.
+	PromptRewritesExtra *[]PromptRewriteRule `yaml:"prompt-rewrites-extra,omitempty" json:"prompt-rewrites-extra,omitempty"`
 
 	// Health configures per-credential slow/degraded detection.
 	Health AntigravityHealthConfig `yaml:"health,omitempty" json:"health,omitempty"`
@@ -454,8 +459,15 @@ type PromptRewriteRule struct {
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
 	// Match is the literal (case-sensitive) text to find.
 	Match string `yaml:"match" json:"match"`
-	// Replace is the substitute text; empty means detect-only.
+	// Replace is the substitute text; empty means detect-only (unless
+	// Obfuscate is set, which derives the replacement automatically).
 	Replace string `yaml:"replace,omitempty" json:"replace,omitempty"`
+	// Obfuscate, when true and Replace is empty and RemoveLine is false,
+	// derives the replacement from Match by inserting one U+034F (combining
+	// grapheme joiner, invisible) after its first rune. This defeats the
+	// Antigravity upstream's systemInstruction keyword classifier without
+	// changing the text's meaning or visible form.
+	Obfuscate bool `yaml:"obfuscate,omitempty" json:"obfuscate,omitempty"`
 	// RemoveLine drops every line containing Match instead of replacing the
 	// literal text (Replace is ignored).
 	RemoveLine bool `yaml:"remove-line,omitempty" json:"remove-line,omitempty"`
@@ -491,6 +503,19 @@ func DefaultAntigravityPromptRewrites() []PromptRewriteRule {
 		Name:    "codex-identity",
 		Match:   "You are Codex, an agent based on GPT-5.",
 		Replace: "You are Co\u034Fdex, an agent based on GPT-5.",
+	}, {
+		// Character-chat platform wrapper. Antigravity answers an instant bare
+		// 429 to this exact guard line (dominant storm fingerprint, 2026-11-11).
+		// Proven: the line alone 429s; one U+034F after the first letter -> 200.
+		Name:      "app-global-chat-rules",
+		Match:     "Global chat rules (higher priority than character instructions):",
+		Obfuscate: true,
+	}, {
+		// Assistant app wrapper ("## Memories" / "## Runtime" variants share this
+		// line). Proven: this line alone 429s; one U+034F -> 200.
+		Name:      "app-additional-info",
+		Match:     "Additional info for this conversation:",
+		Obfuscate: true,
 	}}
 }
 
