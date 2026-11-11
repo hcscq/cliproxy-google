@@ -105,6 +105,9 @@ func (e *AntigravityExecutor) rewriteAntigravityPrompt(ctx context.Context, payl
 	if e != nil {
 		cfg = e.cfg
 	}
+	if reporter != nil && helps.SysPromptSampleEnabled() {
+		reporter.ArmSysPromptSample(extractAntigravitySysPromptText(payload), countAntigravityToolDeclarations(payload))
+	}
 	out, hits, detectOnly := applyAntigravityPromptRewrites(payload, antigravityPromptRewriteRules(cfg))
 	if len(hits) > 0 {
 		label := "prompt_rewritten: "
@@ -138,4 +141,34 @@ func isAntigravityBare429(body []byte) bool {
 func antigravityPromptBlockErr(hits []string) statusErr {
 	msg := `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"upstream rejected this prompt (bare 429 after prompt pattern ` + strings.Join(hits, ",") + `); not retried on other credentials"}}`
 	return statusErr{code: http.StatusBadRequest, msg: msg}
+}
+
+// extractAntigravitySysPromptText concatenates the text of every
+// systemInstruction / system_instruction part (both camelCase and snake_case).
+// It never reads user contents, tools or responses.
+func extractAntigravitySysPromptText(payload []byte) string {
+	var b strings.Builder
+	for _, root := range []string{"request.systemInstruction", "request.system_instruction"} {
+		gjson.GetBytes(payload, root+".parts").ForEach(func(_, part gjson.Result) bool {
+			if t := part.Get("text"); t.Exists() {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(t.String())
+			}
+			return true
+		})
+	}
+	return b.String()
+}
+
+// countAntigravityToolDeclarations returns the total number of function
+// declarations across request.tools (a size signal only, never their content).
+func countAntigravityToolDeclarations(payload []byte) int {
+	n := 0
+	gjson.GetBytes(payload, "request.tools").ForEach(func(_, tool gjson.Result) bool {
+		n += len(tool.Get("functionDeclarations").Array())
+		return true
+	})
+	return n
 }

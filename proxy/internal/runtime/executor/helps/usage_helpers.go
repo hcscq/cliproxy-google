@@ -35,6 +35,9 @@ type UsageReporter struct {
 	thinkingParams      string
 	thinkingNote        string
 	promptNote          string
+	sysSampleArmed      bool
+	sysPromptText       string
+	sysPromptTools      int
 	thinkingSupport     *registry.ThinkingSupport
 	baseURL             string
 	executorType        string
@@ -365,6 +368,27 @@ func (r *UsageReporter) SetModelThinking(info *registry.ModelInfo) {
 	r.thinkingSupport = info.Thinking
 }
 
+// ArmSysPromptSample stores the client systemInstruction text and tool count so
+// that, if the opt-in sampler is enabled, publishWithOutcome/EnsurePublished can
+// record this request's outcome. Only the Antigravity executor arms it, keeping
+// sampling scoped to the Antigravity/Gemini live path.
+func (r *UsageReporter) ArmSysPromptSample(sysText string, tools int) {
+	if r == nil {
+		return
+	}
+	r.sysSampleArmed = true
+	r.sysPromptText = sysText
+	r.sysPromptTools = tools
+}
+
+// recordSysSample forwards one outcome to the sampler (no-op unless armed).
+func (r *UsageReporter) recordSysSample(statusCode int, failed bool) {
+	if r == nil || !r.sysSampleArmed {
+		return
+	}
+	RecordSysPromptSample(r.sysPromptText, r.model, r.stream, r.sysPromptTools, statusCode, failed, r.latency())
+}
+
 // SetPromptNote records that a prompt rewrite/detect rule matched; it is
 // appended to the request log note.
 func (r *UsageReporter) SetPromptNote(note string) {
@@ -573,6 +597,11 @@ func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 	detail = normalizeUsageDetailTotal(detail, r.provider, r.executorType)
 	r.once.Do(func() {
 		r.publishAttemptRecord(ctx, r.buildRecord(detail, failed, fail))
+		status := http.StatusOK
+		if failed {
+			status = fail.StatusCode
+		}
+		r.recordSysSample(status, failed)
 	})
 }
 
@@ -601,6 +630,7 @@ func (r *UsageReporter) EnsurePublished(ctx context.Context) {
 	}
 	r.once.Do(func() {
 		r.publishAttemptRecord(ctx, r.buildRecord(usage.Detail{}, false, usage.Failure{}))
+		r.recordSysSample(http.StatusOK, false)
 	})
 }
 
