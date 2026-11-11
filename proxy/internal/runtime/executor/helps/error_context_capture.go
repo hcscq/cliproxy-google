@@ -224,3 +224,11 @@ func RecordErrorContext(sysText, model string, stream bool, tools, status int, f
 
 // ErrorContextCaptureSnapshot returns the current aggregate for the endpoint.
 func ErrorContextCaptureSnapshot() map[string]any { return errCtx.snapshot() }
+
+// ReloadErrorContextCaptureFromEnvForTest re-reads the env configuration into
+// the package capturer. Test-only seam; not used in production code.
+func ReloadErrorContextCaptureFromEnvForTest() { errCtx = newErrCtxFromEnv() }
+
+// DisableErrorContextCaptureForTest resets the capturer to the default-off
+// state. Test-only seam.
+func DisableErrorContextCaptureForTest() { errCtx = &errCtxCapturer{} }
