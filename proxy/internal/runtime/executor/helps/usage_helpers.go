@@ -392,6 +392,42 @@ func (r *UsageReporter) recordSysSample(statusCode int, failed bool, inputTokens
 
 // SetPromptNote records that a prompt rewrite/detect rule matched; it is
 // appended to the request log note.
+// AddPromptRewritten merges additional rewritten-rule names into the prompt
+// note, reusing the existing "prompt_rewritten: <names>" format so sensitive-
+// word obfuscation hits are counted alongside prompt-rewrite hits.
+func (r *UsageReporter) AddPromptRewritten(names ...string) {
+	if r == nil || len(names) == 0 {
+		return
+	}
+	const pfx = "prompt_rewritten: "
+	existing := strings.TrimSpace(r.promptNote)
+	var have []string
+	var trailer string
+	if strings.HasPrefix(existing, pfx) {
+		have = strings.Split(strings.TrimPrefix(existing, pfx), ",")
+	} else if existing != "" {
+		trailer = existing
+	}
+	seen := make(map[string]struct{}, len(have)+len(names))
+	merged := make([]string, 0, len(have)+len(names))
+	for _, n := range append(have, names...) {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		merged = append(merged, n)
+	}
+	note := pfx + strings.Join(merged, ",")
+	if trailer != "" {
+		note = trailer + "; " + note
+	}
+	r.promptNote = note
+}
+
 func (r *UsageReporter) SetPromptNote(note string) {
 	if r == nil {
 		return

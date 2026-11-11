@@ -235,8 +235,8 @@ func TestAntigravitySensitiveWordsObfuscatesSystemInstructionOnly(t *testing.T) 
 	})
 	payload := []byte(`{"request":{"systemInstruction":{"parts":[{"text":"Use proxy safely"}]},"contents":[{"role":"user","parts":[{"text":"proxy remains unchanged"}]}]}}`)
 
-	got := executor.obfuscateSensitiveWords(payload)
-	if systemText := gjson.GetBytes(got, "request.systemInstruction.parts.0.text").String(); systemText != "Use p\u200Broxy safely" {
+	got := executor.obfuscateSensitiveWords(payload, nil)
+	if systemText := gjson.GetBytes(got, "request.systemInstruction.parts.0.text").String(); systemText != "Use p\u034Froxy safely" {
 		t.Fatalf("system instruction = %q, want zero-width obfuscation", systemText)
 	}
 	if contentText := gjson.GetBytes(got, "request.contents.0.parts.0.text").String(); contentText != "proxy remains unchanged" {
@@ -289,7 +289,7 @@ func TestAntigravityStreamObfuscatesSensitiveSystemInstruction(t *testing.T) {
 
 	body := <-captured
 	got := gjson.GetBytes(body, "request.systemInstruction.parts.0.text").String()
-	want := "You are H\u200Bermes Agent, an intelligent AI assistant created by N\u200Bous Research."
+	want := "You are H\u034Fermes Agent, an intelligent AI assistant created by N\u034Fous R\u034Fesearch."
 	if got != want {
 		t.Fatalf("system instruction = %q, want %q; body=%s", got, want, body)
 	}

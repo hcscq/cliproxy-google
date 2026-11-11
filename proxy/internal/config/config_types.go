@@ -161,6 +161,12 @@ type AntigravityConfig struct {
 	// SensitiveWords is a list of words to obfuscate with zero-width characters in system instructions.
 	SensitiveWords []string `yaml:"sensitive-words,omitempty" json:"sensitive-words,omitempty"`
 
+	// SensitiveWordsReplace maps a literal phrase to its replacement text, applied
+	// to Antigravity system instructions in a single longest-match-first pass with
+	// no cascade. Default empty. NOTE: literal replacement CHANGES SEMANTICS, so it
+	// is an operator-only tool and must stay empty unless deliberately configured.
+	SensitiveWordsReplace map[string]string `yaml:"sensitive-words-replace,omitempty" json:"sensitive-words-replace,omitempty"`
+
 	// PromptRewrites lists literal system-prompt rewrites applied before the
 	// request is sent upstream (system instruction only). nil = built-in
 	// defaults (see DefaultAntigravityPromptRewrites); an explicit empty list

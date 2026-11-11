@@ -1060,9 +1060,15 @@ oauth:
 
     # Antigravity provider behavior.
     antigravity:
-      # sensitive-words:              # optional: words to obfuscate with zero-width characters in system instructions
-      #   - "API"
-      #   - "proxy"
+      # sensitive-words:              # optional: words to obfuscate in Antigravity system instructions.
+      #   - "API"                     # Each matched word gets an invisible U+034F (combining grapheme
+      #   - "proxy"                   # joiner) inserted per sub-word. Meaning-preserving; NOT U+200B
+      #                               # (U+200B is stripped upstream and still triggers a false 429).
+      # sensitive-words-replace:      # optional, DEFAULT EMPTY. Literal phrase -> replacement, applied to
+      #                               # Antigravity system instructions in a single longest-match-first pass
+      #                               # (no cascade). WARNING: literal replacement CHANGES SEMANTICS; it is an
+      #                               # operator-only escape hatch. Leave empty unless deliberately needed.
+      #   "old phrase": "new phrase"
       # connection-pool:              # optional: upstream HTTP connection pool settings
       #   enabled: false             # whether to enable connection pooling (default: false)
       #   idle-conn-timeout: "30s"    # idle keep-alive timeout (default: 30s, capped at 210s)

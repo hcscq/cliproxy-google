@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"regexp"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -66,4 +67,15 @@ func GenerateFakeUserIDWithSessionID(sessionID string) string {
 
 func IsValidUserID(userID string) bool {
 	return isValidUserID(userID)
+}
+
+// StripCloakChars removes both the legacy U+200B zero-width space and the
+// U+034F combining grapheme joiner used for sensitive-word obfuscation. It is
+// safe to call on any text (Claude identity/response cleanup, diagnostics) and
+// is a no-op when neither marker is present.
+func StripCloakChars(s string) string {
+	if !strings.ContainsAny(s, "\u200B\u034F") {
+		return s
+	}
+	return strings.NewReplacer("\u200B", "", "\u034F", "").Replace(s)
 }
