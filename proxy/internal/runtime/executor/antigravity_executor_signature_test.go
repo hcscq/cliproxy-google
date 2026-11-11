@@ -289,9 +289,16 @@ func TestAntigravityStreamObfuscatesSensitiveSystemInstruction(t *testing.T) {
 
 	body := <-captured
 	got := gjson.GetBytes(body, "request.systemInstruction.parts.0.text").String()
-	want := "You are H\u034Fermes Agent, an intelligent AI assistant created by N\u034Fous R\u034Fesearch."
+	base := "You are H\u034Fermes Agent, an intelligent AI assistant created by N\u034Fous R\u034Fesearch."
+	want, _ := obfuscateLatinSubwords(base)
 	if got != want {
 		t.Fatalf("system instruction = %q, want %q; body=%s", got, want, body)
+	}
+	if strings.Contains(got, "H\u034F\u034F") || strings.Contains(got, "N\u034F\u034F") || strings.Contains(got, "R\u034F\u034F") {
+		t.Fatalf("sensitive-word marks were doubled: %q", got)
+	}
+	if stripCGJ(got) != "You are Hermes Agent, an intelligent AI assistant created by Nous Research." {
+		t.Fatalf("visible meaning changed: %q", got)
 	}
 }
 
