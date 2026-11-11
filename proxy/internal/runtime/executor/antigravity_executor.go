@@ -64,12 +64,30 @@ func NewAntigravityExecutor(cfg *config.Config) *AntigravityExecutor {
 	return &AntigravityExecutor{cfg: cfg}
 }
 
-func (e *AntigravityExecutor) obfuscateSensitiveWords(payload []byte) []byte {
-	if e == nil || e.cfg == nil || len(e.cfg.Antigravity.SensitiveWords) == 0 {
+func (e *AntigravityExecutor) obfuscateSensitiveWords(payload []byte, reporter *helps.UsageReporter) []byte {
+	if e == nil || e.cfg == nil {
 		return payload
 	}
-	matcher := helps.BuildSensitiveWordMatcher(e.cfg.Antigravity.SensitiveWords)
-	return helps.ObfuscateSensitiveWordsInSystemInstruction(payload, matcher)
+	words := e.cfg.Antigravity.SensitiveWords
+	replace := e.cfg.Antigravity.SensitiveWordsReplace
+	if len(words) == 0 && len(replace) == 0 {
+		return payload
+	}
+	matcher := helps.BuildAntigravitySensitiveWordMatcher(words, replace)
+	if matcher == nil {
+		return payload
+	}
+	out := helps.ObfuscateSensitiveWordsInSystemInstruction(payload, matcher)
+	if reporter != nil && !bytes.Equal(out, payload) {
+		// Reuse the prompt_rewritten hit-count channel. Report the replacement
+		// rule name only when literal replacements are configured.
+		if len(replace) > 0 {
+			reporter.AddPromptRewritten("sensitive-words-replace")
+		} else {
+			reporter.AddPromptRewritten("sensitive-words")
+		}
+	}
+	return out
 }
 
 // Each Antigravity credential gets its own HTTP/1.1 connection pool. Sessions routed

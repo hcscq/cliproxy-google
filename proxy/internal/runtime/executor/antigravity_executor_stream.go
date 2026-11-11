@@ -99,7 +99,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
 	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
-	translated = e.obfuscateSensitiveWords(translated)
+	translated = e.obfuscateSensitiveWords(translated, reporter)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	translated, _ = sjson.DeleteBytes(translated, "request.stream")
 	reporter.SetModelThinking(modelInfo)

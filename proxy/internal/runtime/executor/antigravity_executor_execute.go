@@ -98,7 +98,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
 	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
-	translated = e.obfuscateSensitiveWords(translated)
+	translated = e.obfuscateSensitiveWords(translated, reporter)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	if errPre := antigravityContextPrecheckError(baseModel, modelInfo, translated); errPre != nil {
 		return resp, errPre
@@ -386,7 +386,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
 	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
-	translated = e.obfuscateSensitiveWords(translated)
+	translated = e.obfuscateSensitiveWords(translated, reporter)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	if errPre := antigravityContextPrecheckError(baseModel, modelInfo, translated); errPre != nil {
 		return resp, errPre
