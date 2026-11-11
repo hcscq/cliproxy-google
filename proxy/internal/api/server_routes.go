@@ -68,6 +68,12 @@ func (s *Server) setupRoutes() {
 	v1.Use(AuthMiddleware(s.accessManager))
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
+		// Opt-in, bounded, in-memory systemInstruction sampler aggregate (data plane).
+		// Proxy pods do not register the management API, so this read-only endpoint is
+		// served here under the existing api-key auth; query each pod and merge.
+		v1.GET("/debug/sysprompt-sample", func(c *gin.Context) {
+			c.JSON(http.StatusOK, helps.SysPromptSampleSnapshot())
+		})
 		v1.GET("/models/*model", func(c *gin.Context) {
 			c.Set(handlers.ModelDetailIDContextKey, strings.TrimPrefix(c.Param("model"), "/"))
 			s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers)(c)
