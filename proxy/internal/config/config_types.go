@@ -479,6 +479,18 @@ func DefaultAntigravityPromptRewrites() []PromptRewriteRule {
 		Name:       "claude-code-billing-header",
 		Match:      "x-anthropic-billing-header:",
 		RemoveLine: true,
+	}, {
+		// Codex desktop identity line (router-for-me/CLIProxyAPI#7428). Since
+		// ~2026-11-10 19:00 UTC Antigravity answers it with an instant bare 429
+		// RESOURCE_EXHAUSTED in any systemInstruction part. U+200B obfuscation
+		// is stripped upstream and still 429s; a U+034F (combining grapheme
+		// joiner, invisible) inside "Codex" returns 200, so the sentence keeps
+		// its meaning with a one-rune change. Only this exact sentence is
+		// matched: "You are Codex." or "...Codex, based on GPT-5..." are not
+		// blocked upstream and are left alone.
+		Name:    "codex-identity",
+		Match:   "You are Codex, an agent based on GPT-5.",
+		Replace: "You are Co\u034Fdex, an agent based on GPT-5.",
 	}}
 }
 
