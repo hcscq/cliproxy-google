@@ -152,6 +152,15 @@ func (e *AntigravityExecutor) rewriteAntigravityPrompt(ctx context.Context, payl
 		reporter.ArmSysPromptSample(extractAntigravitySysPromptText(payload), countAntigravityToolDeclarations(payload))
 	}
 	out, hits, detectOnly := applyAntigravityPromptRewrites(payload, antigravityPromptRewriteRules(cfg))
+	if genericObfuscateEnabled() {
+		var marked int
+		var changed bool
+		out, changed, marked = applyGenericSubwordObfuscate(out)
+		if changed && marked > 0 {
+			hits = append(hits, genericObfuscateRuleName)
+			log.WithContext(ctx).Debugf("antigravity executor: %s marked %d subwords", genericObfuscateRuleName, marked)
+		}
+	}
 	if len(hits) > 0 {
 		label := "prompt_rewritten: "
 		if len(detectOnly) == len(hits) {

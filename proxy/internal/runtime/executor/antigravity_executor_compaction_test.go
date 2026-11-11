@@ -322,14 +322,14 @@ func TestAntigravityCompactionReplayNextTurn(t *testing.T) {
 	foundContext := false
 	for _, content := range gotContents {
 		for _, part := range content.Get("parts").Array() {
-			if strings.Contains(part.Get("text").String(), "Context summary from previous turns") {
+			if containsPlain(part.Get("text").String(), "Context summary from previous turns") {
 				foundContext = true
 			}
 		}
 	}
 	if !foundContext {
 		systemText := gjson.GetBytes(gotBody, "request.systemInstruction.parts.0.text").String()
-		if strings.Contains(systemText, "Context summary from previous turns") {
+		if containsPlain(systemText, "Context summary from previous turns") {
 			foundContext = true
 		}
 	}
@@ -443,7 +443,7 @@ func TestAntigravityCompactionSequentialCompactionPreservesContext(t *testing.T)
 		t.Fatalf("expected at least 2 summary requests, got %d", len(summaryRequestBodies))
 	}
 	secondReqBody := string(summaryRequestBodies[1])
-	if !strings.Contains(secondReqBody, "Context summary from previous turns") {
+	if !containsPlain(secondReqBody, "Context summary from previous turns") {
 		t.Fatalf("second summary request to upstream did not preserve first compaction summary: %s", secondReqBody)
 	}
 
