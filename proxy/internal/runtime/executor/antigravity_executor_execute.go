@@ -194,6 +194,10 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			if useCredits && antigravityHasExplicitCreditsBalanceExhaustedReason(bodyBytes) && !antigravityCoolingDisabled(auth, e.cfg) {
 				markAntigravityCreditsPermanentlyDisabled(auth)
 			}
+			if errMarkCooldown := recordAntigravityQuotaExhaustedCooldown(ctx, e.cfg, auth, baseModel, decision, time.Now()); errMarkCooldown != nil {
+				err = homeKVUnavailableStatusErr(errMarkCooldown)
+				return resp, err
+			}
 			// No credits logic - just fall through to error return below
 		}
 	}
@@ -489,6 +493,10 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 				closeAntigravityAuthIdleTransports(auth)
 				if useCredits && antigravityHasExplicitCreditsBalanceExhaustedReason(bodyBytes) && !antigravityCoolingDisabled(auth, e.cfg) {
 					markAntigravityCreditsPermanentlyDisabled(auth)
+				}
+				if errMarkCooldown := recordAntigravityQuotaExhaustedCooldown(ctx, e.cfg, auth, baseModel, decision, time.Now()); errMarkCooldown != nil {
+					err = homeKVUnavailableStatusErr(errMarkCooldown)
+					return resp, err
 				}
 				// No credits logic - just fall through to error return below
 			}
