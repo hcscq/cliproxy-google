@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -283,6 +284,78 @@ func decideAntigravity429(body []byte) antigravity429Decision {
 
 func antigravityCreditsRetryEnabled(cfg *config.Config) bool {
 	return cfg != nil && cfg.QuotaExceeded.AntigravityCredits
+}
+
+const (
+	defaultAntigravityQuotaExhaustedCooldownMin = 10 * time.Minute
+	defaultAntigravityQuotaExhaustedCooldownMax = 24 * time.Hour
+)
+
+// recordAntigravityQuotaExhaustedCooldown parks auth×model for a long-reset
+// QUOTA_EXHAUSTED 429 using the shared home-KV per-credential×model cooldown, so
+// the exhausted credential is skipped on selection (and the request switches to
+// another credential) until the parsed reset, instead of being re-probed within
+// seconds. No-op unless QuotaExceeded.AntigravityQuotaExhaustedCooldown is on
+// and a parsed reset >= the min threshold is present. Model-scoped. Returns an
+// error only when the shared KV store is unavailable (same contract as the
+// short-cooldown path); with the switch off it returns nil before any KV call,
+// so behavior is byte-identical to before.
+func recordAntigravityQuotaExhaustedCooldown(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, modelName string, decision antigravity429Decision, now time.Time) error {
+	// Enabled by the config switch OR by the env override (env makes gradual
+	// rollout reliable via `kubectl set env` even if central config writes are
+	// unavailable). Default OFF -> returns before any KV call, byte-identical to
+	// the prior behavior.
+	cfgOn := cfg != nil && cfg.QuotaExceeded.AntigravityQuotaExhaustedCooldown
+	if !cfgOn && strings.TrimSpace(os.Getenv("CPA_QUOTA_EXHAUSTED_COOLDOWN")) != "1" {
+		return nil
+	}
+	if decision.retryAfter == nil || *decision.retryAfter <= 0 {
+		return nil
+	}
+	if antigravityCoolingDisabled(auth, cfg) {
+		return nil
+	}
+	minSec := 0
+	maxSec := 0
+	if cfg != nil {
+		minSec = cfg.QuotaExceeded.AntigravityQuotaExhaustedCooldownMinSeconds
+		maxSec = cfg.QuotaExceeded.AntigravityQuotaExhaustedCooldownMaxSeconds
+	}
+	if v := antigravityEnvInt("CPA_QUOTA_EXHAUSTED_COOLDOWN_MIN_SEC"); v > 0 {
+		minSec = v
+	}
+	if v := antigravityEnvInt("CPA_QUOTA_EXHAUSTED_COOLDOWN_MAX_SEC"); v > 0 {
+		maxSec = v
+	}
+	minReset := time.Duration(minSec) * time.Second
+	if minReset <= 0 {
+		minReset = defaultAntigravityQuotaExhaustedCooldownMin
+	}
+	if *decision.retryAfter < minReset {
+		return nil
+	}
+	maxReset := time.Duration(maxSec) * time.Second
+	if maxReset <= 0 {
+		maxReset = defaultAntigravityQuotaExhaustedCooldownMax
+	}
+	cooldown := *decision.retryAfter
+	if cooldown > maxReset {
+		cooldown = maxReset
+	}
+	return markAntigravityShortCooldownRequired(ctx, auth, modelName, now, cooldown)
+}
+
+// antigravityEnvInt parses a positive integer env var; returns 0 when unset/invalid.
+func antigravityEnvInt(key string) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func clearAntigravityCreditsFailureState(auth *cliproxyauth.Auth) {

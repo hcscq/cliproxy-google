@@ -254,6 +254,10 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 				if useCredits && antigravityHasExplicitCreditsBalanceExhaustedReason(bodyBytes) && !antigravityCoolingDisabled(auth, e.cfg) {
 					markAntigravityCreditsPermanentlyDisabled(auth)
 				}
+				if errMarkCooldown := recordAntigravityQuotaExhaustedCooldown(ctx, e.cfg, auth, baseModel, decision, time.Now()); errMarkCooldown != nil {
+					err = homeKVUnavailableStatusErr(errMarkCooldown)
+					return nil, err
+				}
 				// No credits logic - just fall through to error return below
 			}
 		}

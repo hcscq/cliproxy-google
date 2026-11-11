@@ -736,6 +736,25 @@ type QuotaExceeded struct {
 	// When all free-tier auths are exhausted (429/503), the conductor retries with
 	// an auth that has available Google One AI credits.
 	AntigravityCredits bool `yaml:"antigravity-credits" json:"antigravity-credits"`
+
+	// AntigravityQuotaExhaustedCooldown parks a credential for ONE model when the
+	// upstream returns a long-reset QUOTA_EXHAUSTED 429 (e.g. "Individual quota
+	// reached ... Resets in 65h"), reusing the shared home-KV per-credential×model
+	// cooldown so the exhausted credential is skipped (and the request switches to
+	// another credential) until the parsed reset instead of being re-probed every
+	// few seconds. Default OFF. Model-scoped: it never touches the credential's
+	// other models. The cooldown auto-expires (single re-probe after it ends).
+	AntigravityQuotaExhaustedCooldown bool `yaml:"antigravity-quota-exhausted-cooldown" json:"antigravity-quota-exhausted-cooldown"`
+
+	// AntigravityQuotaExhaustedCooldownMinSeconds is the threshold: only park when
+	// the parsed reset is at least this many seconds (default 600 = 10m). Shorter
+	// resets keep the existing per-minute short-cooldown behavior.
+	AntigravityQuotaExhaustedCooldownMinSeconds int `yaml:"antigravity-quota-exhausted-cooldown-min-seconds" json:"antigravity-quota-exhausted-cooldown-min-seconds"`
+
+	// AntigravityQuotaExhaustedCooldownMaxSeconds caps how long a credential×model
+	// is parked (default 86400 = 24h) so an over-long or wrong reset estimate does
+	// not idle a credential indefinitely.
+	AntigravityQuotaExhaustedCooldownMaxSeconds int `yaml:"antigravity-quota-exhausted-cooldown-max-seconds" json:"antigravity-quota-exhausted-cooldown-max-seconds"`
 }
 
 // RoutingConfig configures how credentials are selected for requests.
