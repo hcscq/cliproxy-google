@@ -116,3 +116,74 @@ func TestApplyAntigravityPromptRewritesCodexNearMissesUntouched(t *testing.T) {
 		}
 	}
 }
+
+func TestObfuscatedReplacementInsertsCGJ(t *testing.T) {
+	got := obfuscatedReplacement("Global chat rules (higher priority than character instructions):")
+	want := "G\u034flobal chat rules (higher priority than character instructions):"
+	if got != want {
+		t.Fatalf("obfuscatedReplacement = %q", got)
+	}
+	if obfuscatedReplacement("") != "" {
+		t.Fatal("empty match must yield empty replacement")
+	}
+}
+
+func TestApplyAntigravityAppWrapperDefaults(t *testing.T) {
+	// Both proven app-wrapper default rules rewrite via Obfuscate, only in
+	// systemInstruction, leaving user content untouched.
+	const g = "Global chat rules (higher priority than character instructions):"
+	const a = "Additional info for this conversation:"
+	in := []byte(`{"request":{"systemInstruction":{"parts":[{"text":"` + g + ` keep"},{"text":"You are a helpful assistant. ` + a + ` ## Memories"}]},"contents":[{"role":"user","parts":[{"text":"` + g + `"}]}]}}`)
+	out, hits, detect := applyAntigravityPromptRewrites(in, antigravityPromptRewriteRules(nil))
+	hitset := map[string]bool{}
+	for _, h := range hits {
+		hitset[h] = true
+	}
+	if !hitset["app-global-chat-rules"] || !hitset["app-additional-info"] {
+		t.Fatalf("missing hits: %v", hits)
+	}
+	if len(detect) != 0 {
+		t.Fatalf("obfuscate rules must rewrite, not detect-only: %v", detect)
+	}
+	p0 := gjson.GetBytes(out, "request.systemInstruction.parts.0.text").String()
+	if !strings.Contains(p0, "G\u034flobal chat rules") || strings.Contains(p0, g) {
+		t.Fatalf("part0 not obfuscated: %q", p0)
+	}
+	p1 := gjson.GetBytes(out, "request.systemInstruction.parts.1.text").String()
+	if !strings.Contains(p1, "A\u034fdditional info for this conversation:") || strings.Contains(p1, a) {
+		t.Fatalf("part1 not obfuscated: %q", p1)
+	}
+	// user content must be left exactly as-is
+	if gjson.GetBytes(out, "request.contents.0.parts.0.text").String() != g {
+		t.Fatal("user content was rewritten")
+	}
+}
+
+func TestPromptRewritesExtraAppendsToDefaults(t *testing.T) {
+	cfg := &config.Config{}
+	extra := []config.PromptRewriteRule{{Name: "extra-phrase", Match: "SECRET_WRAPPER_X", Obfuscate: true}}
+	cfg.Antigravity.PromptRewritesExtra = &extra
+	rules := antigravityPromptRewriteRules(cfg)
+	names := map[string]bool{}
+	for _, r := range rules {
+		names[r.Name] = true
+	}
+	if !names["codex-identity"] || !names["app-global-chat-rules"] || !names["extra-phrase"] {
+		t.Fatalf("extra must append to defaults, got %v", names)
+	}
+	in := []byte(`{"request":{"systemInstruction":{"parts":[{"text":"SECRET_WRAPPER_X here"}]}}}`)
+	out, hits, _ := applyAntigravityPromptRewrites(in, rules)
+	if len(hits) != 1 || hits[0] != "extra-phrase" {
+		t.Fatalf("hits=%v", hits)
+	}
+	if got := gjson.GetBytes(out, "request.systemInstruction.parts.0.text").String(); !strings.Contains(got, "S\u034fECRET_WRAPPER_X") {
+		t.Fatalf("extra obfuscate not applied: %q", got)
+	}
+	// explicit empty PromptRewrites disables defaults but extra still appends
+	empty := []config.PromptRewriteRule{}
+	cfg.Antigravity.PromptRewrites = &empty
+	rules2 := antigravityPromptRewriteRules(cfg)
+	if len(rules2) != 1 || rules2[0].Name != "extra-phrase" {
+		t.Fatalf("empty override + extra = %v", rules2)
+	}
+}
