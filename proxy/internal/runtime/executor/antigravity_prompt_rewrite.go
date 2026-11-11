@@ -145,7 +145,10 @@ func (e *AntigravityExecutor) rewriteAntigravityPrompt(ctx context.Context, payl
 	if e != nil {
 		cfg = e.cfg
 	}
-	if reporter != nil && helps.SysPromptSampleEnabled() {
+	// Arm the per-request system-prompt capture when EITHER diagnostic is on:
+	// the fingerprint sampler, or the opt-in full-context error capture. Both
+	// self-gate downstream, so arming for one never feeds the other.
+	if reporter != nil && (helps.SysPromptSampleEnabled() || helps.ErrorContextCaptureEnabled()) {
 		reporter.ArmSysPromptSample(extractAntigravitySysPromptText(payload), countAntigravityToolDeclarations(payload))
 	}
 	out, hits, detectOnly := applyAntigravityPromptRewrites(payload, antigravityPromptRewriteRules(cfg))
