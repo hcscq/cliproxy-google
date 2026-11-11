@@ -550,6 +550,24 @@ func DefaultAntigravityPromptRewrites() []PromptRewriteRule {
 		Name:      "app-two-models-turn-rule",
 		Match:     "Two models take turns to respond. Gemini first, then Arbmuilos.",
 		Obfuscate: true,
+	}, {
+		// Same character-chat platform wrapper as app-global-chat-rules and
+		// app-global-no-reveal-rule. The header and first "no-reveal" sentence
+		// are two independent triggers; this second Chinese rule sentence is a
+		// THIRD independent trigger in the same 228-rune wrapper. Captured from
+		// live gemini-2.5-flash-lite traffic on 2026-11-11 (fingerprint
+		// 0d8fbfee55af, 60/60) and verified on #214: this exact sentence alone
+		// -> instant bare 429; one U+034F after its first rune ("保") -> 200;
+		// dropping the first rune -> 200. The trailing full stop is present in
+		// live traffic and is included in the match (dropping it still 429s, so
+		// the period is not required, but the live form includes it). A+B
+		// obfuscation alone still 429s; A+B+C together returns 200. The phrase
+		// was already in the wrapper this morning; upstream began matching it
+		// around 16:12. Meaning-preserving one-rune change. Match does not
+		// include the leading "- " list marker.
+		Name:      "app-global-keep-format-rule",
+		Match:     "保持回复清晰、连贯，遵守当前角色聊天的既有回复格式和结构化输出协议。",
+		Obfuscate: true,
 	}}
 }
 
