@@ -382,11 +382,12 @@ func (r *UsageReporter) ArmSysPromptSample(sysText string, tools int) {
 }
 
 // recordSysSample forwards one outcome to the sampler (no-op unless armed).
-func (r *UsageReporter) recordSysSample(statusCode int, failed bool) {
+func (r *UsageReporter) recordSysSample(statusCode int, failed bool, inputTokens int64, body string) {
 	if r == nil || !r.sysSampleArmed {
 		return
 	}
-	RecordSysPromptSample(r.sysPromptText, r.model, r.stream, r.sysPromptTools, statusCode, failed, r.latency())
+	RecordSysPromptSample(r.sysPromptText, r.model, r.stream, r.sysPromptTools, statusCode, failed, r.latency(), inputTokens, r.promptNote)
+	RecordErrorContext(r.sysPromptText, r.model, r.stream, r.sysPromptTools, statusCode, failed, r.latency(), body)
 }
 
 // SetPromptNote records that a prompt rewrite/detect rule matched; it is
@@ -601,7 +602,7 @@ func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 		if failed {
 			status = fail.StatusCode
 		}
-		r.recordSysSample(status, failed)
+		r.recordSysSample(status, failed, detail.InputTokens, fail.Body)
 	})
 }
 
@@ -630,7 +631,7 @@ func (r *UsageReporter) EnsurePublished(ctx context.Context) {
 	}
 	r.once.Do(func() {
 		r.publishAttemptRecord(ctx, r.buildRecord(usage.Detail{}, false, usage.Failure{}))
-		r.recordSysSample(http.StatusOK, false)
+		r.recordSysSample(http.StatusOK, false, 0, "")
 	})
 }
 

@@ -43,6 +43,8 @@ type sysSampleEntry struct {
 	CSuccess     int
 	COther       int
 	Sum429Millis int64
+	Instant429   int
+	Input0_429   int
 	MaxLen       int
 	MaxTools     int
 	StreamTrue   int
@@ -65,7 +67,18 @@ type sysPromptSampler struct {
 	fps       map[string]*sysSampleEntry
 	other     *sysSampleEntry
 	cands     map[string]*sysSampleCand
+	rules     map[string]*ruleStat
 	total     int
+	instant0  int // 429 that were instant (<1s) AND input_tokens==0
+	instantN  int // all 429 counted for the instant0 ratio denominator
+}
+
+// ruleStat tracks, per prompt-rewrite rule name, how its rewritten requests
+// fared downstream: still 429 (deep trigger remains) vs 200 (recovered).
+type ruleStat struct {
+	RewrittenTotal int
+	Still429       int
+	OK             int
 }
 
 var sysSampler = newSysPromptSamplerFromEnv()
@@ -88,6 +101,7 @@ func newSysPromptSamplerFromEnv() *sysPromptSampler {
 	s.deadline = now.Add(s.ttl)
 	s.fps = make(map[string]*sysSampleEntry)
 	s.cands = make(map[string]*sysSampleCand)
+	s.rules = make(map[string]*ruleStat)
 	return s
 }
 
@@ -101,6 +115,7 @@ func (s *sysPromptSampler) expireLocked(now time.Time) {
 		s.fps = nil
 		s.other = nil
 		s.cands = nil
+		s.rules = nil
 	}
 }
 
@@ -123,6 +138,10 @@ func foldPrefix(text string) string {
 }
 
 func (s *sysPromptSampler) record(sysText, model string, stream bool, tools, statusCode int, failed bool) {
+	s.recordFull(sysText, model, stream, tools, statusCode, failed, 0, 0, "")
+}
+
+func (s *sysPromptSampler) recordFull(sysText, model string, stream bool, tools, statusCode int, failed bool, latency time.Duration, inputTokens int64, rewriteNote string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -173,6 +192,33 @@ func (s *sysPromptSampler) record(sysText, model string, stream bool, tools, sta
 		entry.Models[model]++
 	}
 
+	if is429 {
+		s.instantN++
+		if latency > 0 {
+			entry.Sum429Millis += latency.Milliseconds()
+		}
+		if latency > 0 && latency < time.Second && inputTokens == 0 {
+			entry.Instant429++
+			s.instant0++
+		}
+		if inputTokens == 0 {
+			entry.Input0_429++
+		}
+	}
+	for _, rn := range parseRewrittenRules(rewriteNote) {
+		rs := s.rules[rn]
+		if rs == nil {
+			rs = &ruleStat{}
+			s.rules[rn] = rs
+		}
+		rs.RewrittenTotal++
+		if is429 {
+			rs.Still429++
+		} else if success {
+			rs.OK++
+		}
+	}
+
 	for _, cand := range sysSampleCandidates {
 		if !strings.Contains(sysText, cand) {
 			continue
@@ -200,6 +246,8 @@ type fpOut struct {
 	COther       int            `json:"c_other"`
 	Rate429Pct   float64        `json:"rate_429_pct"`
 	Avg429Millis int64          `json:"avg_429_ms"`
+	Instant429   int            `json:"instant_429"`
+	Input0_429   int            `json:"input0_429"`
 	MaxLen       int            `json:"max_sysprompt_len"`
 	MaxTools     int            `json:"max_tools"`
 	StreamTrue   int            `json:"stream_true"`
@@ -229,7 +277,8 @@ func (s *sysPromptSampler) snapshot() map[string]any {
 	mk := func(key string, e *sysSampleEntry) fpOut {
 		o := fpOut{Fingerprint: key, Prefix: e.Prefix, Total: e.Total, C429: e.C429,
 			CSuccess: e.CSuccess, COther: e.COther, MaxLen: e.MaxLen, MaxTools: e.MaxTools,
-			StreamTrue: e.StreamTrue, StreamFalse: e.StreamFalse, Models: e.Models}
+			StreamTrue: e.StreamTrue, StreamFalse: e.StreamFalse, Models: e.Models,
+			Instant429: e.Instant429, Input0_429: e.Input0_429}
 		if e.Total > 0 {
 			o.Rate429Pct = float64(int(1000*float64(e.C429)/float64(e.Total))) / 10
 		}
@@ -257,6 +306,22 @@ func (s *sysPromptSampler) snapshot() map[string]any {
 		cands[name] = map[string]int{"contains": c.Contains, "c429": c.C429, "c_success": c.CSuccess}
 	}
 	out["candidates"] = cands
+	// (a) instant (<1s) 429 with input_tokens==0 as a share of all 429
+	out["instant_input0_429"] = s.instant0
+	out["total_429"] = s.instantN
+	if s.instantN > 0 {
+		out["instant_input0_429_pct"] = float64(int(1000*float64(s.instant0)/float64(s.instantN))) / 10
+	}
+	// (d) per prompt-rewrite rule: did rewritten requests recover (200) or still 429?
+	rules := map[string]map[string]any{}
+	for name, rs := range s.rules {
+		m := map[string]any{"rewritten_total": rs.RewrittenTotal, "still_429": rs.Still429, "ok": rs.OK}
+		if rs.RewrittenTotal > 0 {
+			m["success_pct"] = float64(int(1000*float64(rs.OK)/float64(rs.RewrittenTotal))) / 10
+		}
+		rules[name] = m
+	}
+	out["rule_stats"] = rules
 	return out
 }
 
@@ -265,38 +330,36 @@ func SysPromptSampleEnabled() bool { return sysSampler.active() }
 
 // RecordSysPromptSample records one Antigravity request outcome. latency is only
 // used for 429 average latency. It is a no-op when the sampler is disabled.
-func RecordSysPromptSample(sysText, model string, stream bool, tools, statusCode int, failed bool, latency time.Duration) {
+func RecordSysPromptSample(sysText, model string, stream bool, tools, statusCode int, failed bool, latency time.Duration, inputTokens int64, rewriteNote string) {
 	if sysText == "" {
 		return
 	}
-	sysSampler.mu.Lock()
-	if !sysSampler.enabled {
-		sysSampler.mu.Unlock()
-		return
-	}
-	sysSampler.mu.Unlock()
-	// record (re-checks enablement/TTL under lock)
-	sysSampler.recordWithLatency(sysText, model, stream, tools, statusCode, failed, latency)
+	sysSampler.recordFull(sysText, model, stream, tools, statusCode, failed, latency, inputTokens, rewriteNote)
 }
 
 func (s *sysPromptSampler) recordWithLatency(sysText, model string, stream bool, tools, statusCode int, failed bool, latency time.Duration) {
-	s.record(sysText, model, stream, tools, statusCode, failed)
-	if statusCode != 429 || latency <= 0 {
-		return
+	s.recordFull(sysText, model, stream, tools, statusCode, failed, latency, 0, "")
+}
+
+// parseRewrittenRules extracts rule names from a "prompt_rewritten: a,b,c" note.
+// A detect-only "prompt_flagged:" note is ignored (no rewrite happened).
+func parseRewrittenRules(note string) []string {
+	const pfx = "prompt_rewritten: "
+	i := strings.Index(note, pfx)
+	if i < 0 {
+		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.enabled {
-		return
+	rest := note[i+len(pfx):]
+	if j := strings.IndexByte(rest, '|'); j >= 0 {
+		rest = rest[:j]
 	}
-	prefix := foldPrefix(sysText)
-	sum := sha256.Sum256([]byte(prefix))
-	key := hex.EncodeToString(sum[:])[:12]
-	if e := s.fps[key]; e != nil {
-		e.Sum429Millis += latency.Milliseconds()
-	} else if s.other != nil {
-		s.other.Sum429Millis += latency.Milliseconds()
+	var out []string
+	for _, r := range strings.Split(rest, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
 	}
+	return out
 }
 
 // SysPromptSampleSnapshot returns the current aggregate for the mgmt endpoint.
