@@ -141,6 +141,10 @@ func applyAntigravityPromptRewrites(payload []byte, rules []config.PromptRewrite
 // records a request-log note when any rule matched, and returns the
 // detect-only hits (text still present upstream) used for 429 classification.
 func (e *AntigravityExecutor) rewriteAntigravityPrompt(ctx context.Context, payload []byte, reporter *helps.UsageReporter) ([]byte, []string) {
+	return e.rewriteAntigravityPromptAtLevel(ctx, payload, reporter, 0)
+}
+
+func (e *AntigravityExecutor) rewriteAntigravityPromptAtLevel(ctx context.Context, payload []byte, reporter *helps.UsageReporter, level int) ([]byte, []string) {
 	var cfg *config.Config
 	if e != nil {
 		cfg = e.cfg
@@ -160,6 +164,13 @@ func (e *AntigravityExecutor) rewriteAntigravityPrompt(ctx context.Context, payl
 			hits = append(hits, genericObfuscateRuleName)
 			log.WithContext(ctx).Debugf("antigravity executor: %s marked %d subwords", genericObfuscateRuleName, marked)
 		}
+	}
+	return finishAntigravityPromptRewrite(ctx, out, hits, detectOnly, reporter, level)
+}
+
+func finishAntigravityPromptRewrite(ctx context.Context, out []byte, hits, detectOnly []string, reporter *helps.UsageReporter, level int) ([]byte, []string) {
+	if level >= 1 {
+		out, hits = applyStartLevel(out, level, hits)
 	}
 	if len(hits) > 0 {
 		label := "prompt_rewritten: "
