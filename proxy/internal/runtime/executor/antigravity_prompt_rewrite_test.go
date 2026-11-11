@@ -211,3 +211,42 @@ func TestAntigravityNoRevealRuleObfuscatedWithHeader(t *testing.T) {
 		t.Fatalf("hits missing a rule: %v", hits)
 	}
 }
+
+func TestAntigravityG38ContentTriggerRules(t *testing.T) {
+	const rp = "You are engaging in **immersive character role-playing**, not conversing as an AI assistant."
+	const tm = "Two models take turns to respond. Gemini first, then Arbmuilos."
+	sys := "Core Positioning" + rp + " Your only identity...\n{\"content\":\"" + tm + "\\n\\n[Model Card]\"}"
+	payload := []byte(`{"request":{"systemInstruction":{"parts":[{"text":` + mustJSON(t, sys) + `}]}}}`)
+	out, hits, _ := applyAntigravityPromptRewrites(payload, config.DefaultAntigravityPromptRewrites())
+	got := gjson.GetBytes(out, "request.systemInstruction.parts.0.text").String()
+	// each trigger sentence obfuscated with one U+034F after its first rune
+	if !strings.Contains(got, "Y\u034fou are engaging in **immersive character role-playing**") {
+		t.Fatalf("roleplay sentence not obfuscated: %q", got)
+	}
+	if !strings.Contains(got, "T\u034fwo models take turns to respond. Gemini first, then Arbmuilos.") {
+		t.Fatalf("two-models sentence not obfuscated: %q", got)
+	}
+	// original (un-joined) forms must be gone
+	if strings.Contains(got, rp) || strings.Contains(got, tm) {
+		t.Fatalf("original trigger text still present: %q", got)
+	}
+	hitset := strings.Join(hits, ",")
+	if !strings.Contains(hitset, "app-immersive-roleplay-rule") || !strings.Contains(hitset, "app-two-models-turn-rule") {
+		t.Fatalf("hits missing a rule: %v", hits)
+	}
+}
+
+func TestAntigravityG38RulesDoNotTouchBenign(t *testing.T) {
+	// A benign prompt (and the large real-quota roleplay prompt family) that does
+	// not contain the exact trigger sentences must be left byte-identical.
+	sys := "You are a helpful assistant. The user enjoys immersive character stories; two models may help."
+	payload := []byte(`{"request":{"systemInstruction":{"parts":[{"text":` + mustJSON(t, sys) + `}]}}}`)
+	out, hits, _ := applyAntigravityPromptRewrites(payload, config.DefaultAntigravityPromptRewrites())
+	got := gjson.GetBytes(out, "request.systemInstruction.parts.0.text").String()
+	if got != sys {
+		t.Fatalf("benign prompt was modified: %q", got)
+	}
+	if strings.Contains(strings.Join(hits, ","), "app-immersive-roleplay-rule") || strings.Contains(strings.Join(hits, ","), "app-two-models-turn-rule") {
+		t.Fatalf("benign prompt hit a g3.8 rule: %v", hits)
+	}
+}
