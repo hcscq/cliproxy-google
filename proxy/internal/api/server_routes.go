@@ -74,6 +74,11 @@ func (s *Server) setupRoutes() {
 		v1.GET("/debug/sysprompt-sample", func(c *gin.Context) {
 			c.JSON(http.StatusOK, helps.SysPromptSampleSnapshot())
 		})
+		// Opt-in, bounded, in-memory, self-expiring focused error-context capture
+		// (default OFF). Read-only aggregate; query each pod and merge.
+		v1.GET("/debug/error-capture", func(c *gin.Context) {
+			c.JSON(http.StatusOK, helps.ErrorContextCaptureSnapshot())
+		})
 		v1.GET("/models/*model", func(c *gin.Context) {
 			c.Set(handlers.ModelDetailIDContextKey, strings.TrimPrefix(c.Param("model"), "/"))
 			s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers)(c)

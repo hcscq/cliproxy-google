@@ -15,6 +15,7 @@ func newTestSampler(ttl time.Duration) *sysPromptSampler {
 		deadline:  now.Add(ttl),
 		fps:       map[string]*sysSampleEntry{},
 		cands:     map[string]*sysSampleCand{},
+		rules:     map[string]*ruleStat{},
 	}
 }
 
