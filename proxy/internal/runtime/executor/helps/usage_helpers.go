@@ -435,6 +435,13 @@ func (r *UsageReporter) SetPromptNote(note string) {
 	r.promptNote = strings.TrimSpace(note)
 }
 
+func (r *UsageReporter) PromptNote() string {
+	if r == nil {
+		return ""
+	}
+	return r.promptNote
+}
+
 // ThinkingNote returns why a "thinking off" request was adjusted ("" if it was not).
 // Executors surface it to clients as the X-Thinking-Adjusted response header.
 func (r *UsageReporter) ThinkingNote() string {

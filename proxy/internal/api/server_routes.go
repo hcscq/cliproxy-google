@@ -23,6 +23,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/claude"
@@ -78,6 +79,10 @@ func (s *Server) setupRoutes() {
 		// (default OFF). Read-only aggregate; query each pod and merge.
 		v1.GET("/debug/error-capture", func(c *gin.Context) {
 			c.JSON(http.StatusOK, helps.ErrorContextCaptureSnapshot())
+		})
+		// Bounded in-memory adaptive-retry diagnostics (no user contents).
+		v1.GET("/debug/adaptive-retry", func(c *gin.Context) {
+			c.JSON(http.StatusOK, executor.AdaptiveRetrySnapshot())
 		})
 		v1.GET("/models/*model", func(c *gin.Context) {
 			c.Set(handlers.ModelDetailIDContextKey, strings.TrimPrefix(c.Param("model"), "/"))

@@ -97,7 +97,8 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	}
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
-	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
+	adaptiveFP, adaptiveSys, adaptiveStart := antigravityAdaptivePrep(translated)
+	translated, promptHits := e.rewriteAntigravityPromptAtLevel(ctx, translated, reporter, adaptiveStart)
 	translated = e.obfuscateSensitiveWords(translated, reporter)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	if errPre := antigravityContextPrecheckError(baseModel, modelInfo, translated); errPre != nil {
@@ -143,7 +144,9 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 		return resp, err
 	}
 
+	adaptiveT0 := time.Now()
 	httpResp, errDo := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReq)
+	adaptiveLatency := time.Since(adaptiveT0)
 	if !attemptTimer.firstByte() && errDo == nil {
 		_ = httpResp.Body.Close()
 		errDo = context.Canceled
@@ -172,6 +175,19 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 		return resp, err
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+
+	if httpResp.StatusCode == http.StatusTooManyRequests {
+		ar := e.maybeAdaptiveRetry(attemptTimer.ctx, auth, token, baseModel, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata), opts.Alt, false, false, httpClient, sendPayload, httpResp.StatusCode, bodyBytes, adaptiveLatency, adaptiveFP, adaptiveSys, adaptiveStart, reporter)
+		if ar.Exhausted != nil {
+			err = ar.Exhausted
+			return resp, err
+		}
+		if ar.Status >= http.StatusOK && ar.Status < http.StatusMultipleChoices && ar.Retries > 0 {
+			httpResp.StatusCode = ar.Status
+			bodyBytes = ar.Body
+			sendPayload = ar.Payload
+		}
+	}
 
 	if httpResp.StatusCode == http.StatusTooManyRequests && len(promptHits) > 0 && isAntigravityBare429(bodyBytes) {
 		err = antigravityPromptBlockErr(promptHits)
@@ -389,7 +405,8 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	}
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
-	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
+	adaptiveFP, adaptiveSys, adaptiveStart := antigravityAdaptivePrep(translated)
+	translated, promptHits := e.rewriteAntigravityPromptAtLevel(ctx, translated, reporter, adaptiveStart)
 	translated = e.obfuscateSensitiveWords(translated, reporter)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	if errPre := antigravityContextPrecheckError(baseModel, modelInfo, translated); errPre != nil {
@@ -435,7 +452,9 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 		return resp, err
 	}
 
+	adaptiveT0 := time.Now()
 	httpResp, errDo := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate").Do(httpReq)
+	adaptiveLatency := time.Since(adaptiveT0)
 	if !attemptTimer.firstByte() && errDo == nil {
 		_ = httpResp.Body.Close()
 		errDo = context.Canceled
@@ -472,6 +491,23 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			return resp, err
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+		if httpResp.StatusCode == http.StatusTooManyRequests {
+			ar := e.maybeAdaptiveRetry(attemptTimer.ctx, auth, token, baseModel, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata), opts.Alt, true, true, httpClient, sendPayload, httpResp.StatusCode, bodyBytes, adaptiveLatency, adaptiveFP, adaptiveSys, adaptiveStart, reporter)
+			if ar.Exhausted != nil {
+				err = ar.Exhausted
+				return resp, err
+			}
+			if ar.Status >= http.StatusOK && ar.Status < http.StatusMultipleChoices && ar.Retries > 0 {
+				sendPayload = ar.Payload
+				if ar.Live != nil {
+					httpResp = ar.Live
+				} else {
+					httpResp.StatusCode = ar.Status
+					httpResp.Body = io.NopCloser(bytes.NewReader(ar.Body))
+				}
+				goto antigravityStreamSuccess
+			}
+		}
 		if httpResp.StatusCode == http.StatusTooManyRequests && len(promptHits) > 0 && isAntigravityBare429(bodyBytes) {
 			err = antigravityPromptBlockErr(promptHits)
 			return resp, err

@@ -98,7 +98,8 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	}
 
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
-	translated, promptHits := e.rewriteAntigravityPrompt(ctx, translated, reporter)
+	adaptiveFP, adaptiveSys, adaptiveStart := antigravityAdaptivePrep(translated)
+	translated, promptHits := e.rewriteAntigravityPromptAtLevel(ctx, translated, reporter, adaptiveStart)
 	translated = e.obfuscateSensitiveWords(translated, reporter)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	translated, _ = sjson.DeleteBytes(translated, "request.stream")
@@ -195,7 +196,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		err = errReq
 		return nil, err
 	}
+	adaptiveT0 := time.Now()
 	httpResp, errDo := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate_stream").Do(httpReq)
+	adaptiveLatency := time.Since(adaptiveT0)
 	if errDo != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
 		if errSlow := slowFailure(errDo); errSlow != nil {
@@ -232,6 +235,24 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			return nil, err
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+		if httpResp.StatusCode == http.StatusTooManyRequests {
+			ar := e.maybeAdaptiveRetry(attemptCtx, auth, token, baseModel, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata), streamAlt, !emulateStream, !emulateStream, httpClient, sendPayload, httpResp.StatusCode, bodyBytes, adaptiveLatency, adaptiveFP, adaptiveSys, adaptiveStart, reporter)
+			if ar.Exhausted != nil {
+				err = ar.Exhausted
+				return nil, err
+			}
+			if ar.Status >= http.StatusOK && ar.Status < http.StatusMultipleChoices && ar.Retries > 0 {
+				sendPayload = ar.Payload
+				if ar.Live != nil {
+					httpResp = ar.Live
+				} else {
+					httpResp.StatusCode = ar.Status
+					httpResp.Body = io.NopCloser(bytes.NewReader(ar.Body))
+				}
+				helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+				goto antigravityExecuteStreamSuccess
+			}
+		}
 		if httpResp.StatusCode == http.StatusTooManyRequests && len(promptHits) > 0 && isAntigravityBare429(bodyBytes) {
 			err = antigravityPromptBlockErr(promptHits)
 			return nil, err
