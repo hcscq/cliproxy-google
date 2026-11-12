@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chunkTokenInput, failedFirst, parseCredentialJSON } from './AddCredential';
+import { chunkTokenInput, failedFirst, formatFailedImportCSV, formatFailedImportText, parseCredentialJSON } from './AddCredential';
 
 const tok = '1//06FakeTokenCgYIARAAGAYSNwF-L9IrFakeFake-abc_DEF0123456789xyzE68s';
 
@@ -58,5 +58,27 @@ describe('failedFirst', () => {
     expect(failedFirst(rows).map((r) => r.index)).toEqual([1, 3, 0, 2]);
     expect(failedFirst([])).toEqual([]);
     expect(failedFirst([{ status: 'created', index: 0 }]).map((r) => r.index)).toEqual([0]);
+  });
+});
+
+describe('formatFailedImportCSV / text', () => {
+  const rows = [
+    { index: 0, status: 'created', email: 'ok@example.com' },
+    { index: 8, status: 'failed', email: 'fail.user@example.com', project_id: 'proj-fail', code: 'token_dead', reason: 'refresh token is invalid (invalid_grant)', token_hint: '…E68s' },
+    { index: 9, status: 'failed', email: '', code: 'invalid_input', reason: 'line ends with invalid JSON' },
+  ];
+  it('lists only failed rows with line, email, project and reason, never token hints', () => {
+    const csv = formatFailedImportCSV(rows);
+    expect(csv).toContain('line,email,project_id,code,reason');
+    expect(csv).toContain('9,fail.user@example.com,proj-fail,token_dead,');
+    expect(csv).toContain('invalid_grant');
+    expect(csv).toContain('10,');
+    expect(csv).not.toContain('ok@example.com');
+    expect(csv).not.toContain('E68s');
+    expect(csv).not.toContain('1//');
+    const text = formatFailedImportText(rows);
+    expect(text).toContain('#9 fail.user@example.com proj-fail token_dead');
+    expect(text).toContain('invalid_grant');
+    expect(text).not.toContain('E68s');
   });
 });

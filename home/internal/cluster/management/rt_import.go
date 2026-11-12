@@ -342,12 +342,12 @@ func prefixEmailFromExport(line, jsonText string) string {
 }
 
 func entryFromVendorExportLine(index int, line, jsonText string) rtImportEntry {
+	prefixEmail := prefixEmailFromExport(line, jsonText)
 	var value any
 	if errJSON := json.Unmarshal([]byte(jsonText), &value); errJSON != nil {
-		return rtImportEntry{Index: index, ParseError: "line ends with invalid JSON"}
+		return rtImportEntry{Index: index, Email: prefixEmail, ParseError: "line ends with invalid JSON"}
 	}
 	entry := entryFromJSONValue(index, value)
-	prefixEmail := prefixEmailFromExport(line, jsonText)
 	if prefixEmail == "" {
 		return entry
 	}
@@ -509,7 +509,12 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 
 	for i := range entries {
 		e := entries[i]
-		results[i] = RTImportResult{Index: e.Index, Source: e.Source, TokenHint: tokenHint(e.RefreshToken)}
+		// Carry parsed identity even when enrichment or persist fails, so the
+		// panel can name the account without an auth row.
+		results[i] = RTImportResult{Index: e.Index, Source: e.Source, TokenHint: tokenHint(e.RefreshToken), Email: e.Email, ProjectID: e.ProjectID}
+		if e.Warning != "" {
+			results[i].Warning = e.Warning
+		}
 		if e.ParseError != "" {
 			results[i].Status, results[i].Code, results[i].Reason = "failed", "invalid_input", e.ParseError
 			continue
