@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func overridePruneSettings(t *testing.T, s pruneSettings) {
@@ -344,5 +347,201 @@ func TestPruneBillingChargesUsesBillingBatchSize(t *testing.T) {
 	db.Model(&BillingChargeRecord{}).Count(&left)
 	if left != 3 {
 		t.Fatalf("rows left = %d, want 3", left)
+	}
+}
+
+// memoryLockTable simulates a Postgres advisory-lock table shared by sessions.
+type memoryLockTable struct {
+	mu   sync.Mutex
+	held map[int64]string
+}
+
+func newMemoryLockTable() *memoryLockTable {
+	return &memoryLockTable{held: map[int64]string{}}
+}
+
+func (t *memoryLockTable) leftover() []int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	keys := make([]int64, 0, len(t.held))
+	for k := range t.held {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+type memoryPruneLockSession struct {
+	table  *memoryLockTable
+	id     string
+	db     *gorm.DB
+	held   int64
+	closed bool
+}
+
+func (s *memoryPruneLockSession) TryLock(_ context.Context, key int64) (bool, error) {
+	s.table.mu.Lock()
+	defer s.table.mu.Unlock()
+	if _, ok := s.table.held[key]; ok {
+		return false, nil
+	}
+	s.table.held[key] = s.id
+	s.held = key
+	return true, nil
+}
+
+func (s *memoryPruneLockSession) Unlock(_ context.Context, key int64) error {
+	s.table.mu.Lock()
+	defer s.table.mu.Unlock()
+	if owner, ok := s.table.held[key]; ok && owner == s.id {
+		delete(s.table.held, key)
+	}
+	if s.held == key {
+		s.held = 0
+	}
+	return nil
+}
+
+func (s *memoryPruneLockSession) DB() *gorm.DB { return s.db }
+
+func (s *memoryPruneLockSession) Close() error {
+	if s.held != 0 {
+		_ = s.Unlock(context.Background(), s.held)
+	}
+	s.closed = true
+	return nil
+}
+
+func overridePruneLockSession(t *testing.T, fn func(context.Context, *gorm.DB) (pruneLockSession, error)) {
+	t.Helper()
+	orig := newPruneLockSession
+	origReq := pruneLockSessionRequired
+	newPruneLockSession = fn
+	pruneLockSessionRequired = func(*gorm.DB) bool { return true }
+	t.Cleanup(func() {
+		newPruneLockSession = orig
+		pruneLockSessionRequired = origReq
+	})
+}
+
+func TestPruneDirectDBPrefersBulkThenLease(t *testing.T) {
+	main := &gorm.DB{}
+	bulk := &gorm.DB{}
+	lease := &gorm.DB{}
+	if got := pruneDirectDB(main); got != main {
+		t.Fatalf("no registered pools: got %p want main", got)
+	}
+	leaseDBs.Store(main, lease)
+	t.Cleanup(func() { leaseDBs.Delete(main) })
+	if got := pruneDirectDB(main); got != lease {
+		t.Fatalf("lease only: got %p want lease", got)
+	}
+	bulkDBs.Store(main, bulk)
+	t.Cleanup(func() { bulkDBs.Delete(main) })
+	if got := pruneDirectDB(main); got != bulk {
+		t.Fatalf("bulk should win over lease: got %p want bulk", got)
+	}
+}
+
+func TestPruneAdvisoryLockSequentialRoundsDoNotLeak(t *testing.T) {
+	repo := newRefreshTestRepository(t)
+	db, err := repo.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := newMemoryLockTable()
+	var n int
+	overridePruneLockSession(t, func(_ context.Context, connDB *gorm.DB) (pruneLockSession, error) {
+		n++
+		return &memoryPruneLockSession{table: table, id: fmt.Sprintf("s%d", n), db: connDB}, nil
+	})
+
+	const key int64 = 4242
+	var ran int
+	for i := 0; i < 3; i++ {
+		held, err := withPruneAdvisoryLock(context.Background(), db, key, func(connDB *gorm.DB) error {
+			if connDB != db {
+				t.Fatalf("fn should run on the session db")
+			}
+			if left := table.leftover(); len(left) != 1 || left[0] != key {
+				t.Fatalf("lock should be held during fn: %v", left)
+			}
+			ran++
+			return nil
+		})
+		if err != nil || !held {
+			t.Fatalf("round %d: held=%v err=%v", i, held, err)
+		}
+		if left := table.leftover(); len(left) != 0 {
+			t.Fatalf("round %d leaked locks: %v", i, left)
+		}
+	}
+	if ran != 3 {
+		t.Fatalf("fn ran %d times, want 3", ran)
+	}
+}
+
+func TestPruneAdvisoryLockContendedAndReleased(t *testing.T) {
+	repo := newRefreshTestRepository(t)
+	db, err := repo.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := newMemoryLockTable()
+	var seq int
+	overridePruneLockSession(t, func(_ context.Context, connDB *gorm.DB) (pruneLockSession, error) {
+		seq++
+		return &memoryPruneLockSession{table: table, id: fmt.Sprintf("s%d", seq), db: connDB}, nil
+	})
+
+	const key int64 = 4343
+	started := make(chan struct{})
+	release := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := withPruneAdvisoryLock(context.Background(), db, key, func(*gorm.DB) error {
+			close(started)
+			<-release
+			return nil
+		})
+		errCh <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first locker did not start")
+	}
+	held, err := withPruneAdvisoryLock(context.Background(), db, key, func(*gorm.DB) error {
+		t.Fatal("contended fn should not run")
+		return nil
+	})
+	if err != nil || held {
+		t.Fatalf("contended acquire: held=%v err=%v; want false, nil", held, err)
+	}
+	close(release)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("first locker: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first locker did not finish")
+	}
+	if left := table.leftover(); len(left) != 0 {
+		t.Fatalf("lock leaked after first locker finished: %v", left)
+	}
+	held, err = withPruneAdvisoryLock(context.Background(), db, key, func(*gorm.DB) error { return nil })
+	if err != nil || !held {
+		t.Fatalf("after release: held=%v err=%v; want true, nil", held, err)
+	}
+	if left := table.leftover(); len(left) != 0 {
+		t.Fatalf("lock leaked after later round: %v", left)
+	}
+}
+
+func TestDirectPruneLockSessionCloseDiscardsOnUnlockError(t *testing.T) {
+	s := &directPruneLockSession{held: 99}
+	// nil conn: Close should be a no-op (no panic).
+	if err := s.Close(); err != nil {
+		t.Fatalf("nil conn Close: %v", err)
 	}
 }
