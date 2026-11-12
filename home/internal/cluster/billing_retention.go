@@ -9,8 +9,6 @@ import (
 
 const (
 	defaultBillingChargeRetentionDays = 7
-	billingChargePruneBatch           = 5000
-	billingChargePruneMaxBatches      = 400
 	billingChargeRetentionLockKey     = 7402117302
 )
 
@@ -28,10 +26,16 @@ func BillingChargeRetentionDays(configured int) int {
 }
 
 // PruneBillingCharges deletes billing_charge rows older than retentionDays in
-// small batches (short row locks, no table lock). On Postgres only one Home
-// replica runs it at a time (advisory lock).
+// small batches (short row locks, no table lock). Only the cluster master
+// runs it; a second Home skips. On Postgres only one replica can hold the
+// advisory lock at a time. Batch size, inter-batch sleep, and per-run
+// row/duration caps come from pruneSettings (env-tunable).
 func (r *Repository) PruneBillingCharges(ctx context.Context, retentionDays int) (int64, error) {
 	if retentionDays <= 0 {
+		return 0, nil
+	}
+	if !r.isMaintenanceLeader() {
+		log.Info("billing charge retention skipped; not cluster master")
 		return 0, nil
 	}
 	db, err := r.database()
@@ -40,46 +44,48 @@ func (r *Repository) PruneBillingCharges(ctx context.Context, retentionDays int)
 	}
 	ctx = contextOrBackground(ctx)
 	isPG := db.Dialector != nil && db.Dialector.Name() == "postgres"
-	if isPG {
-		sqlDB, errDB := db.DB()
-		if errDB != nil {
-			return 0, errDB
-		}
-		conn, errConn := sqlDB.Conn(ctx)
-		if errConn != nil {
-			return 0, errConn
-		}
-		defer conn.Close()
-		var got bool
-		if errLock := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, billingChargeRetentionLockKey).Scan(&got); errLock != nil {
-			return 0, errLock
-		}
-		if !got {
-			return 0, nil
-		}
-		defer func() {
-			_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, billingChargeRetentionLockKey)
-		}()
-	}
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	s := loadPruneSettings()
 	query := `DELETE FROM "billing_charge" WHERE id IN (SELECT id FROM "billing_charge" WHERE created_at < ? LIMIT ?)`
 	if isPG {
 		query = `DELETE FROM "billing_charge" WHERE ctid = ANY(ARRAY(SELECT ctid FROM "billing_charge" WHERE created_at < ? LIMIT ?))`
 	}
 	var total int64
-	for i := 0; i < billingChargePruneMaxBatches; i++ {
-		if ctx.Err() != nil {
-			return total, ctx.Err()
+	held, errLock := withPruneAdvisoryLock(ctx, db, billingChargeRetentionLockKey, func() error {
+		cutoff := time.Now().AddDate(0, 0, -retentionDays)
+		start := time.Now()
+		for {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if total > 0 && pruneBudgetExhausted(start, total, s) {
+				log.WithFields(log.Fields{"deleted_rows": total, "max_rows": s.MaxRows, "max_duration": s.MaxDuration.String()}).
+					Info("billing charge retention paused; leftover will retry next hour")
+				return nil
+			}
+			res := db.WithContext(ctx).Exec(query, cutoff, s.BatchSize)
+			if res.Error != nil {
+				return res.Error
+			}
+			total += res.RowsAffected
+			if res.RowsAffected < int64(s.BatchSize) {
+				return nil
+			}
+			if s.BatchSleep > 0 {
+				timer := time.NewTimer(s.BatchSleep)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			}
 		}
-		res := db.WithContext(ctx).Exec(query, cutoff, billingChargePruneBatch)
-		if res.Error != nil {
-			return total, res.Error
-		}
-		total += res.RowsAffected
-		if res.RowsAffected < billingChargePruneBatch {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	})
+	if errLock != nil {
+		return total, errLock
+	}
+	if !held {
+		log.Info("billing charge retention skipped; advisory lock held by another Home")
 	}
 	return total, nil
 }
@@ -96,6 +102,14 @@ func (r *Repository) StartBillingChargeRetention(ctx context.Context, retentionD
 			} else if n > 0 {
 				log.WithFields(log.Fields{"deleted_rows": n, "retention_days": days}).Info("billing charge retention applied")
 			}
+		}
+		sleepPruneStartupJitter(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		_ = waitForMaintenanceLeader(ctx, r)
+		if ctx.Err() != nil {
+			return
 		}
 		run()
 		t := time.NewTicker(usageMaintenanceTicker)

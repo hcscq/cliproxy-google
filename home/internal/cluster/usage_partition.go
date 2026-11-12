@@ -435,6 +435,14 @@ func (r *Repository) StartUsageRetention(ctx context.Context, retentionDays func
 				log.WithFields(log.Fields{"deleted_rows": n, "retention_days": days}).Info("app log retention applied")
 			}
 		}
+		sleepPruneStartupJitter(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		_ = waitForMaintenanceLeader(ctx, r)
+		if ctx.Err() != nil {
+			return
+		}
 		run()
 		t := time.NewTicker(usageMaintenanceTicker)
 		defer t.Stop()

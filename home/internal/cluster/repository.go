@@ -21,18 +21,20 @@ import (
 )
 
 type Repository struct {
-	db                 *gorm.DB
-	cpaSnapshotMu      sync.Mutex
-	sessionRootCacheMu sync.RWMutex
-	sessionRootCache   map[string]string
-	scopeOnce          sync.Once
-	scope              *scopeCache
-	leaseDB            *gorm.DB
-	affinityWriterOnce sync.Once
-	affinityQueue      chan RequestAffinityRecord
-	livenessMu         sync.Mutex
-	livenessNow        func() time.Time
-	livenessSamples    map[string]cpaLivenessSample
+	db                  *gorm.DB
+	cpaSnapshotMu       sync.Mutex
+	sessionRootCacheMu  sync.RWMutex
+	sessionRootCache    map[string]string
+	scopeOnce           sync.Once
+	scope               *scopeCache
+	leaseDB             *gorm.DB
+	affinityWriterOnce  sync.Once
+	affinityQueue       chan RequestAffinityRecord
+	livenessMu          sync.Mutex
+	livenessNow         func() time.Time
+	livenessSamples     map[string]cpaLivenessSample
+	maintenanceLeaderMu sync.RWMutex
+	maintenanceLeader   func() bool
 }
 
 type UpsertResult string
