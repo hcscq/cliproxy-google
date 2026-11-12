@@ -335,18 +335,91 @@ func (r *Repository) AffinityStatsSince(ctx context.Context, since time.Time) (A
 	return out, nil
 }
 
-// PurgeAffinity removes expired bindings and old outcome rows.
-func (r *Repository) PurgeAffinity(ctx context.Context, keep time.Duration) {
+// PurgeAffinity removes expired session_affinity bindings and old
+// request_affinity outcome rows. Only the cluster master runs it; leftover
+// expired rows are ignored on read (expires_at / created_at) and wait for
+// the next master run. request_affinity is deleted in primary-key batches
+// using the existing created_at index; each batch is its own short
+// transaction with a statement_timeout.
+func (r *Repository) PurgeAffinity(ctx context.Context, keep time.Duration) (int64, error) {
 	if r == nil || r.db == nil {
-		return
+		return 0, nil
+	}
+	if !r.isMaintenanceLeader() {
+		log.Info("request affinity retention skipped; not cluster master")
+		return 0, nil
 	}
 	db := r.db.WithContext(contextOrBackground(ctx))
-	now := time.Now()
-	_ = db.Where("expires_at < ?", now).Delete(&AffinityBindingRecord{}).Error
-	_ = db.Where("created_at < ?", now.Add(-keep)).Delete(&RequestAffinityRecord{}).Error
+	s := loadPruneSettings()
+	var total int64
+	held, errLock := withPruneAdvisoryLock(ctx, db, affinityRetentionLockKey, func() error {
+		now := time.Now()
+		nBind, errBind := execPruneBatch(ctx, db, s.StatementTimeout,
+			`DELETE FROM "session_affinity" WHERE expires_at < ?`, now)
+		if errBind != nil {
+			if isStatementTimeoutErr(errBind) {
+				log.WithError(errBind).Info("session affinity retention paused after statement timeout; leftover will retry later")
+				return nil
+			}
+			return errBind
+		}
+		total += nBind
+
+		if keep <= 0 {
+			return nil
+		}
+		cutoff := now.Add(-keep)
+		batchSize := s.BatchSize
+		if batchSize < 1 {
+			batchSize = defaultPruneBatchSize
+		}
+		query := `DELETE FROM "request_affinity" WHERE request_id IN (SELECT request_id FROM "request_affinity" WHERE created_at < ? ORDER BY created_at, request_id LIMIT ?)`
+		start := time.Now()
+		for {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if total > 0 && pruneBudgetExhausted(start, total, s) {
+				log.WithFields(log.Fields{"deleted_rows": total, "max_rows": s.MaxRows, "max_duration": s.MaxDuration.String()}).
+					Info("request affinity retention paused; leftover will retry later")
+				return nil
+			}
+			n, errDel := execPruneBatch(ctx, db, s.StatementTimeout, query, cutoff, batchSize)
+			if errDel != nil {
+				if isStatementTimeoutErr(errDel) {
+					log.WithError(errDel).WithFields(log.Fields{"deleted_rows": total, "batch_size": batchSize, "statement_timeout": s.StatementTimeout.String()}).
+						Info("request affinity retention paused after statement timeout; leftover will retry later")
+					return nil
+				}
+				return errDel
+			}
+			total += n
+			if n < int64(batchSize) {
+				return nil
+			}
+			if s.BatchSleep > 0 {
+				timer := time.NewTimer(s.BatchSleep)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			}
+		}
+	})
+	if errLock != nil {
+		return total, errLock
+	}
+	if !held {
+		log.Info("request affinity retention skipped; advisory lock held by another Home")
+	}
+	return total, nil
 }
 
-// StartAffinityJanitor purges expired rows every 10 minutes (idempotent on all replicas).
+// StartAffinityJanitor purges expired rows every 10 minutes on the cluster
+// master only. Skipping on standbys is safe: the job only deletes expired
+// or older-than-retention rows, and lookups already ignore expired bindings.
 func (r *Repository) StartAffinityJanitor(ctx context.Context) {
 	go func() {
 		t := time.NewTicker(10 * time.Minute)
@@ -356,7 +429,12 @@ func (r *Repository) StartAffinityJanitor(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				r.PurgeAffinity(ctx, 7*24*time.Hour)
+				n, err := r.PurgeAffinity(ctx, 7*24*time.Hour)
+				if err != nil && ctx.Err() == nil {
+					log.WithError(err).Warn("request affinity retention failed")
+				} else if n > 0 {
+					log.WithField("deleted_rows", n).Info("request affinity retention applied")
+				}
 			}
 		}
 	}()

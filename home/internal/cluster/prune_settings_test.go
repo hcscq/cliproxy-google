@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -20,7 +22,7 @@ func TestLoadPruneSettingsFromEnv(t *testing.T) {
 	t.Setenv(envPruneMaxDuration, "30s")
 	t.Setenv(envPruneMaxRows, "50000")
 	got := loadPruneSettingsFromEnv()
-	if got.BatchSize != 1000 || got.BatchSleep != 200*time.Millisecond || got.MaxDuration != 30*time.Second || got.MaxRows != 50000 {
+	if got.BatchSize != 1000 || got.BillingBatchSize != defaultPruneBillingBatchSize || got.BatchSleep != 200*time.Millisecond || got.MaxDuration != 30*time.Second || got.MaxRows != 50000 || got.StatementTimeout != defaultPruneStatementTimeout {
 		t.Fatalf("explicit defaults: %+v", got)
 	}
 
@@ -28,9 +30,11 @@ func TestLoadPruneSettingsFromEnv(t *testing.T) {
 	t.Setenv(envPruneBatchSleep, "50ms")
 	t.Setenv(envPruneMaxDuration, "15s")
 	t.Setenv(envPruneMaxRows, "3000")
+	t.Setenv(envPruneBillingBatchSize, "40")
+	t.Setenv(envPruneStatementTimeout, "3s")
 	t.Setenv(envPruneStartupJitter, "10s")
 	got = loadPruneSettingsFromEnv()
-	if got.BatchSize != 250 || got.BatchSleep != 50*time.Millisecond || got.MaxDuration != 15*time.Second || got.MaxRows != 3000 {
+	if got.BatchSize != 250 || got.BillingBatchSize != 40 || got.BatchSleep != 50*time.Millisecond || got.MaxDuration != 15*time.Second || got.MaxRows != 3000 || got.StatementTimeout != 3*time.Second {
 		t.Fatalf("overrides: %+v", got)
 	}
 	if got.StartupJitterMin != 0 || got.StartupJitterMax != 10*time.Second {
@@ -50,7 +54,7 @@ func TestLoadPruneSettingsFromEnv(t *testing.T) {
 
 func TestDefaultPruneSettingsMatchApprovedValues(t *testing.T) {
 	s := defaultPruneSettings()
-	if s.BatchSize != 1000 || s.BatchSleep != 200*time.Millisecond || s.MaxDuration != 30*time.Second || s.MaxRows != 50000 {
+	if s.BatchSize != 1000 || s.BillingBatchSize != 25 || s.BatchSleep != 200*time.Millisecond || s.MaxDuration != 30*time.Second || s.MaxRows != 50000 || s.StatementTimeout != 5*time.Second {
 		t.Fatalf("unexpected defaults: %+v", s)
 	}
 	if s.StartupJitterMin != 5*time.Second || s.StartupJitterMax != 45*time.Second {
@@ -230,5 +234,115 @@ func TestWaitForMaintenanceLeader(t *testing.T) {
 	defer cancel2()
 	if waitForMaintenanceLeader(ctx2, repo) {
 		t.Fatal("cancelled wait should not report leader")
+	}
+}
+
+func TestBillingBatchSizeFallback(t *testing.T) {
+	s := pruneSettings{BatchSize: 10}
+	if s.billingBatchSize() != 10 {
+		t.Fatalf("fallback to BatchSize = %d", s.billingBatchSize())
+	}
+	s.BillingBatchSize = 25
+	if s.billingBatchSize() != 25 {
+		t.Fatalf("explicit billing batch = %d", s.billingBatchSize())
+	}
+}
+
+type stubSQLState string
+
+func (s stubSQLState) Error() string    { return "sqlstate " + string(s) }
+func (s stubSQLState) SQLState() string { return string(s) }
+
+func TestIsStatementTimeoutErr(t *testing.T) {
+	if isStatementTimeoutErr(nil) {
+		t.Fatal("nil should not be a timeout")
+	}
+	if isStatementTimeoutErr(fmt.Errorf("other error")) {
+		t.Fatal("unrelated error")
+	}
+	if !isStatementTimeoutErr(stubSQLState("57014")) {
+		t.Fatal("SQLState 57014 should match")
+	}
+	if isStatementTimeoutErr(stubSQLState("57000")) {
+		t.Fatal("other SQLState should not match")
+	}
+	if !isStatementTimeoutErr(errors.New("ERROR: canceling statement due to statement timeout (SQLSTATE 57014)")) {
+		t.Fatal("message should match")
+	}
+	if !isStatementTimeoutErr(fmt.Errorf("wrap: %w", stubSQLState("57014"))) {
+		t.Fatal("wrapped SQLState should match")
+	}
+}
+
+func TestPurgeAffinitySkipsWhenNotLeader(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	if err := ensureAffinityTables(ctx, repo.db); err != nil {
+		t.Fatal(err)
+	}
+	old := RequestAffinityRecord{RequestID: "old-1", Outcome: AffinityHit, CreatedAt: time.Now().Add(-2 * time.Hour)}
+	if err := repo.db.Create(&old).Error; err != nil {
+		t.Fatal(err)
+	}
+	repo.SetMaintenanceLeader(func() bool { return false })
+	n, err := repo.PurgeAffinity(ctx, time.Hour)
+	if err != nil || n != 0 {
+		t.Fatalf("skip = %d, %v; want 0, nil", n, err)
+	}
+	var left int64
+	repo.db.Model(&RequestAffinityRecord{}).Count(&left)
+	if left != 1 {
+		t.Fatalf("rows left = %d, want 1", left)
+	}
+}
+
+func TestPurgeAffinityRespectsMaxRows(t *testing.T) {
+	repo, ctx := newTestKVRepository(t)
+	if err := ensureAffinityTables(ctx, repo.db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		rec := RequestAffinityRecord{RequestID: fmt.Sprintf("old-%d", i), Outcome: AffinityHit, CreatedAt: now.Add(-2 * time.Hour)}
+		if err := repo.db.Create(&rec).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.db.Create(&RequestAffinityRecord{RequestID: "fresh", Outcome: AffinityHit, CreatedAt: now.Add(-time.Minute)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	overridePruneSettings(t, pruneSettings{BatchSize: 1, MaxRows: 2, BatchSleep: 0})
+	n, err := repo.PurgeAffinity(ctx, time.Hour)
+	if err != nil || n != 2 {
+		t.Fatalf("PurgeAffinity = %d, %v; want 2", n, err)
+	}
+	var left int64
+	repo.db.Model(&RequestAffinityRecord{}).Count(&left)
+	if left != 4 { // 3 old leftover + 1 recent
+		t.Fatalf("rows left = %d, want 4", left)
+	}
+}
+
+func TestPruneBillingChargesUsesBillingBatchSize(t *testing.T) {
+	repo := newRefreshTestRepository(t)
+	db, err := repo.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().AddDate(0, 0, -10)
+	for i := 1; i <= 5; i++ {
+		if err := db.Create(testBillingCharge(t, uint(i), old)).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// BillingBatchSize=2 should cap the first (and given MaxRows=2, only) batch.
+	overridePruneSettings(t, pruneSettings{BatchSize: 1000, BillingBatchSize: 2, MaxRows: 2, BatchSleep: 0})
+	n, err := repo.PruneBillingCharges(context.Background(), 7)
+	if err != nil || n != 2 {
+		t.Fatalf("PruneBillingCharges = %d, %v; want 2", n, err)
+	}
+	var left int64
+	db.Model(&BillingChargeRecord{}).Count(&left)
+	if left != 3 {
+		t.Fatalf("rows left = %d, want 3", left)
 	}
 }

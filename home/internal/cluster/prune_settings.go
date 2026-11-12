@@ -3,6 +3,8 @@ package cluster
 import (
 	"context"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"strconv"
@@ -15,27 +17,34 @@ import (
 
 const (
 	defaultPruneBatchSize        = 1000
+	defaultPruneBillingBatchSize = 25
 	defaultPruneBatchSleep       = 200 * time.Millisecond
 	defaultPruneMaxDuration      = 30 * time.Second
 	defaultPruneMaxRows          = int64(50000)
+	defaultPruneStatementTimeout = 5 * time.Second
 	defaultPruneStartupJitterMin = 5 * time.Second
 	defaultPruneStartupJitterMax = 45 * time.Second
 	appLogRetentionLockKey       = int64(7402117303)
+	affinityRetentionLockKey     = int64(7402117304)
 	envPruneBatchSize            = "CPA_PRUNE_BATCH_SIZE"
+	envPruneBillingBatchSize     = "CPA_PRUNE_BILLING_BATCH_SIZE"
 	envPruneBatchSleep           = "CPA_PRUNE_BATCH_SLEEP"
 	envPruneMaxDuration          = "CPA_PRUNE_MAX_DURATION"
 	envPruneMaxRows              = "CPA_PRUNE_MAX_ROWS"
+	envPruneStatementTimeout     = "CPA_PRUNE_STATEMENT_TIMEOUT"
 	envPruneStartupJitter        = "CPA_PRUNE_STARTUP_JITTER"
 )
 
-// pruneSettings controls log and billing_charge cleanup batching. Defaults are
-// the production values; environment variables override them (0 duration/rows
-// means "no cap" except the caller's context).
+// pruneSettings controls log, billing_charge, and request_affinity cleanup
+// batching. Defaults are the production values; environment variables override
+// them (0 duration/rows means "no cap" except the caller's context).
 type pruneSettings struct {
 	BatchSize        int
+	BillingBatchSize int
 	BatchSleep       time.Duration
 	MaxDuration      time.Duration
 	MaxRows          int64
+	StatementTimeout time.Duration
 	StartupJitterMin time.Duration
 	StartupJitterMax time.Duration
 }
@@ -43,9 +52,11 @@ type pruneSettings struct {
 func defaultPruneSettings() pruneSettings {
 	return pruneSettings{
 		BatchSize:        defaultPruneBatchSize,
+		BillingBatchSize: defaultPruneBillingBatchSize,
 		BatchSleep:       defaultPruneBatchSleep,
 		MaxDuration:      defaultPruneMaxDuration,
 		MaxRows:          defaultPruneMaxRows,
+		StatementTimeout: defaultPruneStatementTimeout,
 		StartupJitterMin: defaultPruneStartupJitterMin,
 		StartupJitterMax: defaultPruneStartupJitterMax,
 	}
@@ -82,6 +93,21 @@ func loadPruneSettingsFromEnv() pruneSettings {
 		}
 		s.MaxRows = int64(n)
 	}
+	if n, ok := pruneEnvInt(envPruneBillingBatchSize); ok {
+		if n < 1 {
+			n = 1
+		}
+		if n > 10000 {
+			n = 10000
+		}
+		s.BillingBatchSize = n
+	}
+	if d, ok := pruneEnvDuration(envPruneStatementTimeout); ok {
+		if d < 0 {
+			d = 0
+		}
+		s.StatementTimeout = d
+	}
 	if d, ok := pruneEnvDuration(envPruneStartupJitter); ok {
 		if d <= 0 {
 			s.StartupJitterMin = 0
@@ -92,6 +118,18 @@ func loadPruneSettingsFromEnv() pruneSettings {
 		}
 	}
 	return s
+}
+
+// billingBatchSize returns the billing_charge batch size, falling back to
+// BatchSize when the billing-specific value is unset (tests).
+func (s pruneSettings) billingBatchSize() int {
+	if s.BillingBatchSize > 0 {
+		return s.BillingBatchSize
+	}
+	if s.BatchSize > 0 {
+		return s.BatchSize
+	}
+	return defaultPruneBillingBatchSize
 }
 
 func pruneEnvInt(name string) (int, bool) {
@@ -119,8 +157,8 @@ func pruneEnvDuration(name string) (time.Duration, bool) {
 }
 
 // SetMaintenanceLeader registers the cluster-master check used by hourly
-// cleanup. When fn is set and returns false, PruneAppLogs and
-// PruneBillingCharges skip the run so only one Home executes them. A nil fn
+// cleanup. When fn is set and returns false, PruneAppLogs, PruneBillingCharges,
+// and PurgeAffinity skip the run so only one Home executes them. A nil fn
 // (tests, or before the coordinator is wired) does not skip.
 func (r *Repository) SetMaintenanceLeader(fn func() bool) {
 	if r == nil {
@@ -245,4 +283,43 @@ func withPruneAdvisoryLock(ctx context.Context, db *gorm.DB, key int64, fn func(
 		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
 	}()
 	return true, fn()
+}
+
+// execPruneBatch runs a single DELETE in its own short transaction. On
+// Postgres it also sets a statement-level timeout (SET LOCAL) so a slow
+// statement is cancelled and rolled back instead of holding the database.
+// A zero timeout skips SET LOCAL.
+func execPruneBatch(ctx context.Context, db *gorm.DB, timeout time.Duration, query string, args ...any) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("prune: nil db")
+	}
+	var n int64
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if timeout > 0 && tx.Dialector != nil && tx.Dialector.Name() == "postgres" {
+			ms := timeout.Milliseconds()
+			if ms < 1 {
+				ms = 1
+			}
+			if err := tx.Exec(fmt.Sprintf("SET LOCAL statement_timeout = %d", ms)).Error; err != nil {
+				return err
+			}
+		}
+		res := tx.Exec(query, args...)
+		n = res.RowsAffected
+		return res.Error
+	})
+	return n, err
+}
+
+func isStatementTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var st sqlStateError
+	if errors.As(err, &st) && st.SQLState() == "57014" {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "statement timeout") ||
+		strings.Contains(msg, "canceling statement due to statement timeout")
 }
