@@ -208,7 +208,7 @@ func (r *Repository) PruneAppLogs(ctx context.Context, retentionDays int) (int64
 	ctx = contextOrBackground(ctx)
 	s := loadPruneSettings()
 	var total int64
-	held, errLock := withPruneAdvisoryLock(ctx, db, appLogRetentionLockKey, func() error {
+	held, errLock := withPruneAdvisoryLock(ctx, db, appLogRetentionLockKey, func(connDB *gorm.DB) error {
 		cutoff := time.Now().AddDate(0, 0, -retentionDays)
 		start := time.Now()
 		for {
@@ -220,12 +220,17 @@ func (r *Repository) PruneAppLogs(ctx context.Context, retentionDays int) (int64
 					Info("app log retention paused; leftover will retry next hour")
 				return nil
 			}
-			res := db.WithContext(ctx).Exec(`DELETE FROM "log" WHERE id IN (SELECT id FROM "log" WHERE created_at < ? ORDER BY created_at LIMIT ?)`, cutoff, s.BatchSize)
-			if res.Error != nil {
-				return res.Error
+			n, errDel := execPruneBatch(ctx, connDB, s.StatementTimeout, `DELETE FROM "log" WHERE id IN (SELECT id FROM "log" WHERE created_at < ? ORDER BY created_at LIMIT ?)`, cutoff, s.BatchSize)
+			if errDel != nil {
+				if isStatementTimeoutErr(errDel) {
+					log.WithError(errDel).WithFields(log.Fields{"deleted_rows": total, "batch_size": s.BatchSize, "statement_timeout": s.StatementTimeout.String()}).
+						Info("app log retention paused after statement timeout; leftover will retry next hour")
+					return nil
+				}
+				return errDel
 			}
-			total += res.RowsAffected
-			if res.RowsAffected < int64(s.BatchSize) {
+			total += n
+			if n < int64(s.BatchSize) {
 				return nil
 			}
 			if s.BatchSleep > 0 {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"gorm.io/gorm"
 )
 
 const (
@@ -53,7 +54,7 @@ func (r *Repository) PruneBillingCharges(ctx context.Context, retentionDays int)
 	// index/WAL maintenance of 1000 deletes on a bloated heap, not the scan.
 	query := `DELETE FROM "billing_charge" WHERE id IN (SELECT id FROM "billing_charge" WHERE created_at < ? LIMIT ?)`
 	var total int64
-	held, errLock := withPruneAdvisoryLock(ctx, db, billingChargeRetentionLockKey, func() error {
+	held, errLock := withPruneAdvisoryLock(ctx, db, billingChargeRetentionLockKey, func(connDB *gorm.DB) error {
 		cutoff := time.Now().AddDate(0, 0, -retentionDays)
 		start := time.Now()
 		for {
@@ -65,7 +66,7 @@ func (r *Repository) PruneBillingCharges(ctx context.Context, retentionDays int)
 					Info("billing charge retention paused; leftover will retry next hour")
 				return nil
 			}
-			n, errDel := execPruneBatch(ctx, db, s.StatementTimeout, query, cutoff, batchSize)
+			n, errDel := execPruneBatch(ctx, connDB, s.StatementTimeout, query, cutoff, batchSize)
 			if errDel != nil {
 				if isStatementTimeoutErr(errDel) {
 					log.WithError(errDel).WithFields(log.Fields{"deleted_rows": total, "batch_size": batchSize, "statement_timeout": s.StatementTimeout.String()}).

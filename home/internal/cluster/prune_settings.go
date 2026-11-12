@@ -3,6 +3,8 @@ package cluster
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"math/big"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -258,31 +261,153 @@ func waitForMaintenanceLeader(ctx context.Context, r *Repository) bool {
 
 // withPruneAdvisoryLock holds a session-level Postgres advisory lock for the
 // duration of fn. If the lock is already taken, fn is not called and held is
-// false. Non-Postgres dialects call fn directly.
-func withPruneAdvisoryLock(ctx context.Context, db *gorm.DB, key int64, fn func() error) (held bool, err error) {
-	if db == nil || db.Dialector == nil || db.Dialector.Name() != "postgres" {
-		return true, fn()
+// false. Non-Postgres dialects call fn with db directly.
+//
+// Session locks cannot go through pgbouncer transaction pooling: unlock would
+// often land on a different server connection and leave the lock on an idle
+// backend. pg_try_advisory_xact_lock is also a poor fit because cleanup
+// commits each batch in its own short transaction (plus inter-batch sleep),
+// so an xact lock would drop between batches. Instead the lock, every DELETE
+// batch, and unlock all run on one connection taken from a direct (non-pooler)
+// pool. Unlock is issued on that same session; if unlock fails the connection
+// is discarded so a locked session cannot return to the pool.
+func withPruneAdvisoryLock(ctx context.Context, db *gorm.DB, key int64, fn func(connDB *gorm.DB) error) (held bool, err error) {
+	if !pruneLockSessionRequired(db) {
+		return true, fn(db)
 	}
-	sqlDB, errDB := db.DB()
-	if errDB != nil {
-		return false, errDB
+	sess, errOpen := newPruneLockSession(ctx, db)
+	if errOpen != nil {
+		return false, errOpen
 	}
-	conn, errConn := sqlDB.Conn(ctx)
-	if errConn != nil {
-		return false, errConn
-	}
-	defer conn.Close()
-	var got bool
-	if errLock := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); errLock != nil {
+	defer func() {
+		if closeErr := sess.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	got, errLock := sess.TryLock(ctx, key)
+	if errLock != nil {
 		return false, errLock
 	}
 	if !got {
 		return false, nil
 	}
-	defer func() {
-		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
-	}()
-	return true, fn()
+	return true, fn(sess.DB())
+}
+
+// newPruneLockSession opens a prune lock session. Tests may replace it.
+var newPruneLockSession = openDirectPruneLockSession
+
+// pruneLockSessionRequired reports whether this dialect must take a session
+// advisory lock. Postgres always does; tests may force it on SQLite.
+var pruneLockSessionRequired = func(db *gorm.DB) bool {
+	return db != nil && db.Dialector != nil && db.Dialector.Name() == "postgres"
+}
+
+// pruneLockSession is one Postgres (or test) session that can hold an
+// advisory lock and run the batched DELETEs.
+type pruneLockSession interface {
+	TryLock(ctx context.Context, key int64) (bool, error)
+	Unlock(ctx context.Context, key int64) error
+	DB() *gorm.DB
+	Close() error
+}
+
+// pruneDirectDB prefers the direct bulk-write pool, then the lease pool, then
+// db itself. Session advisory locks must not use the pgbouncer transaction
+// pool (the main pool when HOME_PG_POOLER_ADDR is set).
+func pruneDirectDB(db *gorm.DB) *gorm.DB {
+	if db == nil {
+		return nil
+	}
+	if v, ok := bulkDBs.Load(db); ok && v != nil {
+		if direct, ok := v.(*gorm.DB); ok && direct != nil {
+			return direct
+		}
+	}
+	if v, ok := leaseDBs.Load(db); ok && v != nil {
+		if direct, ok := v.(*gorm.DB); ok && direct != nil {
+			return direct
+		}
+	}
+	return db
+}
+
+type directPruneLockSession struct {
+	conn   *sql.Conn
+	gormDB *gorm.DB
+	held   int64 // 0 = none
+}
+
+func openDirectPruneLockSession(ctx context.Context, db *gorm.DB) (pruneLockSession, error) {
+	src := pruneDirectDB(db)
+	if src == nil {
+		return nil, fmt.Errorf("prune: nil db")
+	}
+	sqlDB, errDB := src.DB()
+	if errDB != nil {
+		return nil, errDB
+	}
+	conn, errConn := sqlDB.Conn(ctx)
+	if errConn != nil {
+		return nil, errConn
+	}
+	cfg := &gorm.Config{}
+	if src.Config != nil {
+		cfg.Logger = src.Config.Logger
+		cfg.NowFunc = src.Config.NowFunc
+	}
+	pinned, errOpen := gorm.Open(postgres.New(postgres.Config{Conn: conn}), cfg)
+	if errOpen != nil {
+		_ = conn.Close()
+		return nil, errOpen
+	}
+	return &directPruneLockSession{conn: conn, gormDB: pinned}, nil
+}
+
+func (s *directPruneLockSession) DB() *gorm.DB {
+	if s == nil {
+		return nil
+	}
+	return s.gormDB
+}
+
+func (s *directPruneLockSession) TryLock(ctx context.Context, key int64) (bool, error) {
+	var got bool
+	if err := s.conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil {
+		return false, err
+	}
+	if got {
+		s.held = key
+	}
+	return got, nil
+}
+
+func (s *directPruneLockSession) Unlock(ctx context.Context, key int64) error {
+	_, err := s.conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, key)
+	if err == nil && s.held == key {
+		s.held = 0
+	}
+	return err
+}
+
+func (s *directPruneLockSession) Close() error {
+	if s == nil || s.conn == nil {
+		return nil
+	}
+	var unlockErr error
+	if s.held != 0 {
+		unlockErr = s.Unlock(context.Background(), s.held)
+	}
+	if unlockErr != nil {
+		// Do not return a still-locked session to the Go pool.
+		_ = s.conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	closeErr := s.conn.Close()
+	s.conn = nil
+	if unlockErr != nil {
+		return unlockErr
+	}
+	return closeErr
 }
 
 // execPruneBatch runs a single DELETE in its own short transaction. On

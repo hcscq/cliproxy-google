@@ -352,9 +352,9 @@ func (r *Repository) PurgeAffinity(ctx context.Context, keep time.Duration) (int
 	db := r.db.WithContext(contextOrBackground(ctx))
 	s := loadPruneSettings()
 	var total int64
-	held, errLock := withPruneAdvisoryLock(ctx, db, affinityRetentionLockKey, func() error {
+	held, errLock := withPruneAdvisoryLock(ctx, db, affinityRetentionLockKey, func(connDB *gorm.DB) error {
 		now := time.Now()
-		nBind, errBind := execPruneBatch(ctx, db, s.StatementTimeout,
+		nBind, errBind := execPruneBatch(ctx, connDB, s.StatementTimeout,
 			`DELETE FROM "session_affinity" WHERE expires_at < ?`, now)
 		if errBind != nil {
 			if isStatementTimeoutErr(errBind) {
@@ -384,7 +384,7 @@ func (r *Repository) PurgeAffinity(ctx context.Context, keep time.Duration) (int
 					Info("request affinity retention paused; leftover will retry later")
 				return nil
 			}
-			n, errDel := execPruneBatch(ctx, db, s.StatementTimeout, query, cutoff, batchSize)
+			n, errDel := execPruneBatch(ctx, connDB, s.StatementTimeout, query, cutoff, batchSize)
 			if errDel != nil {
 				if isStatementTimeoutErr(errDel) {
 					log.WithError(errDel).WithFields(log.Fields{"deleted_rows": total, "batch_size": batchSize, "statement_timeout": s.StatementTimeout.String()}).
