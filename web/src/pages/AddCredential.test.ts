@@ -21,6 +21,13 @@ describe('looksLikeRefreshTokenText', () => {
     expect(looksLikeRefreshTokenText('{"type":"antigravity"')).toBe(false);
     expect(looksLikeRefreshTokenText('hello world')).toBe(false);
   });
+  it('detects vendor export lines and mixed batches', () => {
+    const json = `{"type":"antigravity","email":"a@gmail.com","refresh_token":"${tok}","project_id":"p1"}`;
+    const exportLine = `a@gmail.com----FakePassw0rd!x----0123456789abcdef0123456789abcdef----${json}`;
+    expect(looksLikeRefreshTokenText(exportLine)).toBe(true);
+    expect(looksLikeRefreshTokenText(`${exportLine}\nb@x.com----${tok}`)).toBe(true);
+    expect(looksLikeRefreshTokenText('not-this-format')).toBe(false);
+  });
 });
 
 describe('parseCredentialJSON', () => {

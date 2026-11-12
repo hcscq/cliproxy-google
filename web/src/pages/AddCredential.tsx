@@ -227,7 +227,7 @@ function UploadFiles({ onDone, egress, allowPrimary, reserve }: { onDone: () => 
   const input = useRef<HTMLInputElement>(null);
   const add = (list: FileList | null) => {
     if (!list) return;
-    setFiles((prev) => [...prev, ...Array.from(list).filter((f) => f.name.toLowerCase().endsWith('.json'))]);
+    setFiles((prev) => [...prev, ...Array.from(list).filter((f) => /\.(json|txt)$/i.test(f.name))]);
   };
   const upload = async () => {
     setBusy(true);
@@ -250,7 +250,7 @@ function UploadFiles({ onDone, egress, allowPrimary, reserve }: { onDone: () => 
   return (
     <div className="stack">
       <p className="muted" style={{ margin: 0 }}>
-        {tr('上传凭据 JSON，可多选；文件可为单个对象或对象数组（完整凭据或 {email, refresh_token}）。同邮箱/同 token 只更新令牌。', 'Upload CLIProxyAPI-format credential JSON files (e.g. antigravity-xxx.json). Multiple files allowed.')}
+        {tr('上传凭据 JSON 或导出 txt，可多选；JSON 可为单个对象或对象数组。txt 支持每行 email----password----id----{json} 或 email----refresh_token。同邮箱/同 token 只更新令牌。', 'Upload credential JSON or vendor export .txt files. JSON may be one object or an array; .txt lines may be email----password----id----{json} or email----refresh_token.')}
       </p>
       <div
         className="card center"
@@ -269,9 +269,9 @@ function UploadFiles({ onDone, egress, allowPrimary, reserve }: { onDone: () => 
       >
         <div className="stack" style={{ alignItems: 'center', gap: 6 }}>
           <IconUpload width={22} height={22} />
-          <span>{tr('点击选择或拖拽 .json 文件到这里', 'Click or drop .json files here')}</span>
+          <span>{tr('点击选择或拖拽 .json / .txt 文件到这里', 'Click or drop .json or .txt files here')}</span>
         </div>
-        <input ref={input} type="file" accept=".json,application/json" multiple hidden onChange={(e) => add(e.target.files)} data-testid="upload-input" />
+        <input ref={input} type="file" accept=".json,.txt,application/json,text/plain" multiple hidden onChange={(e) => add(e.target.files)} data-testid="upload-input" />
       </div>
       {files.length > 0 && (
         <div>
@@ -297,11 +297,23 @@ function UploadFiles({ onDone, egress, allowPrimary, reserve }: { onDone: () => 
   );
 }
 
-/** True when pasted non-JSON text looks like `email----refresh_token` lines or bare Google refresh tokens. */
+const RT_DASH = '[-\u2010-\u2015\u2212\uff0d]{3,}';
+
+/** True when a line is the vendor export `email----password----id----{json}`. */
+function looksLikeVendorExportLine(line: string): boolean {
+  const i = line.lastIndexOf('{');
+  if (i <= 0) return false;
+  const prefix = line.slice(0, i).trim();
+  const json = line.slice(i).trim();
+  return new RegExp(RT_DASH + '\\s*$').test(prefix) && json.startsWith('{') && json.endsWith('}');
+}
+
+/** True when pasted non-JSON text looks like `email----refresh_token` lines, vendor export lines, or bare Google refresh tokens. */
 export function looksLikeRefreshTokenText(text: string): boolean {
   const lines = text.replace(/[\u200b-\u200d\u2060\ufeff]/g, '').split(/\r\n?|\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
   if (!lines.length || lines[0].startsWith('{') || lines[0].startsWith('[')) return false;
-  return lines.every((l) => /^(\S+@\S+?\s*[-\u2010-\u2015\u2212\uff0d]{3,}\s*)?1\/\/\S+/.test(l));
+  const bareOrEmail = new RegExp('^(\\S+@\\S+?\\s*' + RT_DASH + '\\s*)?1\\/\\/\\S+');
+  return lines.every((l) => looksLikeVendorExportLine(l) || bareOrEmail.test(l));
 }
 
 /** Parse pasted credential JSON: one object, an array of objects, or newline-delimited objects. */
@@ -704,13 +716,13 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
   return (
     <div className="stack">
       <p className="muted" style={{ margin: 0 }}>
-        每行一个：<code>email----refresh_token</code> 或仅 <code>refresh_token</code>；也可粘贴 JSON 数组（字符串或含 refresh_token 的对象）。
+        每行一个：<code>email----refresh_token</code>、仅 <code>refresh_token</code>，或卡密导出行 <code>email----密码----id----{'{'}JSON{'}'}</code>（从 JSON 取 refresh_token / email / project_id，密码与 access_token 会丢弃）。也可粘贴 JSON 数组。
         导入时会刷新令牌、获取邮箱与 project_id；同邮箱或同 token 的已有凭据只更新令牌，保留分组与备注。新凭据自动加入 default 分组并立即探测额度。
       </p>
       <textarea
         className="textarea mono"
         style={{ minHeight: 200 }}
-        placeholder={'alice@gmail.com----1//0g...\nbob@gmail.com----1//0e...\n\n或 [{"refresh_token":"1//..."}, ...]'}
+        placeholder={'alice@gmail.com----1//0g...\nbob@gmail.com----password----id----{"type":"antigravity","email":"bob@gmail.com","refresh_token":"1//..."}\n\n或 [{"refresh_token":"1//..."}, ...]'}
         value={text}
         onChange={(e) => setText(e.target.value)}
         spellCheck={false}

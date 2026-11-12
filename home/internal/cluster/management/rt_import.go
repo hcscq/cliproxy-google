@@ -214,6 +214,7 @@ type rtImportEntry struct {
 	Extra        map[string]any // other fields from a JSON object (label, note, prefix, …)
 	Source       string         // file name for uploads
 	ParseError   string
+	Warning      string // parse-time note (e.g. prefix vs JSON email); never includes tokens or passwords
 }
 
 var (
@@ -227,7 +228,11 @@ var (
 func normalizeRTText(text string) string { return rtInvisibleReplacer.Replace(text) }
 
 // parseRefreshTokenInput accepts: one token per line; a JSON array of strings or
-// objects; a single JSON object; or one JSON object per line.
+// objects; a single JSON object; one JSON object per line; email----refresh_token
+// (extra fields after the token are ignored); or a vendor export line
+// "email----password----id----{json}" whose trailing JSON supplies refresh_token,
+// email, project_id and type. Password, the id field, access_token and expiry
+// are discarded and never logged.
 func parseRefreshTokenInput(text string) []rtImportEntry {
 	text = normalizeRTText(text)
 	text = strings.TrimSpace(strings.TrimPrefix(text, "\ufeff"))
@@ -268,6 +273,10 @@ func parseRefreshTokenInput(text string) []rtImportEntry {
 			out = append(out, entryFromJSONValue(idx, value))
 			continue
 		}
+		if jsonText, ok := trailingJSONObject(line); ok {
+			out = append(out, entryFromVendorExportLine(idx, line, jsonText))
+			continue
+		}
 		email := ""
 		if m := rtEmailSepPattern.FindStringSubmatch(line); m != nil {
 			// "email----refresh_token" (3+ dashes, any dash variant; extra fields after the token are ignored)
@@ -290,6 +299,69 @@ func parseRefreshTokenInput(text string) []rtImportEntry {
 	return out
 }
 
+// trailingJSONObject reports whether line is a dash-delimited record whose last
+// field is a JSON object (the vendor "email----password----id----{json}" export).
+// The bytes after the last `{` must already look like a closed object; invalid
+// JSON is still reported as this format so it is not misread as email----token.
+func trailingJSONObject(line string) (string, bool) {
+	idx := strings.LastIndex(line, "{")
+	if idx <= 0 {
+		return "", false
+	}
+	head := strings.TrimSpace(line[:idx])
+	if !dashSeparatorSuffix(head) {
+		return "", false
+	}
+	tail := strings.TrimSpace(line[idx:])
+	if !strings.HasPrefix(tail, "{") || !strings.HasSuffix(tail, "}") {
+		return "", false
+	}
+	return tail, true
+}
+
+func dashSeparatorSuffix(s string) bool {
+	locs := rtSepPattern.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return false
+	}
+	last := locs[len(locs)-1]
+	return strings.TrimSpace(s[last[1]:]) == ""
+}
+
+func prefixEmailFromExport(line, jsonText string) string {
+	head := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), jsonText))
+	fields := rtSepPattern.Split(head, -1)
+	if len(fields) == 0 {
+		return ""
+	}
+	first := strings.TrimSpace(fields[0])
+	if first == "" || !strings.Contains(first, "@") || strings.ContainsAny(first, " \t") {
+		return ""
+	}
+	return first
+}
+
+func entryFromVendorExportLine(index int, line, jsonText string) rtImportEntry {
+	var value any
+	if errJSON := json.Unmarshal([]byte(jsonText), &value); errJSON != nil {
+		return rtImportEntry{Index: index, ParseError: "line ends with invalid JSON"}
+	}
+	entry := entryFromJSONValue(index, value)
+	prefixEmail := prefixEmailFromExport(line, jsonText)
+	if prefixEmail == "" {
+		return entry
+	}
+	if entry.Email == "" {
+		entry.Email = prefixEmail
+		return entry
+	}
+	if !strings.EqualFold(prefixEmail, entry.Email) {
+		// JSON is the export of the token; keep it and surface the clash.
+		entry.Warning = "prefix email " + prefixEmail + " differs from JSON email " + entry.Email + "; using the JSON email"
+	}
+	return entry
+}
+
 func entryFromJSONValue(index int, value any) rtImportEntry {
 	switch v := value.(type) {
 	case string:
@@ -304,8 +376,8 @@ func entryFromJSONValue(index int, value any) rtImportEntry {
 				entry.Email = strings.TrimSpace(stringFromAny(raw))
 			case "project_id", "projectId":
 				entry.ProjectID = strings.TrimSpace(stringFromAny(raw))
-			case "type", "access_token", "expires_in", "timestamp", "expired", "token":
-				// recomputed by enrichment ("token" objects from other tools are ignored)
+			case "type", "access_token", "accessToken", "expires_in", "expiresIn", "timestamp", "expired", "token", "disabled", "password", "passwd", "secret":
+				// recomputed by enrichment, or secrets that must never be stored from an export
 			default:
 				entry.Extra[key] = raw
 			}
@@ -488,6 +560,9 @@ func (h *Handler) importAntigravityEntries(ctx context.Context, entries []rtImpo
 				}
 				res.Email, res.ProjectID = enriched.Email, enriched.ProjectID
 				var warnings []string
+				if e.Warning != "" {
+					warnings = append(warnings, e.Warning)
+				}
 				if enriched.EmailMismatch != "" {
 					warnings = append(warnings, "supplied email "+enriched.EmailMismatch+" differs from the token's account; using "+enriched.Email)
 				}
@@ -684,6 +759,32 @@ func antigravityArrayPayload(raw []byte) ([]rtImportEntry, bool) {
 	}
 	entries := parseRefreshTokenInput(string(trimmed))
 	return entries, len(entries) > 0
+}
+
+// lineOrientedRTPayload parses a .txt (or misnamed) vendor export / email----token
+// file. Whole-document JSON is left to antigravityArrayPayload / antigravityPayloadNeedsImport.
+func lineOrientedRTPayload(raw []byte, source string) ([]rtImportEntry, bool) {
+	trimmed := strings.TrimSpace(normalizeRTText(string(bytes.TrimSpace(raw))))
+	if trimmed == "" || strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
+		return nil, false
+	}
+	entries := parseRefreshTokenInput(trimmed)
+	if len(entries) == 0 {
+		return nil, false
+	}
+	if source != "" {
+		base := source
+		for i := range entries {
+			if entries[i].Source == "" {
+				if len(entries) == 1 {
+					entries[i].Source = base
+				} else {
+					entries[i].Source = fmt.Sprintf("%s #%d", base, i+1)
+				}
+			}
+		}
+	}
+	return entries, true
 }
 
 // ImportRefreshTokens handles POST /credentials/import/refresh-tokens.
