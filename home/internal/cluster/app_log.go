@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"gorm.io/gorm"
 )
@@ -186,33 +187,63 @@ func normalizeAppLogLevel(level string) string {
 	return level
 }
 
-const (
-	appLogPruneBatch      = 5000
-	appLogPruneMaxBatches = 200 // <= 1M rows per maintenance run, keeps each run short
-)
-
 // PruneAppLogs deletes CPA application log rows older than retentionDays in
 // small batches (the request-log retention also covers this table).
 // retentionDays <= 0 keeps everything. Freed pages are reused by Postgres.
+// Only the cluster master runs it; a second Home skips. On Postgres only one
+// replica can hold the advisory lock at a time. Batch size, inter-batch
+// sleep, and per-run row/duration caps come from pruneSettings (env-tunable).
 func (r *Repository) PruneAppLogs(ctx context.Context, retentionDays int) (int64, error) {
 	if retentionDays <= 0 {
+		return 0, nil
+	}
+	if !r.isMaintenanceLeader() {
+		log.Info("app log retention skipped; not cluster master")
 		return 0, nil
 	}
 	db, err := r.database()
 	if err != nil {
 		return 0, err
 	}
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	ctx = contextOrBackground(ctx)
+	s := loadPruneSettings()
 	var total int64
-	for i := 0; i < appLogPruneMaxBatches; i++ {
-		res := db.WithContext(contextOrBackground(ctx)).Exec(`DELETE FROM "log" WHERE id IN (SELECT id FROM "log" WHERE created_at < ? ORDER BY created_at LIMIT ?)`, cutoff, appLogPruneBatch)
-		if res.Error != nil {
-			return total, res.Error
+	held, errLock := withPruneAdvisoryLock(ctx, db, appLogRetentionLockKey, func() error {
+		cutoff := time.Now().AddDate(0, 0, -retentionDays)
+		start := time.Now()
+		for {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if total > 0 && pruneBudgetExhausted(start, total, s) {
+				log.WithFields(log.Fields{"deleted_rows": total, "max_rows": s.MaxRows, "max_duration": s.MaxDuration.String()}).
+					Info("app log retention paused; leftover will retry next hour")
+				return nil
+			}
+			res := db.WithContext(ctx).Exec(`DELETE FROM "log" WHERE id IN (SELECT id FROM "log" WHERE created_at < ? ORDER BY created_at LIMIT ?)`, cutoff, s.BatchSize)
+			if res.Error != nil {
+				return res.Error
+			}
+			total += res.RowsAffected
+			if res.RowsAffected < int64(s.BatchSize) {
+				return nil
+			}
+			if s.BatchSleep > 0 {
+				timer := time.NewTimer(s.BatchSleep)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			}
 		}
-		total += res.RowsAffected
-		if res.RowsAffected < appLogPruneBatch {
-			break
-		}
+	})
+	if errLock != nil {
+		return total, errLock
+	}
+	if !held {
+		log.Info("app log retention skipped; advisory lock held by another Home")
 	}
 	return total, nil
 }

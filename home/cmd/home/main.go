@@ -459,6 +459,9 @@ func run() int {
 		go trackLiveHomes(runCtx, clusterRepo, nodeCfg.HeartbeatTimeout)
 	}
 	if clusterRepo != nil {
+		if coordinator != nil {
+			clusterRepo.SetMaintenanceLeader(coordinator.IsMaster)
+		}
 		clusterRepo.StartScopeCache(runCtx)
 		clusterRepo.StartAffinityJanitor(runCtx)
 		clusterRepo.StartUsageRetention(runCtx, func() int { return cluster.RequestLogRetentionDays(logretention.Configured()) })
