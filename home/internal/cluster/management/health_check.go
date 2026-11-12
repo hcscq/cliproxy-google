@@ -86,6 +86,18 @@ func (h *Handler) runHealthChecks(ctx context.Context, ids []string) {
 		// one test request, reserves included, so VALIDATION_REQUIRED is caught at import.
 		p, seen := prev[id]
 		first := !seen || strings.TrimSpace(p.Probe) == ""
+		// Re-read just before starting: if the import-time checker (or a
+		// previous sweep) already has this credential in flight, do not
+		// launch a second concurrent ImportCheck.
+		if latest, ok, err := h.repo.GetHealthCheck(ctx, id); err == nil && ok {
+			if latest.Status == "running" && time.Since(latest.CheckedAt) < 15*time.Minute {
+				continue
+			}
+			if rec.BatchID == "" && latest.BatchID != "" {
+				rec.BatchID = latest.BatchID
+				rec.ImportedAt = latest.ImportedAt
+			}
+		}
 		_ = h.repo.SaveHealthCheck(ctx, rec)
 		wg.Add(1)
 		go func(rec cluster.CredentialHealthCheck, first bool) {
@@ -230,19 +242,70 @@ func (h *Handler) StartHealthCheck(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"status": "ok", "accepted": len(ids), "failed": nonNilStrings(failed)})
 }
 
+// healthChecksForBatch returns the health rows that belong to an import batch.
+// A row matches if health.batch_id equals batchID, or if credential_import
+// associates the credential with this batch (fallback when a later sweep
+// overwrote health.batch_id with an empty value). Imported credentials that
+// still have no health row are included as "running" stubs so the panel's
+// total/running counts line up with the imported count.
+func healthChecksForBatch(checks map[string]cluster.CredentialHealthCheck, imports map[string]cluster.CredentialImport, batchID string) []cluster.CredentialHealthCheck {
+	batchID = strings.TrimSpace(batchID)
+	if batchID == "" {
+		return nil
+	}
+	want := make(map[string]cluster.CredentialImport)
+	for id, imp := range imports {
+		if imp.BatchID == batchID {
+			want[id] = imp
+		}
+	}
+	out := make([]cluster.CredentialHealthCheck, 0, len(want)+len(checks))
+	seen := make(map[string]bool, len(want))
+	for id, r := range checks {
+		imp, imported := want[id]
+		if r.BatchID != batchID && !imported {
+			continue
+		}
+		if r.BatchID == "" && imported {
+			r.BatchID = imp.BatchID
+		}
+		if r.ImportedAt == nil && imported {
+			t := imp.ImportedAt
+			r.ImportedAt = &t
+		}
+		out = append(out, r)
+		seen[id] = true
+	}
+	for id, imp := range want {
+		if seen[id] {
+			continue
+		}
+		t := imp.ImportedAt
+		out = append(out, cluster.CredentialHealthCheck{AuthUUID: id, Status: "running", BatchID: batchID, ImportedAt: &t, CheckedAt: t})
+	}
+	return out
+}
+
 func (h *Handler) healthRecords(ctx context.Context, batchID string, ids map[string]bool) ([]cluster.CredentialHealthCheck, map[string]string, map[string]int64) {
 	all, _ := h.repo.ListHealthChecks(ctx)
 	emails, _ := h.repo.CredentialEmails(ctx)
 	seqs, _ := h.repo.AuthSeqs(ctx)
-	out := make([]cluster.CredentialHealthCheck, 0, len(all))
-	for id, r := range all {
-		if _, live := emails[id]; !live {
+	imports, _ := h.repo.ListCredentialImports(ctx)
+	var candidates []cluster.CredentialHealthCheck
+	if batchID != "" {
+		candidates = healthChecksForBatch(all, imports, batchID)
+	} else {
+		candidates = make([]cluster.CredentialHealthCheck, 0, len(all))
+		for _, r := range all {
+			candidates = append(candidates, r)
+		}
+	}
+	out := make([]cluster.CredentialHealthCheck, 0, len(candidates))
+	for _, r := range candidates {
+		if _, live := emails[r.AuthUUID]; !live {
 			continue
 		}
-		if batchID != "" && r.BatchID != batchID {
-			continue
-		}
-		if ids != nil && !ids[id] {
+		if ids != nil && !ids[r.AuthUUID] {
 			continue
 		}
 		out = append(out, r)
