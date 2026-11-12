@@ -545,3 +545,29 @@ func TestDirectPruneLockSessionCloseDiscardsOnUnlockError(t *testing.T) {
 		t.Fatalf("nil conn Close: %v", err)
 	}
 }
+
+func TestPruneDirectDBFollowsGormSession(t *testing.T) {
+	repo := newRefreshTestRepository(t)
+	main, err := repo.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := newRefreshTestRepository(t)
+	bulk, err := other.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bulkDBs.Store(main, bulk)
+	t.Cleanup(func() { bulkDBs.Delete(main) })
+
+	session := main.WithContext(context.Background())
+	if session == main {
+		t.Fatal("WithContext should return a distinct *gorm.DB")
+	}
+	if got := pruneDirectDB(session); got != bulk {
+		t.Fatalf("session lookup missed bulk pool: got %p want %p", got, bulk)
+	}
+	if got := pruneDirectDB(main); got != bulk {
+		t.Fatalf("main lookup missed bulk pool: got %p want %p", got, bulk)
+	}
+}

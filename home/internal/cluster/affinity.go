@@ -349,7 +349,11 @@ func (r *Repository) PurgeAffinity(ctx context.Context, keep time.Duration) (int
 		log.Info("request affinity retention skipped; not cluster master")
 		return 0, nil
 	}
-	db := r.db.WithContext(contextOrBackground(ctx))
+	db, err := r.database()
+	if err != nil {
+		return 0, err
+	}
+	db = db.WithContext(contextOrBackground(ctx))
 	s := loadPruneSettings()
 	var total int64
 	held, errLock := withPruneAdvisoryLock(ctx, db, affinityRetentionLockKey, func(connDB *gorm.DB) error {
