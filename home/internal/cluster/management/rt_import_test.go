@@ -242,3 +242,49 @@ func TestUploadSingleFileArrayImportsAll(t *testing.T) {
 		t.Fatalf("%s", rec.Body.String())
 	}
 }
+
+func TestVendorExportLineDryRunAndTxtUpload(t *testing.T) {
+	_, repo, engine, cleanup := newRTImportHarness(t)
+	defer cleanup()
+	line := vendorExportLine("user.x-y@gmail.com", "user.x-y@gmail.com", "proj-abc", "antigravity", "")
+	code, got := postJSON(t, engine, "/credentials/import/refresh-tokens", map[string]any{"text": line, "dry_run": true, "reserve": true})
+	if code != 200 {
+		t.Fatalf("code %d %v", code, got)
+	}
+	sum := got["summary"].(map[string]any)
+	if sum["created"].(float64) != 1 || sum["failed"].(float64) != 0 {
+		t.Fatalf("summary %v", sum)
+	}
+	res := got["results"].([]any)[0].(map[string]any)
+	if res["status"] != "would_create" || res["email"] != "user.x-y@gmail.com" || res["project_id"] != "proj-abc" {
+		t.Fatalf("result %v", res)
+	}
+	raw := string(mustJSON(got))
+	for _, secret := range []string{fakeExportPass, fakeExportID, fakeExportAccess, fakeRTShape} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("dry-run response leaked a secret field of len %d", len(secret))
+		}
+	}
+	if n := len(agCreds(t, repo)); n != 0 {
+		t.Fatalf("dry run wrote %d credentials", n)
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	w, _ := mw.CreateFormFile("file", "export.txt")
+	_, _ = w.Write([]byte(line + "\n"))
+	_ = mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/credentials?dry_run=1", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"would_create"`) {
+		t.Fatalf("txt upload %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), fakeExportPass) || strings.Contains(rec.Body.String(), fakeExportAccess) {
+		t.Fatal("txt upload response leaked discarded fields")
+	}
+	if n := len(agCreds(t, repo)); n != 0 {
+		t.Fatalf("txt dry run wrote %d credentials", n)
+	}
+}

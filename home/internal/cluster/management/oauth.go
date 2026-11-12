@@ -155,6 +155,14 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 				results = append(results, res)
 				continue
 			}
+			if many, ok := lineOrientedRTPayload(data, name); ok {
+				for k := range many {
+					agEntries = append(agEntries, many[k])
+					agPos = append(agPos, len(results))
+					results = append(results, RTImportResult{Index: len(results), Source: many[k].Source})
+				}
+				continue
+			}
 			if dryRun {
 				res.Status = "would_create"
 				results = append(results, res)
@@ -253,6 +261,25 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		c.JSON(http.StatusOK, resp)
 		return
 	}
+	if many, ok := lineOrientedRTPayload(bytes.TrimSpace(body), ""); ok {
+		if len(many) > rtImportMaxItemsPerRequest*5 {
+			respondError(c, http.StatusRequestEntityTooLarge, "too_many_items", fmt.Errorf("at most %d entries per upload", rtImportMaxItemsPerRequest*5))
+			return
+		}
+		ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 5*time.Minute)
+		defer cancel()
+		results, summary, errImport := h.importAntigravityEntries(ctx, many, uploadOpts)
+		if errImport != nil {
+			respondError(c, http.StatusInternalServerError, "import_failed", errImport)
+			return
+		}
+		resp := gin.H{"status": "ok", "dry_run": dryRun, "summary": summary, "results": results}
+		if !dryRun {
+			h.afterImport(ctx, resp, results, c.Query("batch_id"), healthCheck, "paste")
+		}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
 	if dryRun {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "dry_run": true})
 		return
@@ -265,13 +292,14 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "name": name})
 }
 
-// readUploadedJSON reads one uploaded .json file.
+// readUploadedJSON reads one uploaded .json or .txt credential file.
 func readUploadedJSON(header *multipart.FileHeader) ([]byte, error) {
 	if header == nil {
 		return nil, fmt.Errorf("file is required")
 	}
-	if !strings.HasSuffix(strings.ToLower(filepath.Base(header.Filename)), ".json") {
-		return nil, fmt.Errorf("file must be .json")
+	name := strings.ToLower(filepath.Base(header.Filename))
+	if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".txt") {
+		return nil, fmt.Errorf("file must be .json or .txt")
 	}
 	src, errOpen := header.Open()
 	if errOpen != nil {
@@ -286,7 +314,7 @@ func readUploadedJSON(header *multipart.FileHeader) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty file")
 	}
-	if !json.Valid(data) {
+	if strings.HasSuffix(name, ".json") && !json.Valid(data) {
 		return nil, fmt.Errorf("file is not valid JSON")
 	}
 	return data, nil
