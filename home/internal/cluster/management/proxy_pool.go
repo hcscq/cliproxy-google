@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/proxyutil"
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -219,5 +220,9 @@ func (h *Handler) ListEgress(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"items": []any{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	out := make([]home.EgressStatus, len(items))
+	for i := range items {
+		out[i] = home.SanitizeEgressStatus(items[i])
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
 }

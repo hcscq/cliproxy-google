@@ -1,0 +1,134 @@
+# CPA's own "secondary-IP → Bright Data" relay. DEFAULT unused: Home/Proxy only
+# talk to it when routing.egress.bd.enabled=true AND a credential is explicitly
+# assigned to a bd/<ip> egress. Applying this DaemonSet does not move any
+# credential and does not enable the feature.
+#
+# Target nodes (the two CPA egress-agent nodes that do not run kiro's :3129):
+#   rainyun-7fm6r3az, rainyun-xnrgjetf
+#
+# Bright Data allowlist (operator step, not done by this manifest):
+#   Add the CURRENT secondary IPv4 of those two nodes to the ISP zone allowlist.
+#   Read them from the CPA panel (副 IP on those nodes) or `ip -4 addr show`
+#   on the node. Do not allowlist the node primary / control-plane IPs.
+#   Confirm live addresses before submitting — secondary IPs have been rotated.
+#
+# Host firewall: allow tcp 3142 from 10.42.0.0/16 and 172.16.0.0/16 (same as 3141).
+# Secret cliproxy-bd-isp is for Home/Proxy (zone password), not for this relay
+# (Squid uses login=PASSTHRU; the client supplies the username/password).
+#
+# Images are pinned public tags; bump via this file when changing relay.py or
+# squid.conf (checksum annotation below is informational — change it when you
+# edit the ConfigMap so pods roll).
+# ConfigMap cliproxy-bd-relay is NOT in this file (a placeholder would be a
+# footgun). Create it from the files in deploy/k3s/bd-relay/:
+#
+#   kubectl -n cliproxy-google create configmap cliproxy-bd-relay \
+#     --from-file=relay.py=deploy/k3s/bd-relay/relay.py \
+#     --from-file=squid.conf=deploy/k3s/bd-relay/squid.conf \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: cliproxy-bd-relay
+  namespace: cliproxy-google
+  labels:
+    app: cliproxy-bd-relay
+spec:
+  # ClusterIP so Home/Proxy use a stable DNS name. Both nodes' secondary IPs
+  # must be on the BD allowlist because traffic may land on either pod.
+  selector:
+    app: cliproxy-bd-relay
+  ports:
+    - name: squid
+      port: 3142
+      targetPort: 3142
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cliproxy-bd-relay
+  namespace: cliproxy-google
+  labels:
+    app: cliproxy-bd-relay
+spec:
+  selector:
+    matchLabels:
+      app: cliproxy-bd-relay
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: cliproxy-bd-relay
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      terminationGracePeriodSeconds: 20
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - rainyun-7fm6r3az
+                      - rainyun-xnrgjetf
+      tolerations:
+        - operator: Exists
+      volumes:
+        - name: cfg
+          configMap:
+            name: cliproxy-bd-relay
+        - name: squid-tmp
+          emptyDir: {}
+      initContainers:
+        - name: install-iproute
+          # The relay image is a pinned python alpine; this init is a no-op if
+          # the main relay container already has `ip`. Kept as documentation.
+          image: python:3.12-alpine@sha256:f7fd610959cae736251523b54eb26cecb74f60ffa60bf39d9faccf128b526ab8
+          command: ["sh", "-c", "exit 0"]
+      containers:
+        - name: relay
+          image: python:3.12-alpine@sha256:f7fd610959cae736251523b54eb26cecb74f60ffa60bf39d9faccf128b526ab8
+          command:
+            - sh
+            - -c
+            - |
+              apk add --no-cache iproute2 >/dev/null
+              exec python -u /cfg/relay.py
+          env:
+            - {name: LISTEN_HOST, value: "127.0.0.1"}
+            - {name: LISTEN_PORT, value: "44447"}
+            - {name: UPSTREAM_HOST, value: "brd.superproxy.io"}
+            - {name: UPSTREAM_PORT, value: "44445"}
+            - {name: OUTBOUND_INTERFACE, value: "ens19"}
+          volumeMounts:
+            - {name: cfg, mountPath: /cfg, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: 44447}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+        - name: squid
+          image: ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
+          command: ["squid", "-N", "-f", "/cfg/squid.conf"]
+          ports:
+            - {name: squid, containerPort: 3142, hostPort: 3142}
+          volumeMounts:
+            - {name: cfg, mountPath: /cfg, readOnly: true}
+            - {name: squid-tmp, mountPath: /tmp}
+          readinessProbe:
+            tcpSocket: {port: 3142}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: 3142}
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}

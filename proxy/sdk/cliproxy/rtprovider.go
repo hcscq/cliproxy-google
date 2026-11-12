@@ -1,6 +1,7 @@
 package cliproxy
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -30,22 +31,43 @@ func (p *defaultRoundTripperProvider) RoundTripperFor(auth *coreauth.Auth) http.
 	if proxyStr == "" {
 		return nil
 	}
+	// Cache by the stored (password-less) URL so the Secret never becomes a map key.
+	cacheKey := proxyStr
 	p.mu.RLock()
-	rt := p.cache[proxyStr]
+	rt := p.cache[cacheKey]
 	p.mu.RUnlock()
 	if rt != nil {
 		return rt
 	}
-	transport, _, errBuild := proxyutil.BuildHTTPTransport(proxyStr)
+	buildURL, errEff := effectiveAuthProxyURL(auth)
+	if errEff != nil {
+		// BD with no Secret: fail closed, never go direct.
+		rt = failingRoundTripper{err: errEff}
+		p.mu.Lock()
+		p.cache[cacheKey] = rt
+		p.mu.Unlock()
+		return rt
+	}
+	transport, _, errBuild := proxyutil.BuildHTTPTransport(buildURL)
 	if errBuild != nil {
-		log.Errorf("%v", errBuild)
+		log.Errorf("%v", proxyutil.RedactProxyURL(errBuild.Error()))
+		if proxyutil.IsBDAuth(auth.Metadata, "") {
+			rt = failingRoundTripper{err: errBuild}
+			p.mu.Lock()
+			p.cache[cacheKey] = rt
+			p.mu.Unlock()
+			return rt
+		}
 		return nil
 	}
 	if transport == nil {
+		if proxyutil.IsBDAuth(auth.Metadata, "") {
+			return failingRoundTripper{err: fmt.Errorf("credential egress proxy unusable")}
+		}
 		return nil
 	}
 	p.mu.Lock()
-	p.cache[proxyStr] = transport
+	p.cache[cacheKey] = transport
 	p.mu.Unlock()
 	return transport
 }

@@ -51,3 +51,51 @@ func TestEgressPickerSecondaryOnly(t *testing.T) {
 		t.Fatal("unexpected moves")
 	}
 }
+
+func TestPlanEgressRebalanceSkipsBD(t *testing.T) {
+	selfA := home.EgressStatus{EgressSpec: home.EgressSpec{Name: "n/a", ProxyURL: "http://a", IP: "1.1.1.1"}, Healthy: true}
+	selfB := home.EgressStatus{EgressSpec: home.EgressSpec{Name: "n/b", ProxyURL: "http://b", IP: "1.1.1.2"}, Healthy: true}
+	bd := home.EgressStatus{EgressSpec: home.EgressSpec{Name: "bd/198.51.100.10", Kind: home.EgressKindBD, ProxyURL: "http://u@r:3142", IP: "198.51.100.10"}, Healthy: true, Credentials: 0}
+	// Many creds on A, none on BD — rebalance must not move them onto BD,
+	// and must not move a BD-pinned cred off it.
+	var auths []*coreauth.Auth
+	t0 := time.Now()
+	for i := 0; i < 4; i++ {
+		auths = append(auths, &coreauth.Auth{ID: fmt.Sprintf("s%d", i), Provider: "antigravity", ProxyURL: "http://a", CreatedAt: t0.Add(time.Duration(i) * time.Minute)})
+	}
+	auths = append(auths, &coreauth.Auth{ID: "bd1", Provider: "antigravity", ProxyURL: "http://u@r:3142", CreatedAt: t0})
+	moves := planEgressRebalance([]home.EgressStatus{selfA, selfB, bd}, auths, true)
+	for _, m := range moves {
+		if m.To == "bd/198.51.100.10" || m.From == "bd/198.51.100.10" || m.CredentialID == "bd1" {
+			t.Fatalf("rebalance touched BD: %+v", m)
+		}
+	}
+}
+
+func TestAssignableEgressStatusesDropsBD(t *testing.T) {
+	items := []home.EgressStatus{
+		{EgressSpec: home.EgressSpec{Name: "n/a", ProxyURL: "http://a"}, Healthy: true},
+		{EgressSpec: home.EgressSpec{Name: "bd/1.2.3.4", Kind: home.EgressKindBD, ProxyURL: "http://bd"}, Healthy: true},
+	}
+	got := assignableEgressStatuses(items, home.EgressSettingsValue{})
+	if len(got) != 1 || home.IsBDEgress(got[0].EgressSpec) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestEgressPickerNeverPicksBD(t *testing.T) {
+	p := &egressPicker{items: []home.EgressStatus{
+		{EgressSpec: home.EgressSpec{Name: "bd/1.2.3.4", Kind: home.EgressKindBD, ProxyURL: "http://bd"}, Healthy: true},
+		{EgressSpec: home.EgressSpec{Name: "n/a", ProxyURL: "http://a"}, Healthy: true, Credentials: 9},
+	}}
+	spec, ok := p.pick()
+	if !ok || home.IsBDEgress(spec) || spec.Name != "n/a" {
+		t.Fatalf("picked %+v %v", spec, ok)
+	}
+	p.items = []home.EgressStatus{
+		{EgressSpec: home.EgressSpec{Name: "bd/1.2.3.4", Kind: home.EgressKindBD, ProxyURL: "http://bd"}, Healthy: true},
+	}
+	if _, ok := p.pick(); ok {
+		t.Fatal("picker selected BD as the only option")
+	}
+}

@@ -491,6 +491,30 @@ type RoutingConfig struct {
 
 	// Settings shared with CPA V8.
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
+
+	// Egress holds optional egress-kind configuration. routing.egress.bd.enabled
+	// defaults to false and must stay false unless an operator explicitly turns it on.
+	Egress RoutingEgressConfig `yaml:"egress,omitempty" json:"egress,omitempty"`
+}
+
+// RoutingEgressConfig is the routing.egress subtree.
+type RoutingEgressConfig struct {
+	BD RoutingEgressBDConfig `yaml:"bd,omitempty" json:"bd,omitempty"`
+}
+
+// RoutingEgressBDConfig configures Bright Data ISP static-IP egress.
+// Enabled defaults to FALSE: BD egresses are not registered, not health-checked,
+// not shown in the panel, and assign is rejected. The zone password is NEVER
+// part of this struct; it is read from CLIPROXY_BD_ISP_PASSWORD (or _FILE).
+type RoutingEgressBDConfig struct {
+	Enabled          bool   `yaml:"enabled" json:"enabled"`
+	Endpoint         string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	BaseUsername     string `yaml:"base-username,omitempty" json:"base-username,omitempty"`
+	UsernameTemplate string `yaml:"username-template,omitempty" json:"username-template,omitempty"`
+	Zone             string `yaml:"zone,omitempty" json:"zone,omitempty"`
+	RelayPort        int    `yaml:"relay-port,omitempty" json:"relay-port,omitempty"`
+	RelayService     string `yaml:"relay-service,omitempty" json:"relay-service,omitempty"`
+	ProbeURL         string `yaml:"probe-url,omitempty" json:"probe-url,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

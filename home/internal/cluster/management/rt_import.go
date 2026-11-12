@@ -913,7 +913,7 @@ func (p *egressPicker) pick() (home.EgressSpec, bool) {
 	best := -1
 	for i := range p.items {
 		it := &p.items[i]
-		if !it.Healthy || it.Removed || (it.Primary && !p.allowPrimary) || (p.maxPer > 0 && it.Credentials >= p.maxPer) {
+		if !it.Healthy || it.Removed || (it.Primary && !p.allowPrimary) || (p.maxPer > 0 && it.Credentials >= p.maxPer) || home.IsBDEgress(it.EgressSpec) {
 			continue
 		}
 		if best < 0 || it.Credentials < p.items[best].Credentials || (it.Credentials == p.items[best].Credentials && it.Name < p.items[best].Name) {
@@ -961,14 +961,15 @@ func parseAllowPrimary(v string) *bool {
 
 // assignableEgressStatuses drops egresses on the disabled list (Settings).
 func assignableEgressStatuses(items []home.EgressStatus, settings home.EgressSettingsValue) []home.EgressStatus {
-	if len(settings.Disabled) == 0 {
-		return items
-	}
 	out := make([]home.EgressStatus, 0, len(items))
 	for _, it := range items {
-		if !settings.IsDisabled(it.EgressSpec) {
-			out = append(out, it)
+		if home.IsBDEgress(it.EgressSpec) {
+			continue // import / auto-balance never select BD
 		}
+		if settings.IsDisabled(it.EgressSpec) {
+			continue
+		}
+		out = append(out, it)
 	}
 	return out
 }

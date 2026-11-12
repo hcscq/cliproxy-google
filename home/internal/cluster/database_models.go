@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 8
+const currentDatabaseVersion = 9
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -273,8 +273,12 @@ var databaseSnapshotV4Models = databaseSnapshotV4ModelRegistry()
 // databaseSnapshotV5Models is the frozen database snapshot format v5 registry.
 var databaseSnapshotV5Models = databaseSnapshotV5ModelRegistry()
 
-// homeDatabaseModels is the current database snapshot registry.
-var homeDatabaseModels = currentDatabaseModels()
+// databaseSnapshotV8Models is the frozen snapshot registry for formats v7 and v8
+// (v8 only dropped redundant usage indexes; the row shape is unchanged from v7).
+var databaseSnapshotV8Models = currentDatabaseModels()
+
+// homeDatabaseModels is the current database snapshot registry (v9 adds egress_bd).
+var homeDatabaseModels = currentDatabaseModelsV9()
 
 var databaseMigrationOnlyModels = []databaseModel{
 	newDatabaseModel[schemaMigrationRecord]("home_schema_migration", []string{"id"}, false, false),
@@ -346,6 +350,12 @@ func currentDatabaseModels() []databaseModel {
 	return models
 }
 
+func currentDatabaseModelsV9() []databaseModel {
+	return append(append([]databaseModel(nil), databaseSnapshotV8Models...),
+		newDatabaseModel[EgressBDRecord]("egress_bd", []string{"id"}, false, true),
+	)
+}
+
 func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 	switch formatVersion {
 	case 1:
@@ -358,9 +368,9 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV4Models, true
 	case 5:
 		return databaseSnapshotV5Models, true
-	case 7:
-		// v8 only dropped redundant usage indexes; the row shape is unchanged.
-		return homeDatabaseModels, true
+	case 7, 8:
+		// v8 only dropped redundant usage indexes; the row shape is unchanged from v7.
+		return databaseSnapshotV8Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

@@ -16,10 +16,14 @@ export function egressState(e: EgressStatus, tr: (zh: string, en: string) => str
   return tr('正常', 'up');
 }
 
-/** 主 = node primary IP (default route source), 副 = secondary. */
-export const egressRole = (e: Pick<EgressStatus, 'primary'>) => (e.primary ? '主' : '副');
+/** 主 = node primary IP (default route source), 副 = secondary, BD = Bright Data static IP. */
+export const egressRole = (e: Pick<EgressStatus, 'primary' | 'kind'>) =>
+  e.kind === 'bd' ? 'BD' : e.primary ? '主' : '副';
 
 export function egressLabel(e: EgressStatus, tr: (zh: string, en: string) => string) {
+  if (e.kind === 'bd') {
+    return `${egressIP(e)} BD · ${e.name} · ${egressState(e, tr)} · ${e.credentials}`;
+  }
   return `${egressIP(e)} ${egressRole(e)} · ${egressNode(e)} · ${egressState(e, tr)} · ${e.credentials}`;
 }
 

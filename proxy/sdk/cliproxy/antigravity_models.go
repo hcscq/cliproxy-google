@@ -290,6 +290,13 @@ func (s *Service) probeAntigravityModelCapabilityHints(ctx context.Context, auth
 func (s *Service) antigravityModelFetchProxyURL(auth *coreauth.Auth) string {
 	if auth != nil {
 		if proxyURL := strings.TrimSpace(auth.ProxyURL); proxyURL != "" {
+			if built, err := effectiveAuthProxyURL(auth); err == nil && built != "" {
+				return built
+			} else if err != nil {
+				// Fail closed for BD: a broken URL will make the transport fail
+				// rather than falling back to the process default (direct).
+				return proxyURL
+			}
 			return proxyURL
 		}
 	}

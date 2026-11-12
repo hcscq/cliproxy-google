@@ -365,6 +365,7 @@ func runCustomMigrations(db *gorm.DB) error {
 		{name: "migrate_usage_provider_api_key_sources", run: migrateUsageProviderAPIKeySources},
 		{name: "migrate_usage_service_tiers", run: migrateUsageServiceTiers},
 		{name: "migrate_legacy_api_keys", run: migrateLegacyAPIKeys},
+		{name: "migrate_egress_bd_table", run: migrateEgressBDTable},
 	}
 	for _, migration := range migrations {
 		stageStartedAt := time.Now()
