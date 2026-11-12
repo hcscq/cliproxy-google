@@ -479,3 +479,29 @@ tr.row-selected > td { background: color-mix(in srgb, var(--primary) 7%, transpa
 @media (max-width: 800px) {
   .tier-metrics, .cost-form { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+/* Add-credential import modal only. Do not change global .scroll-list or .modal-body.
+   Tables grow with content; only .modal-body scrolls. No overflow-x here so sticky thead works. */
+.import-table { overflow: visible; }
+.import-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-sunken);
+  box-shadow: 0 1px 0 var(--border);
+}
+.import-input-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.import-input-collapsed .ellipsis { flex: 1; min-width: 0; }
+.import-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

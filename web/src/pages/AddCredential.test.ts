@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chunkTokenInput, parseCredentialJSON } from './AddCredential';
+import { chunkTokenInput, failedFirst, parseCredentialJSON } from './AddCredential';
 
 const tok = '1//06FakeTokenCgYIARAAGAYSNwF-L9IrFakeFake-abc_DEF0123456789xyzE68s';
 
@@ -44,5 +44,19 @@ describe('parseCredentialJSON', () => {
     expect(parseCredentialJSON('"x"').error).toBeTruthy();
     expect(parseCredentialJSON('{bad').error).toBeTruthy();
     expect(parseCredentialJSON('  ').items).toHaveLength(0);
+  });
+});
+
+describe('failedFirst', () => {
+  it('moves failed rows to the front and keeps relative order', () => {
+    const rows = [
+      { status: 'created', index: 0 },
+      { status: 'failed', index: 1 },
+      { status: 'updated', index: 2 },
+      { status: 'failed', index: 3 },
+    ];
+    expect(failedFirst(rows).map((r) => r.index)).toEqual([1, 3, 0, 2]);
+    expect(failedFirst([])).toEqual([]);
+    expect(failedFirst([{ status: 'created', index: 0 }]).map((r) => r.index)).toEqual([0]);
   });
 });

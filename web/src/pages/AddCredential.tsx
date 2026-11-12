@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useApi, useUi } from '../app-context';
 import { stateFromRedirect, type OAuthResult, type RTImportResult } from '../api/client';
 import { useI18n } from '../i18n';
@@ -371,6 +371,7 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onD
   const [progress, setProgress] = useState('');
   const [results, setResults] = useState<RTImportResult[] | null>(null);
   const [healthBatch, setHealthBatch] = useState<string | null>(null);
+  const [inputCollapsed, setInputCollapsed] = useState(false);
   const parsed = parseCredentialJSON(text);
   const parseError = text.trim() ? parsed.error : undefined;
   const items = parsed.items;
@@ -383,12 +384,16 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onD
       if (ij.job.created || ij.job.updated) onDone();
     }
   }, [ij.job, onDone]);
+  useEffect(() => {
+    if (ij.job) setInputCollapsed(true);
+  }, [ij.job?.id]);
   const asJob = items.length > 1 && items.every((x) => typeof x.refresh_token === 'string' && (x.type === undefined || x.type === 'antigravity'));
   const provider = items.length === 1 && first ? (typeof first.type === 'string' ? first.type : typeof first.provider === 'string' ? first.provider : undefined) : undefined;
   const submit = async () => {
     setBusy(true);
     setResults(null);
     setHealthBatch(null);
+    setInputCollapsed(true);
     if (asJob) {
       try {
         const res = await api.startImportJob({ items, egress_id: egress, allow_primary: allowPrimary, reserve: reserve || undefined, health_check: true, source: 'paste' });
@@ -432,7 +437,9 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onD
   };
   return (
     <div className="stack">
-      <textarea className="textarea" style={{ minHeight: 220 }} placeholder={'{"type": "antigravity", "refresh_token": "...", ...}\n或数组 [{"email":"...","refresh_token":"1//..."}, ...]，或每行一个对象'} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} data-testid="paste-json-text" />
+      <CollapsibleImportInput collapsed={inputCollapsed} onExpand={() => setInputCollapsed(false)} preview={text}>
+        <textarea className="textarea" style={{ minHeight: 220 }} placeholder={'{"type": "antigravity", "refresh_token": "...", ...}\n或数组 [{"email":"...","refresh_token":"1//..."}, ...]，或每行一个对象'} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} data-testid="paste-json-text" />
+      </CollapsibleImportInput>
       {parseError && looksLikeRefreshTokenText(text) ? (
         <div className="alert warn small" data-testid="paste-json-rt-hint">
           {tr('这看起来是 Refresh Token（email----token），请使用「Refresh Token 批量导入」页签。', 'This looks like refresh tokens (email----token); use the "Refresh Token batch import" tab.')}{' '}
@@ -461,7 +468,7 @@ function PasteJson({ onDone, onUseTokens, egress, allowPrimary, reserve }: { onD
       {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
       {results && <ImportResultsTable results={results} />}
       {!results && <ImportJobPanel job={ij.job} results={ij.results} />}
-      <RecentImports current={ij.jobId} onOpen={(id) => { setResults(null); ij.setJobId(id); }} />
+      <RecentImports current={ij.jobId} onOpen={(id) => { setResults(null); setInputCollapsed(true); ij.setJobId(id); }} />
     </div>
   );
 }
@@ -652,6 +659,7 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
   const [lastDry, setLastDry] = useState(true);
   const [healthCheck, setHealthCheck] = useState(true);
   const [healthBatch, setHealthBatch] = useState<string | null>(null);
+  const [inputCollapsed, setInputCollapsed] = useState(false);
   const ij = useImportJob();
   const chunks = chunkTokenInput(text);
   const count = chunks.reduce((a, c) => a + (c.items?.length ?? c.text?.split('\n').length ?? 0), 0);
@@ -663,7 +671,11 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
       if (ij.job.created || ij.job.updated) onDone();
     }
   }, [ij.job, onDone]);
+  useEffect(() => {
+    if (ij.job) setInputCollapsed(true);
+  }, [ij.job?.id]);
   const run = async (dry: boolean) => {
+    setInputCollapsed(true);
     if (!dry) {
       setBusy(true);
       setResults(null);
@@ -715,19 +727,21 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
   };
   return (
     <div className="stack">
-      <p className="muted" style={{ margin: 0 }}>
-        每行一个：<code>email----refresh_token</code>、仅 <code>refresh_token</code>，或卡密导出行 <code>email----密码----id----{'{'}JSON{'}'}</code>（从 JSON 取 refresh_token / email / project_id，密码与 access_token 会丢弃）。也可粘贴 JSON 数组。
-        导入时会刷新令牌、获取邮箱与 project_id；同邮箱或同 token 的已有凭据只更新令牌，保留分组与备注。新凭据自动加入 default 分组并立即探测额度。
-      </p>
-      <textarea
-        className="textarea mono"
-        style={{ minHeight: 200 }}
-        placeholder={'alice@gmail.com----1//0g...\nbob@gmail.com----password----id----{"type":"antigravity","email":"bob@gmail.com","refresh_token":"1//..."}\n\n或 [{"refresh_token":"1//..."}, ...]'}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        spellCheck={false}
-        data-testid="rt-import-text"
-      />
+      <CollapsibleImportInput collapsed={inputCollapsed} onExpand={() => setInputCollapsed(false)} preview={text}>
+        <p className="muted" style={{ margin: 0 }}>
+          每行一个：<code>email----refresh_token</code>、仅 <code>refresh_token</code>，或卡密导出行 <code>email----密码----id----{'{'}JSON{'}'}</code>（从 JSON 取 refresh_token / email / project_id，密码与 access_token 会丢弃）。也可粘贴 JSON 数组。
+          导入时会刷新令牌、获取邮箱与 project_id；同邮箱或同 token 的已有凭据只更新令牌，保留分组与备注。新凭据自动加入 default 分组并立即探测额度。
+        </p>
+        <textarea
+          className="textarea mono"
+          style={{ minHeight: 200 }}
+          placeholder={'alice@gmail.com----1//0g...\nbob@gmail.com----password----id----{"type":"antigravity","email":"bob@gmail.com","refresh_token":"1//..."}\n\n或 [{"refresh_token":"1//..."}, ...]'}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+          data-testid="rt-import-text"
+        />
+      </CollapsibleImportInput>
       <div className="row" style={{ gap: 8 }}>
         <button className="btn" disabled={busy} onClick={() => fileRef.current?.click()}>
           从文件读取（.txt / .json）
@@ -762,46 +776,101 @@ function RefreshTokenImport({ onDone, initialText = '', egress, allowPrimary, re
       {healthBatch && <HealthBatchPanel batchId={healthBatch} />}
       {results && <ImportResultsTable results={results} />}
       {!results && <ImportJobPanel job={ij.job} results={ij.results} />}
-      <RecentImports current={ij.jobId} onOpen={(id) => { setResults(null); ij.setJobId(id); }} />
+      <RecentImports current={ij.jobId} onOpen={(id) => { setResults(null); setInputCollapsed(true); ij.setJobId(id); }} />
+    </div>
+  );
+}
+
+
+/** Failed rows first so a long successful batch does not bury errors. */
+export function failedFirst<T extends { status: string }>(rows: T[]): T[] {
+  const failed = rows.filter((r) => r.status === 'failed');
+  const rest = rows.filter((r) => r.status !== 'failed');
+  return [...failed, ...rest];
+}
+
+function CollapsibleImportInput({
+  collapsed,
+  onExpand,
+  preview,
+  children,
+}: {
+  collapsed: boolean;
+  onExpand: () => void;
+  preview: string;
+  children: ReactNode;
+}) {
+  const { tr } = useI18n();
+  if (!collapsed) return <>{children}</>;
+  const line = preview.trim().split(/\r\n?|\n/).find((l) => l.trim()) ?? '';
+  return (
+    <div className="import-input-collapsed" data-testid="import-input-collapsed">
+      <span className="ellipsis faint" title={line}>{line || tr('输入已收起', 'Input collapsed')}</span>
+      <button type="button" className="btn btn-sm" onClick={onExpand} data-testid="import-input-expand">
+        {tr('展开输入', 'Expand input')}
+      </button>
     </div>
   );
 }
 
 function ImportResultsTable({ results }: { results: RTImportResult[] }) {
+  const { tr } = useI18n();
+  const [onlyFailed, setOnlyFailed] = useState(false);
+  const failedN = results.filter((r) => r.status === 'failed').length;
+  const rows = onlyFailed ? results.filter((r) => r.status === 'failed') : failedFirst(results);
   return (
-        <div className="table-wrap scroll-list" style={{ maxHeight: 280 }}>
-          <table className="table compact">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>结果</th>
-                <th>邮箱</th>
-                <th>Token</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((r) => {
-                const [label, kind] = RT_STATUS[r.status] ?? [r.status, 'warn'];
-                return (
-                  <tr key={r.index}>
-                    <td className="faint">{r.index + 1}</td>
-                    <td>
-                      <span className={`badge ${kind}`}>{label}</span>
-                    </td>
-                    <td className="ellipsis" style={{ maxWidth: 220 }} title={r.email}>
-                      {r.email || '—'}
-                    </td>
-                    <td className="mono faint">{r.token_hint}</td>
-                    <td className="small ellipsis" style={{ maxWidth: 320 }} title={[r.reason, r.warning, r.matched_by && `匹配：${r.matched_by}`].filter(Boolean).join('\n')}>
-                      {r.reason || r.warning || (r.matched_by ? `匹配已有凭据（${r.matched_by === 'email' ? '邮箱' : 'token'}）` : r.project_id ? `project ${r.project_id}` : '')}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+    <div className="stack" style={{ gap: 8 }} data-testid="import-results">
+      <div className="import-filter row">
+        <b className="small">{tr('导入明细', 'Import results')}</b>
+        <span className="faint small">
+          {tr(`${results.length} 条`, `${results.length}`)}
+          {failedN ? tr(` · ${failedN} 失败`, ` · ${failedN} failed`) : ''}
+        </span>
+        {failedN > 0 && (
+          <button
+            type="button"
+            className={`btn btn-xs${onlyFailed ? ' btn-primary' : ''}`}
+            onClick={() => setOnlyFailed((v) => !v)}
+            data-testid="import-results-fail-filter"
+          >
+            {onlyFailed ? tr('查看全部', 'Show all') : tr('只看失败', 'Failed only')}
+          </button>
+        )}
+      </div>
+      <div className="import-table">
+        <table className="table compact">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>结果</th>
+              <th>邮箱</th>
+              <th>Token</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const [label, kind] = RT_STATUS[r.status] ?? [r.status, 'warn'];
+              return (
+                <tr key={r.index}>
+                  <td className="faint">{r.index + 1}</td>
+                  <td>
+                    <span className={`badge ${kind}`}>{label}</span>
+                  </td>
+                  <td className="ellipsis" style={{ maxWidth: 220 }} title={r.email}>
+                    {r.email || '—'}
+                  </td>
+                  <td className="mono faint">{r.token_hint}</td>
+                  <td className="small ellipsis" style={{ maxWidth: 320 }} title={[r.reason, r.warning, r.matched_by && `匹配：${r.matched_by}`].filter(Boolean).join('\n')}>
+                    {r.reason || r.warning || (r.matched_by ? `匹配已有凭据（${r.matched_by === 'email' ? '邮箱' : 'token'}）` : r.project_id ? `project ${r.project_id}` : '')}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -879,8 +948,19 @@ function HealthBatchPanel({ batchId, showAll = true }: { batchId: string; showAl
         </button>
       </div>
       {!!data?.items.length && (
-        <div className="table-wrap scroll-list" style={{ maxHeight: 200 }}>
+        <div className="import-table">
           <table className="table compact">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>{tr('邮箱', 'Email')}</th>
+                <th>{tr('等级', 'Tier')}</th>
+                <th>argon</th>
+                <th>{tr('导入', 'Import')}</th>
+                <th>{tr('状态', 'Status')}</th>
+                <th>{tr('说明', 'Detail')}</th>
+              </tr>
+            </thead>
             <tbody>
               {data.items.map((it) => (
                 <tr key={it.auth_id}>
