@@ -119,14 +119,89 @@ func (r *Repository) ListCredentialImports(ctx context.Context) (map[string]Cred
 	return out, nil
 }
 
+// healthSweepImportGrace is how long after an import the leader sweep leaves
+// the credential to the import-time checker, so the two do not run a second
+// concurrent ImportCheck that can overwrite batch_id with an empty value.
+const healthSweepImportGrace = 15 * time.Minute
+
+// attachHealthCheckAttribution keeps import ownership (batch_id, imported_at)
+// when an incoming write would clear it. An empty incoming batch_id never
+// replaces a non-empty existing one; if the health row has none yet, a
+// credential_import record of this credential is used.
+func attachHealthCheckAttribution(rec CredentialHealthCheck, existing *CredentialHealthCheck, imp *CredentialImport) CredentialHealthCheck {
+	if strings.TrimSpace(rec.BatchID) == "" {
+		switch {
+		case existing != nil && strings.TrimSpace(existing.BatchID) != "":
+			rec.BatchID = existing.BatchID
+		case imp != nil && strings.TrimSpace(imp.BatchID) != "":
+			rec.BatchID = imp.BatchID
+		}
+	}
+	if rec.ImportedAt == nil {
+		switch {
+		case existing != nil && existing.ImportedAt != nil:
+			t := *existing.ImportedAt
+			rec.ImportedAt = &t
+		case imp != nil && !imp.ImportedAt.IsZero():
+			t := imp.ImportedAt
+			rec.ImportedAt = &t
+		}
+	}
+	return rec
+}
+
+func loadHealthCheckAttribution(ctx context.Context, db *gorm.DB, authUUID string) (*CredentialHealthCheck, *CredentialImport) {
+	var existing *CredentialHealthCheck
+	var rows []CredentialHealthCheck
+	if err := db.WithContext(contextOrBackground(ctx)).Where("auth_uuid = ?", authUUID).Limit(1).Find(&rows).Error; err == nil && len(rows) > 0 {
+		existing = &rows[0]
+	}
+	var imps []CredentialImport
+	if err := db.WithContext(contextOrBackground(ctx)).Where("auth_uuid = ?", authUUID).Limit(1).Find(&imps).Error; err == nil && len(imps) > 0 {
+		imp := imps[0]
+		return existing, &imp
+	}
+	return existing, nil
+}
+
 // SaveHealthCheck upserts the latest check of a credential.
+// An empty incoming batch_id / imported_at never overwrites a stored non-empty
+// value (leader sweep vs import-time check race). The health result itself
+// (status, probe, reasons, …) is always updated.
 func (r *Repository) SaveHealthCheck(ctx context.Context, rec CredentialHealthCheck) error {
 	db, err := r.database()
 	if err != nil {
 		return err
 	}
 	rec.CheckedAt = rec.CheckedAt.UTC()
-	if err := db.WithContext(contextOrBackground(ctx)).Save(&rec).Error; err != nil {
+	if strings.TrimSpace(rec.BatchID) == "" || rec.ImportedAt == nil {
+		existing, imp := loadHealthCheckAttribution(ctx, db, rec.AuthUUID)
+		rec = attachHealthCheckAttribution(rec, existing, imp)
+	}
+	assignments := map[string]any{
+		"status":        rec.Status,
+		"categories":    rec.Categories,
+		"reasons":       rec.Reasons,
+		"evidence":      rec.Evidence,
+		"probe":         rec.Probe,
+		"tier":          rec.Tier,
+		"model":         rec.Model,
+		"checked_at":    rec.CheckedAt,
+		"verify_url":    rec.VerifyURL,
+		"recheck_count": rec.RecheckCount,
+	}
+	// Only write attribution when the incoming (or attached) value is set, so a
+	// concurrent empty sweep result cannot clear a batch_id that landed first.
+	if strings.TrimSpace(rec.BatchID) != "" {
+		assignments["batch_id"] = rec.BatchID
+	}
+	if rec.ImportedAt != nil {
+		assignments["imported_at"] = rec.ImportedAt
+	}
+	if err := db.WithContext(contextOrBackground(ctx)).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "auth_uuid"}},
+		DoUpdates: clause.Assignments(assignments),
+	}).Create(&rec).Error; err != nil {
 		return err
 	}
 	if err := recordImportVerdict(ctx, db, rec); err != nil {
@@ -263,6 +338,8 @@ func (a *RuntimeAdapter) ListHealthFailedIDs(ctx context.Context) (map[string]st
 // ListHealthSweepIDs returns enabled credentials that should be health-checked
 // automatically: reserved or imported in the last 24h, with no check yet or a
 // check stuck in "running" for 15 minutes (Home restarted mid-check).
+// Credentials imported within healthSweepImportGrace are left to the import-time
+// checker so the leader sweep does not start a second concurrent ImportCheck.
 func (r *Repository) ListHealthSweepIDs(ctx context.Context, limit int) ([]string, error) {
 	db, err := r.database()
 	if err != nil {
@@ -276,7 +353,8 @@ func (r *Repository) ListHealthSweepIDs(ctx context.Context, limit int) ([]strin
 		     OR a.uuid IN (SELECT auth_uuid FROM credential_import WHERE imported_at > ?)
 		     OR a.created_at > ?) -- every new credential (OAuth login, API upload, import)
 		AND NOT EXISTS (SELECT 1 FROM credential_health_check h WHERE h.auth_uuid = a.uuid AND (h.status <> 'running' OR h.checked_at > ?))
-		ORDER BY a.seq LIMIT ?`, now.Add(-24*time.Hour), now.Add(-24*time.Hour), now.Add(-15*time.Minute), limit).Scan(&ids).Error
+		AND NOT EXISTS (SELECT 1 FROM credential_import i WHERE i.auth_uuid = a.uuid AND i.imported_at > ?)
+		ORDER BY a.seq LIMIT ?`, now.Add(-24*time.Hour), now.Add(-24*time.Hour), now.Add(-15*time.Minute), now.Add(-healthSweepImportGrace), limit).Scan(&ids).Error
 	return ids, err
 }
 
