@@ -288,3 +288,52 @@ func TestVendorExportLineDryRunAndTxtUpload(t *testing.T) {
 		t.Fatalf("txt dry run wrote %d credentials", n)
 	}
 }
+
+func TestFailedImportResultKeepsParsedEmailAndProject(t *testing.T) {
+	_, repo, engine, cleanup := newRTImportHarness(t)
+	defer cleanup()
+	dead := "dead-grant-1"
+	line := vendorExportLine("prefix@example.com", "fail.user@example.com", "proj-fail", "antigravity", "")
+	// replace the synthetic RT with a token the fake enricher rejects
+	line = strings.Replace(line, fakeRTShape, dead, 1)
+	code, got := postJSON(t, engine, "/credentials/import/refresh-tokens", map[string]any{"text": line, "dry_run": true})
+	if code != 200 {
+		t.Fatalf("code %d %v", code, got)
+	}
+	res := got["results"].([]any)[0].(map[string]any)
+	if res["status"] != "failed" || res["code"] != "token_dead" {
+		t.Fatalf("result %v", res)
+	}
+	if res["email"] != "fail.user@example.com" {
+		t.Fatalf("email=%v, want JSON email on failed enrich", res["email"])
+	}
+	if res["project_id"] != "proj-fail" {
+		t.Fatalf("project_id=%v", res["project_id"])
+	}
+	if _, ok := res["index"]; !ok {
+		t.Fatal("missing index")
+	}
+	raw := string(mustJSON(got))
+	for _, secret := range []string{fakeExportPass, fakeExportID, fakeExportAccess, dead, fakeRTShape} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("failed result leaked a secret field of len %d", len(secret))
+		}
+	}
+	if n := len(agCreds(t, repo)); n != 0 {
+		t.Fatalf("dry run wrote %d credentials", n)
+	}
+
+	// invalid trailing JSON still reports the prefix email
+	bad := "keep.me@example.com----" + fakeExportPass + "----" + fakeExportID + "----{\"refresh_token\": }"
+	_, got = postJSON(t, engine, "/credentials/import/refresh-tokens", map[string]any{"text": bad, "dry_run": true})
+	res = got["results"].([]any)[0].(map[string]any)
+	if res["status"] != "failed" || res["code"] != "invalid_input" || res["reason"] != "line ends with invalid JSON" {
+		t.Fatalf("bad json result %v", res)
+	}
+	if res["email"] != "keep.me@example.com" {
+		t.Fatalf("prefix email missing on invalid JSON: %v", res["email"])
+	}
+	if strings.Contains(string(mustJSON(got)), fakeExportPass) {
+		t.Fatal("invalid JSON response leaked password")
+	}
+}

@@ -813,11 +813,59 @@ function CollapsibleImportInput({
   );
 }
 
+function csvCell(value: string): string {
+  if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+/** Failed import rows as CSV: line, email, project_id, code, reason (never tokens or passwords). */
+export function formatFailedImportCSV(results: RTImportResult[]): string {
+  const header = ['line', 'email', 'project_id', 'code', 'reason'];
+  const lines = [header.join(',')];
+  for (const r of results.filter((x) => x.status === 'failed')) {
+    lines.push([
+      csvCell(String((r.index ?? 0) + 1)),
+      csvCell(r.email ?? ''),
+      csvCell(r.project_id ?? ''),
+      csvCell(r.code ?? ''),
+      csvCell(r.reason ?? ''),
+    ].join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** Failed import rows as a plain list for clipboard copy. */
+export function formatFailedImportText(results: RTImportResult[]): string {
+  return results
+    .filter((x) => x.status === 'failed')
+    .map((r) => {
+      const line = `#${(r.index ?? 0) + 1}`;
+      const email = r.email || '—';
+      const project = r.project_id ? ` ${r.project_id}` : '';
+      const why = [r.code, r.reason].filter(Boolean).join(' ');
+      return `${line} ${email}${project} ${why}`.trim();
+    })
+    .join('\n');
+}
+
 function ImportResultsTable({ results }: { results: RTImportResult[] }) {
+  const { toast, toastError } = useUi();
   const { tr } = useI18n();
   const [onlyFailed, setOnlyFailed] = useState(false);
   const failedN = results.filter((r) => r.status === 'failed').length;
   const rows = onlyFailed ? results.filter((r) => r.status === 'failed') : failedFirst(results);
+  const exportFailed = async (kind: 'csv' | 'text') => {
+    try {
+      if (kind === 'csv') {
+        downloadBlob(new Blob([formatFailedImportCSV(results)], { type: 'text/csv;charset=utf-8' }), 'import-failed.csv');
+      } else {
+        await navigator.clipboard.writeText(formatFailedImportText(results));
+        toast(tr('已复制失败账号（行号 / 邮箱 / 原因）', 'Copied failed accounts'));
+      }
+    } catch (e) {
+      toastError(e);
+    }
+  };
   return (
     <div className="stack" style={{ gap: 8 }} data-testid="import-results">
       <div className="import-filter row">
@@ -827,14 +875,23 @@ function ImportResultsTable({ results }: { results: RTImportResult[] }) {
           {failedN ? tr(` · ${failedN} 失败`, ` · ${failedN} failed`) : ''}
         </span>
         {failedN > 0 && (
-          <button
-            type="button"
-            className={`btn btn-xs${onlyFailed ? ' btn-primary' : ''}`}
-            onClick={() => setOnlyFailed((v) => !v)}
-            data-testid="import-results-fail-filter"
-          >
-            {onlyFailed ? tr('查看全部', 'Show all') : tr('只看失败', 'Failed only')}
-          </button>
+          <>
+            <button
+              type="button"
+              className={`btn btn-xs${onlyFailed ? ' btn-primary' : ''}`}
+              onClick={() => setOnlyFailed((v) => !v)}
+              data-testid="import-results-fail-filter"
+            >
+              {onlyFailed ? tr('查看全部', 'Show all') : tr('只看失败', 'Failed only')}
+            </button>
+            <span className="spacer" />
+            <button type="button" className="btn btn-xs" onClick={() => void exportFailed('csv')} data-testid="import-results-fail-csv">
+              {tr('导出失败 CSV', 'Export CSV')}
+            </button>
+            <button type="button" className="btn btn-xs" onClick={() => void exportFailed('text')} data-testid="import-results-fail-copy">
+              {tr('复制失败列表', 'Copy failed')}
+            </button>
+          </>
         )}
       </div>
       <div className="import-table">
@@ -851,17 +908,18 @@ function ImportResultsTable({ results }: { results: RTImportResult[] }) {
           <tbody>
             {rows.map((r) => {
               const [label, kind] = RT_STATUS[r.status] ?? [r.status, 'warn'];
+              const emailTitle = [r.email, r.project_id && `project ${r.project_id}`].filter(Boolean).join('\n');
               return (
                 <tr key={r.index}>
                   <td className="faint">{r.index + 1}</td>
                   <td>
                     <span className={`badge ${kind}`}>{label}</span>
                   </td>
-                  <td className="ellipsis" style={{ maxWidth: 220 }} title={r.email}>
+                  <td className="ellipsis" style={{ maxWidth: 220 }} title={emailTitle}>
                     {r.email || '—'}
                   </td>
                   <td className="mono faint">{r.token_hint}</td>
-                  <td className="small ellipsis" style={{ maxWidth: 320 }} title={[r.reason, r.warning, r.matched_by && `匹配：${r.matched_by}`].filter(Boolean).join('\n')}>
+                  <td className="small ellipsis" style={{ maxWidth: 320 }} title={[r.reason, r.warning, r.project_id && `project ${r.project_id}`, r.matched_by && `匹配：${r.matched_by}`].filter(Boolean).join('\n')}>
                     {r.reason || r.warning || (r.matched_by ? `匹配已有凭据（${r.matched_by === 'email' ? '邮箱' : 'token'}）` : r.project_id ? `project ${r.project_id}` : '')}
                   </td>
                 </tr>
