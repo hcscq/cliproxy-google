@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -315,21 +316,64 @@ type pruneLockSession interface {
 // pruneDirectDB prefers the direct bulk-write pool, then the lease pool, then
 // db itself. Session advisory locks must not use the pgbouncer transaction
 // pool (the main pool when HOME_PG_POOLER_ADDR is set).
+//
+// Lookups are by the underlying *sql.DB, not the *gorm.DB pointer: callers
+// often pass db.WithContext(...) which is a new session object that would
+// miss the pool maps keyed on the Open() instance and silently fall back
+// to pgbouncer.
 func pruneDirectDB(db *gorm.DB) *gorm.DB {
 	if db == nil {
 		return nil
 	}
-	if v, ok := bulkDBs.Load(db); ok && v != nil {
-		if direct, ok := v.(*gorm.DB); ok && direct != nil {
-			return direct
-		}
+	if direct := directPoolFor(db, &bulkDBs); direct != nil {
+		return direct
 	}
-	if v, ok := leaseDBs.Load(db); ok && v != nil {
-		if direct, ok := v.(*gorm.DB); ok && direct != nil {
-			return direct
-		}
+	if direct := directPoolFor(db, &leaseDBs); direct != nil {
+		return direct
 	}
 	return db
+}
+
+func directPoolFor(db *gorm.DB, pools *sync.Map) *gorm.DB {
+	if v, ok := pools.Load(db); ok && v != nil {
+		if direct, ok := v.(*gorm.DB); ok && direct != nil {
+			return direct
+		}
+	}
+	sqlDB := gormSQLDB(db)
+	if sqlDB == nil {
+		return nil
+	}
+	var found *gorm.DB
+	pools.Range(func(k, v any) bool {
+		main, _ := k.(*gorm.DB)
+		direct, _ := v.(*gorm.DB)
+		if main == nil || direct == nil {
+			return true
+		}
+		if gormSQLDB(main) != sqlDB {
+			return true
+		}
+		found = direct
+		return false
+	})
+	return found
+}
+
+func gormSQLDB(db *gorm.DB) (sqlDB *sql.DB) {
+	if db == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			sqlDB = nil
+		}
+	}()
+	d, err := db.DB()
+	if err != nil {
+		return nil
+	}
+	return d
 }
 
 type directPruneLockSession struct {
