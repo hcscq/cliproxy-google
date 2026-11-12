@@ -49,7 +49,9 @@ func TestAffinityBindLookupExpiryAndStats(t *testing.T) {
 	if _, ok := repo.LookupAffinity(ctx, exp); ok {
 		t.Fatal("expired binding returned")
 	}
-	repo.PurgeAffinity(ctx, time.Hour)
+	if _, err := repo.PurgeAffinity(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
 	var n int64
 	repo.db.Model(&AffinityBindingRecord{}).Where("binding_key = ?", exp).Count(&n)
 	if n != 0 {

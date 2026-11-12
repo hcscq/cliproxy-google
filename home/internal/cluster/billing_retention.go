@@ -28,8 +28,10 @@ func BillingChargeRetentionDays(configured int) int {
 // PruneBillingCharges deletes billing_charge rows older than retentionDays in
 // small batches (short row locks, no table lock). Only the cluster master
 // runs it; a second Home skips. On Postgres only one replica can hold the
-// advisory lock at a time. Batch size, inter-batch sleep, and per-run
-// row/duration caps come from pruneSettings (env-tunable).
+// advisory lock at a time. Each batch runs in its own short transaction with
+// a statement_timeout; a timeout stops this run and leaves leftovers for the
+// next hour. Batch size (CPA_PRUNE_BILLING_BATCH_SIZE), inter-batch sleep,
+// per-run row/duration caps, and statement timeout come from pruneSettings.
 func (r *Repository) PruneBillingCharges(ctx context.Context, retentionDays int) (int64, error) {
 	if retentionDays <= 0 {
 		return 0, nil
@@ -43,12 +45,13 @@ func (r *Repository) PruneBillingCharges(ctx context.Context, retentionDays int)
 		return 0, err
 	}
 	ctx = contextOrBackground(ctx)
-	isPG := db.Dialector != nil && db.Dialector.Name() == "postgres"
 	s := loadPruneSettings()
+	batchSize := s.billingBatchSize()
+	// Primary-key subquery (no ORDER BY): EXPLAIN shows a seq scan finds the
+	// first N expired rows in ~100ms. ORDER BY created_at would sort the
+	// matching set without a standalone created_at index; the 37s cost was
+	// index/WAL maintenance of 1000 deletes on a bloated heap, not the scan.
 	query := `DELETE FROM "billing_charge" WHERE id IN (SELECT id FROM "billing_charge" WHERE created_at < ? LIMIT ?)`
-	if isPG {
-		query = `DELETE FROM "billing_charge" WHERE ctid = ANY(ARRAY(SELECT ctid FROM "billing_charge" WHERE created_at < ? LIMIT ?))`
-	}
 	var total int64
 	held, errLock := withPruneAdvisoryLock(ctx, db, billingChargeRetentionLockKey, func() error {
 		cutoff := time.Now().AddDate(0, 0, -retentionDays)
@@ -62,12 +65,17 @@ func (r *Repository) PruneBillingCharges(ctx context.Context, retentionDays int)
 					Info("billing charge retention paused; leftover will retry next hour")
 				return nil
 			}
-			res := db.WithContext(ctx).Exec(query, cutoff, s.BatchSize)
-			if res.Error != nil {
-				return res.Error
+			n, errDel := execPruneBatch(ctx, db, s.StatementTimeout, query, cutoff, batchSize)
+			if errDel != nil {
+				if isStatementTimeoutErr(errDel) {
+					log.WithError(errDel).WithFields(log.Fields{"deleted_rows": total, "batch_size": batchSize, "statement_timeout": s.StatementTimeout.String()}).
+						Info("billing charge retention paused after statement timeout; leftover will retry next hour")
+					return nil
+				}
+				return errDel
 			}
-			total += res.RowsAffected
-			if res.RowsAffected < int64(s.BatchSize) {
+			total += n
+			if n < int64(batchSize) {
 				return nil
 			}
 			if s.BatchSleep > 0 {
