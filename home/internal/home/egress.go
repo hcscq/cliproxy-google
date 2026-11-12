@@ -59,6 +59,14 @@ type EgressSpec struct {
 	Removed          bool   `json:"removed,omitempty"`
 	PublicChanged    bool   `json:"public_changed,omitempty"`
 	ExpectedPublicIP string `json:"expected_public_ip,omitempty"`
+	// Kind is "" (self-built / egress-agent) or "bd" (Bright Data ISP static IP).
+	Kind string `json:"kind,omitempty"`
+	// ChainNode is the optional preferred BD relay node (inventory chain_ref).
+	ChainNode string `json:"chain_node,omitempty"`
+	// Draining blocks new assignment while existing pins keep working (BD only).
+	Draining bool `json:"draining,omitempty"`
+	// MaxCredentials is the per-egress cap for BD (default 1). 0 means default.
+	MaxCredentials int `json:"max_credentials,omitempty"`
 }
 
 // ParseEgressSpecs parses "name=http://host:port=ip,name2=...".
@@ -116,6 +124,7 @@ type egressState struct {
 	pins   map[string]egressPin
 	pinsAt time.Time
 	disc   egressDiscovery
+	bdRepo BDEgressRepo
 }
 
 func isEgressPauseReason(reason string) bool {
@@ -182,7 +191,7 @@ func (r *Runtime) SetEgressRepo(repo EgressRepo) {
 }
 
 func (r *Runtime) startEgressManager(ctx context.Context) {
-	if strings.TrimSpace(os.Getenv(egressEnv)) == "" && strings.TrimSpace(os.Getenv(egressAgentsEnv)) == "" {
+	if strings.TrimSpace(os.Getenv(egressEnv)) == "" && strings.TrimSpace(os.Getenv(egressAgentsEnv)) == "" && !r.BDEnabled() {
 		return
 	}
 	go func() {
@@ -190,6 +199,7 @@ func (r *Runtime) startEgressManager(ctx context.Context) {
 		for {
 			if r.catalogLeader() && r.coreManager != nil {
 				specs, legacy := r.currentEgressSpecs(ctx, false)
+				specs = mergeBDSpecs(specs, r.bdEgressSpecs(ctx))
 				// repo is wired after start; seed only once it exists.
 				if key := specsKey(specs); key != seededKey && r.hasEgressRepo() {
 					if errSeed := r.seedEgressPool(ctx, specs); errSeed != nil {
@@ -350,7 +360,7 @@ func pickEgress(specs []EgressSpec, status map[string]*EgressStatus, counts map[
 		limit = maxPer[0]
 	}
 	for _, s := range specs {
-		if s.Removed || (s.Primary && !allowPrimary) {
+		if s.Removed || (s.Primary && !allowPrimary) || isBDEgress(s) {
 			continue
 		}
 		if st := status[s.ProxyURL]; st != nil && !st.Healthy {
@@ -423,6 +433,10 @@ func (r *Runtime) egressRoundWith(ctx context.Context, specs []EgressSpec, legac
 					defer func() { <-sem }()
 					if specs[i].Removed {
 						errs[i] = errEgressRemoved
+						return
+					}
+					if isBDEgress(specs[i]) {
+						errs[i] = checkBDEgress(ctx, specs[i], timeout, r.bdProbeURL(), loadBDPassword())
 						return
 					}
 					errs[i] = egressChecker(ctx, specs[i].ProxyURL, timeout)
@@ -611,6 +625,12 @@ func (r *Runtime) assignEgress(ctx context.Context, id string, spec EgressSpec, 
 	full.Metadata["proxy_url"] = spec.ProxyURL
 	full.Metadata[EgressIDKey] = spec.Name
 	full.Metadata[EgressIPKey] = spec.IP
+	if isBDEgress(spec) {
+		full.Metadata[EgressKindKey] = EgressKindBD
+	} else {
+		delete(full.Metadata, EgressKindKey)
+	}
+	SanitizeAuthEgressFields(full)
 	full.UpdatedAt = now
 	if _, err := r.coreManager.Update(ctx, full); err != nil {
 		log.WithError(err).Warnf("egress: assign %s failed", id)
@@ -738,19 +758,31 @@ func credentialHTTPClient(auth *coreauth.Auth, timeout time.Duration) *http.Clie
 	if proxyURL == "" {
 		return antigravityHTTPClient
 	}
+	cacheKey := proxyURL
+	var buildURL string
+	var buildErr error
+	if auth != nil && isBDAuth(auth) {
+		buildURL, buildErr = effectiveBDProxyURL(auth)
+	} else {
+		buildURL = proxyURL
+	}
 	egressTransportsMu.Lock()
 	defer egressTransportsMu.Unlock()
-	rt := egressTransports[proxyURL]
+	rt := egressTransports[cacheKey]
 	if rt == nil {
-		transport, _, err := proxyutil.BuildHTTPTransport(proxyURL)
-		if err != nil || transport == nil {
-			rt = failingTransport{err: errEgressProxy}
+		if buildErr != nil {
+			rt = failingTransport{err: buildErr}
 		} else {
-			transport.MaxIdleConnsPerHost = 64
-			transport.IdleConnTimeout = 90 * time.Second
-			rt = transport
+			transport, _, err := proxyutil.BuildHTTPTransport(buildURL)
+			if err != nil || transport == nil {
+				rt = failingTransport{err: errEgressProxy}
+			} else {
+				transport.MaxIdleConnsPerHost = 64
+				transport.IdleConnTimeout = 90 * time.Second
+				rt = transport
+			}
 		}
-		egressTransports[proxyURL] = rt
+		egressTransports[cacheKey] = rt
 	}
 	return &http.Client{Timeout: timeout, Transport: rt}
 }
@@ -776,8 +808,22 @@ func (r *Runtime) ResolveEgress(ctx context.Context, choice string, allowPrimary
 		}
 		return spec, ok, nil
 	}
+	if isBDChoice(choice) {
+		spec, err := r.resolveBDEgress(ctx, choice)
+		if err != nil {
+			return EgressSpec{}, false, err
+		}
+		return spec, true, nil
+	}
 	for _, s := range r.knownEgressSpecs(ctx) {
 		if s.Name == choice || s.IP == choice || (s.PublicIP != "" && s.PublicIP == choice) {
+			if isBDEgress(s) {
+				spec, err := r.resolveBDEgress(ctx, s.Name)
+				if err != nil {
+					return EgressSpec{}, false, err
+				}
+				return spec, true, nil
+			}
 			if s.Removed {
 				return EgressSpec{}, false, fmt.Errorf("egress %q: IP removed", choice)
 			}
@@ -804,10 +850,17 @@ func ApplyEgressMetadata(a *coreauth.Auth, spec EgressSpec) {
 	if spec.ProxyURL == "" {
 		delete(a.Metadata, EgressIDKey)
 		delete(a.Metadata, EgressIPKey)
+		delete(a.Metadata, EgressKindKey)
 	} else {
 		a.Metadata[EgressIDKey] = spec.Name
 		a.Metadata[EgressIPKey] = spec.IP
+		if isBDEgress(spec) {
+			a.Metadata[EgressKindKey] = EgressKindBD
+		} else {
+			delete(a.Metadata, EgressKindKey)
+		}
 	}
+	SanitizeAuthEgressFields(a)
 	// A pause belongs to the old egress; the new one's health decides next round.
 	if isEgressPauseReason(metaString(a, EgressPausedReasonKey)) {
 		delete(a.Metadata, EgressPausedReasonKey)
@@ -821,14 +874,16 @@ func ApplyEgressMetadata(a *coreauth.Auth, spec EgressSpec) {
 // knownEgressSpecs lists egresses on any replica: the leader's KV status list, else
 // the static configuration.
 func (r *Runtime) knownEgressSpecs(ctx context.Context) []EgressSpec {
+	var out []EgressSpec
 	if list, err := r.EgressStatuses(ctx); err == nil && len(list) > 0 {
-		out := make([]EgressSpec, 0, len(list))
+		out = make([]EgressSpec, 0, len(list))
 		for _, st := range list {
 			out = append(out, st.EgressSpec)
 		}
-		return out
+	} else {
+		out = ParseEgressSpecs(os.Getenv(egressEnv))
 	}
-	return ParseEgressSpecs(os.Getenv(egressEnv))
+	return mergeBDSpecs(out, r.bdEgressSpecs(ctx))
 }
 
 // NoEgressError explains why auto-balance found nothing.
@@ -964,14 +1019,19 @@ func (v EgressSettingsValue) IsDisabled(spec EgressSpec) bool {
 
 // assignableEgressSpecs drops disabled egresses from the candidates for new assignments.
 func assignableEgressSpecs(specs []EgressSpec, settings EgressSettingsValue) []EgressSpec {
-	if len(settings.Disabled) == 0 {
-		return specs
-	}
 	out := make([]EgressSpec, 0, len(specs))
 	for _, s := range specs {
-		if !settings.IsDisabled(s) {
-			out = append(out, s)
+		if isBDEgress(s) {
+			continue // import / auto-balance / pickEgress never select BD
 		}
+		if settings.IsDisabled(s) {
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) == len(specs) && len(settings.Disabled) == 0 {
+		// Fast path only when nothing was a BD egress and nothing is disabled.
+		return specs
 	}
 	return out
 }

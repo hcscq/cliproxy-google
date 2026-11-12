@@ -252,6 +252,15 @@ export class ApiClient {
   egressForget(id: string) {
     return this.post<{ status: string }>('/proxy/egress/forget', { id });
   }
+  bdEgress() {
+    return this.get<BDEgressSettings>('/proxy/egress/bd');
+  }
+  saveBDEgress(v: { expected_ip: string; enabled?: boolean; draining?: boolean; max_credentials?: number; chain_ref?: string }) {
+    return this.request<BDEgressItem>('PUT', '/proxy/egress/bd', { body: v });
+  }
+  deleteBDEgress(id: string) {
+    return this.post<{ status: string }>('/proxy/egress/bd/delete', { id });
+  }
   quotaCredentials(query?: Query) {
     return this.get<QuotaList>('/quota/credentials', query);
   }
@@ -1526,6 +1535,10 @@ export interface EgressStatus {
   removed?: boolean;
   public_changed?: boolean;
   expected_public_ip?: string;
+  kind?: string;
+  chain_node?: string;
+  draining?: boolean;
+  max_credentials?: number;
 }
 export interface EgressMove {
   credential_id: string;
@@ -1613,6 +1626,28 @@ export type EgressSettings = {
   fail_threshold?: number;
   probe_timeout_seconds?: number;
   probe_per_agent?: number;
+};
+
+export type BDEgressItem = {
+  id: string;
+  expected_ip: string;
+  enabled: boolean;
+  draining: boolean;
+  max_credentials: number;
+  chain_ref?: string;
+};
+
+export type BDEgressSettings = {
+  enabled: boolean;
+  endpoint?: string;
+  base_username?: string;
+  username_template?: string;
+  zone?: string;
+  relay_port?: number;
+  relay_service?: string;
+  probe_url?: string;
+  has_password: boolean;
+  items: BDEgressItem[];
 };
 export interface ImportResponse { status: string; uploaded?: number; files?: string[]; summary?: RTImportSummary; results?: RTImportResult[]; result?: RTImportResult; batch_id?: string; health_batch_id?: string }
 function importQuery(o: ImportOpts): Record<string, string | undefined> {

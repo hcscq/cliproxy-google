@@ -31,6 +31,9 @@ func planEgressRebalance(items []home.EgressStatus, auths []*coreauth.Auth, allo
 	var healthy []home.EgressStatus
 	byURL := map[string]home.EgressStatus{}
 	for _, it := range items {
+		if home.IsBDEgress(it.EgressSpec) {
+			continue // rebalance never moves onto or off a BD egress
+		}
 		if it.Healthy && !it.Removed && (allowPrimary || !it.Primary) {
 			healthy = append(healthy, it)
 			byURL[it.ProxyURL] = it

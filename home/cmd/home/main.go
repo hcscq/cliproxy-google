@@ -503,6 +503,7 @@ func run() int {
 	})
 	quotaCollector.Start(runCtx)
 	rt.SetEgressRepo(egressRepoAdapter{repo})
+	rt.SetBDEgressRepo(bdEgressRepoAdapter{repo})
 	go runCredentialCallStatsRollup(runCtx, repo)
 
 	respSrv = respserver.New(addr, rt)
@@ -1180,6 +1181,34 @@ func (a egressRepoAdapter) MarkEgressResult(ctx context.Context, id string, heal
 	}
 	_, err := a.repo.MarkProxyPoolTestResult(ctx, id, result, at)
 	return err
+}
+
+type bdEgressRepoAdapter struct{ repo *cluster.Repository }
+
+func (a bdEgressRepoAdapter) ListBDEgress(ctx context.Context) ([]home.BDEgressRow, error) {
+	items, err := a.repo.ListEgressBD(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]home.BDEgressRow, 0, len(items))
+	for _, it := range items {
+		out = append(out, home.BDEgressRow{
+			ID: it.ID, ExpectedIP: it.ExpectedIP, Enabled: it.Enabled,
+			Draining: it.Draining, MaxCredentials: it.MaxCredentials, ChainRef: it.ChainRef,
+		})
+	}
+	return out, nil
+}
+
+func (a bdEgressRepoAdapter) UpsertBDEgress(ctx context.Context, row home.BDEgressRow) error {
+	return a.repo.UpsertEgressBD(ctx, cluster.EgressBDRecord{
+		ID: row.ID, ExpectedIP: row.ExpectedIP, Enabled: row.Enabled,
+		Draining: row.Draining, MaxCredentials: row.MaxCredentials, ChainRef: row.ChainRef,
+	})
+}
+
+func (a bdEgressRepoAdapter) DeleteBDEgress(ctx context.Context, id string) error {
+	return a.repo.DeleteEgressBD(ctx, id)
 }
 
 // runCredentialCallStatsRollup folds usage rows into per-credential stats every 30s

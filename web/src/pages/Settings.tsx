@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAction, useApi, useAsync, useUi } from '../app-context';
 import { useI18n } from '../i18n';
 import { Badge, Card, ErrorBox, Loading, Spinner, Switch } from '../components/ui';
-import { fmtBytes, type EgressMove } from '../api/client';
+import { fmtBytes, type EgressMove, type BDEgressItem } from '../api/client';
 import { fmtNum, fmtTime } from '../format';
 
 type FieldType = 'bool' | 'number' | 'text' | 'select' | 'list';
@@ -31,6 +31,7 @@ const SECTIONS: { zh: string; en: string; compact?: boolean; fields: FieldDef[] 
       { path: 'routing.session-affinity-ttl', type: 'text', zh: '会话粘性时长', en: 'Session affinity TTL', hintZh: '例如 1h、30m', hintEn: 'e.g. 1h, 30m' },
       { path: 'routing.antigravity-catalog-refresh', type: 'text', zh: '模型目录刷新间隔', en: 'Model catalog refresh interval', hintZh: 'Home 主节点定时获取各 Antigravity 凭据上游模型目录的间隔（如 15m、30m、1h；最小 1m；填 off 关闭定时，仅保留手动与错误触发刷新）。留空 = 15m。每次刷新每个凭据 1 次上游请求，结果存数据库供所有副本使用。', hintEn: 'How often the Home leader re-fetches every Antigravity credential\'s upstream model catalog (e.g. 15m, 30m, 1h; min 1m; "off" disables the timer, manual and error-triggered refreshes still work). Empty = 15m. One upstream call per credential per refresh, stored in the database for all replicas.' },
       { path: 'routing.force-model-prefix', type: 'bool', zh: '强制模型前缀', en: 'Force model prefix', hintZh: '带前缀的凭据只响应 “前缀/模型”。', hintEn: 'Prefixed credentials only serve "prefix/model".' },
+      { path: 'routing.egress.bd.enabled', type: 'bool', zh: '启用 Bright Data 出口', en: 'Enable Bright Data egress', def: false, hintZh: '默认关闭。关闭时 BD 出口不登记、不探活、不出现在面板「设置出口」，显式分配也被拒绝。导入和自动均衡永远不会选择 BD；只有显式指定 bd/<IP> 才会绑定。开启前请先完成副 IP 白名单和 Secret。密码不在此配置中。', hintEn: 'Default off. When off, BD egresses are not registered, not health-checked, not shown, and assign is rejected. Import and auto-balance never select BD; only an explicit bd/<IP> bind works. Finish the allowlist and Secret first. The zone password is not in this config.' },
     ],
   },
   {
@@ -261,6 +262,7 @@ export function SettingsPage() {
         <>
           <SettingsForm />
           <EgressPolicy />
+          <BDEgressInventory />
           <RequestLogStorage />
         </>
       ) : (
@@ -852,6 +854,120 @@ function RequestLogStorage() {
           ) : null}
         </div>
       ) : null}
+    </Card>
+  );
+}
+
+/** Bright Data ISP static-IP inventory (non-secret). The enable flag lives in routing.egress.bd.enabled. */
+function BDEgressInventory() {
+  const api = useApi();
+  const { tr } = useI18n();
+  const { toast, toastError } = useUi();
+  const st = useAsync(() => api.bdEgress(), []);
+  const [ip, setIP] = useState('');
+  const [saving, setSaving] = useState(false);
+  if (st.error) return <ErrorBox error={st.error} onRetry={st.reload} />;
+  if (!st.data) return <Loading />;
+  const items: BDEgressItem[] = st.data.items ?? [];
+  const add = async () => {
+    const expected_ip = ip.trim();
+    if (!expected_ip) return;
+    setSaving(true);
+    try {
+      await api.saveBDEgress({ expected_ip, enabled: true, max_credentials: 1 });
+      setIP('');
+      toast(tr('已保存', 'Saved'));
+      await st.reload();
+    } catch (err) {
+      toastError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const patch = async (item: BDEgressItem, upd: Partial<BDEgressItem>) => {
+    setSaving(true);
+    try {
+      await api.saveBDEgress({ expected_ip: item.expected_ip, enabled: item.enabled, draining: item.draining, max_credentials: item.max_credentials, chain_ref: item.chain_ref, ...upd });
+      toast(tr('已保存', 'Saved'));
+      await st.reload();
+    } catch (err) {
+      toastError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async (item: BDEgressItem) => {
+    if (!confirm(tr(`删除 ${item.id}？`, `Delete ${item.id}?`))) return;
+    setSaving(true);
+    try {
+      await api.deleteBDEgress(item.id);
+      toast(tr('已删除', 'Deleted'));
+      await st.reload();
+    } catch (err) {
+      toastError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Card title={tr('Bright Data 静态 IP', 'Bright Data static IPs')}>
+      <p className="small" style={{ marginTop: 0 }} data-testid="bd-egress-status">
+        {tr('总开关在上方「启用 Bright Data 出口」（routing.egress.bd.enabled，默认关闭）。关闭时此处只准备清单，系统不会登记、探活或分配。', 'The master switch is “Enable Bright Data egress” above (routing.egress.bd.enabled, default off). While off this list is preparation only: nothing is registered, probed, or assigned.')}
+        {' '}
+        {st.data.enabled ? tr('当前：已启用', 'Currently: on') : tr('当前：已关闭', 'Currently: off')}
+        {' · '}
+        {st.data.has_password ? tr('密码已配置', 'Password configured') : tr('密码未配置（挂载 Secret cliproxy-bd-isp）', 'Password not configured (mount Secret cliproxy-bd-isp)')}
+      </p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+        <input
+          type="text"
+          placeholder="198.51.100.10"
+          value={ip}
+          onChange={(e) => setIP(e.target.value)}
+          disabled={saving}
+          data-testid="bd-egress-ip"
+          style={{ width: 200 }}
+        />
+        <button className="btn" disabled={saving || !ip.trim()} onClick={add} data-testid="bd-egress-add">
+          {tr('添加静态 IP', 'Add static IP')}
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <p className="small">{tr('还没有静态 IP。添加后也不会自动绑定任何凭据。', 'No static IPs yet. Adding one never auto-binds a credential.')}</p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>IP</th>
+              <th>{tr('启用', 'Enabled')}</th>
+              <th>{tr('排空', 'Draining')}</th>
+              <th>{tr('上限', 'Max')}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it) => (
+              <tr key={it.id}>
+                <td>{it.id}</td>
+                <td>{it.expected_ip}</td>
+                <td>
+                  <input type="checkbox" checked={it.enabled} disabled={saving} onChange={(e) => patch(it, { enabled: e.target.checked })} />
+                </td>
+                <td>
+                  <input type="checkbox" checked={it.draining} disabled={saving} onChange={(e) => patch(it, { draining: e.target.checked })} />
+                </td>
+                <td>{it.max_credentials}</td>
+                <td>
+                  <button className="btn btn-ghost" disabled={saving} onClick={() => remove(it)}>
+                    {tr('删除', 'Delete')}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </Card>
   );
 }

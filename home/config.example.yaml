@@ -160,6 +160,24 @@ routing:
   # Home retains its existing session scheduling policy.
   # session-affinity-subagents: true
 
+  # Bright Data ISP static-IP egress (kind=bd). DEFAULT OFF.
+  # When enabled is false (the default): BD egresses are not registered, not
+  # health-checked, not shown in the panel, and assign to a BD egress is rejected.
+  # Import / auto-balance never select a BD egress; only an explicit
+  # POST /proxy/egress/assign egress_id=bd/<ip> (or a manual panel pick) binds one.
+  # The Bright Data zone password is NOT in this file; mount Secret cliproxy-bd-isp
+  # as CLIPROXY_BD_ISP_PASSWORD (or CLIPROXY_BD_ISP_PASSWORD_FILE).
+  egress:
+    bd:
+      enabled: false
+      # endpoint: "brd.superproxy.io:44445"
+      # base-username: "brd-customer-example-zone-isp"
+      # username-template: "{baseUsername}-ip-{ip}-dns-remote-route_err-block"
+      # zone: "isp_proxy1"
+      # relay-port: 3142
+      # relay-service: "cliproxy-bd-relay.cliproxy-google.svc.cluster.local:3142"
+      # probe-url: "https://api.ipify.org?format=json"
+
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false
 
