@@ -529,22 +529,103 @@ func (h *Handler) refreshExistingOAuthCredential(ctx context.Context, existing *
 	return h.refreshAuths(ctx)
 }
 
-// clearAccountBlockOnReauth lifts an automatic account-error disable (e.g. 403
-// "Verify your account") once the user has re-authorized the account; the fresh
-// tokens make the old error stale. A manual disable (no auto reason) is kept.
+// accountSuspendedReason is the auto_disabled_reason written by the account-block
+// guard for a Terms-of-Service / account-suspended 403. Re-auth updates tokens
+// but does not return the credential to the scheduling pool.
+const accountSuspendedReason = "account_suspended"
+
+const disabledViaManagementAPI = "disabled via management API"
+
+// clearAccountBlockOnReauth lifts an automatic disable once the user has
+// re-authorized the account. Fresh tokens make the old error stale.
+//
+// Cleared (returns true, credential re-enabled):
+//   - 403 auto-blocks with auto_disabled_reason other than account_suspended
+//     (e.g. account_verification_required)
+//   - 401 / status_message=unauthorized / LastError 401 / authentication_error,
+//     including leftover unauthorized model states
+//
+// Kept disabled (returns false; the caller still writes the new tokens):
+//   - manual disables (status_message "disabled via management API", no auto
+//     reason, and not a 401 unauthorized state)
+//   - TOS / account_suspended auto-blocks
+//
+// ApplyRefreshSuccessState is not used here: it would set Status back to
+// Disabled when the credential was previously disabled.
 func clearAccountBlockOnReauth(a *coreauth.Auth, now time.Time) bool {
-	if a == nil || a.Metadata == nil || strings.TrimSpace(stringFromAny(a.Metadata[home.AccountBlockReasonKey])) == "" {
+	if a == nil {
 		return false
 	}
+	reason := ""
+	if a.Metadata != nil {
+		reason = strings.TrimSpace(stringFromAny(a.Metadata[home.AccountBlockReasonKey]))
+	}
+	if strings.EqualFold(reason, accountSuspendedReason) {
+		return false
+	}
+	unauthorized := isReauthUnauthorized(a)
+	manual := strings.EqualFold(strings.TrimSpace(a.StatusMessage), disabledViaManagementAPI)
+	if manual && reason == "" && !unauthorized {
+		return false
+	}
+	if reason == "" && !unauthorized {
+		return false
+	}
+
 	a.Disabled = false
 	a.Status = coreauth.StatusActive
 	a.StatusMessage = ""
 	a.LastError = nil
+	a.LastRefreshError = nil
+	a.Unavailable = false
+	a.NextRetryAfter = time.Time{}
+	if a.Metadata == nil {
+		a.Metadata = map[string]any{}
+	}
 	a.Metadata["disabled"] = false
 	delete(a.Metadata, home.AccountBlockReasonKey)
 	delete(a.Metadata, "auto_disabled_at")
 	a.Metadata[home.AccountBlockClearedKey] = now.UTC().Format(time.RFC3339)
+	for _, state := range a.ModelStates {
+		if state == nil {
+			continue
+		}
+		if coreauth.IsUnauthorizedModelState(state) || isReauthUnauthorizedError(state.LastError) {
+			coreauth.ResetUnauthorizedModelStateAfterRefresh(state, now)
+		}
+	}
 	return true
+}
+
+// isReauthUnauthorized reports a terminal 401 / unauthorized credential state
+// that a fresh OAuth grant should clear.
+func isReauthUnauthorized(a *coreauth.Auth) bool {
+	if a == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(a.StatusMessage), "unauthorized") {
+		return true
+	}
+	if isReauthUnauthorizedError(a.LastError) || isReauthUnauthorizedError(a.LastRefreshError) {
+		return true
+	}
+	for _, state := range a.ModelStates {
+		if coreauth.IsUnauthorizedModelState(state) || (state != nil && isReauthUnauthorizedError(state.LastError)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isReauthUnauthorizedError(err *coreauth.Error) bool {
+	if err == nil {
+		return false
+	}
+	if err.StatusCode() == http.StatusUnauthorized {
+		return true
+	}
+	code := strings.ToLower(strings.TrimSpace(err.Code))
+	return code == "unauthorized" || code == "authentication_error"
 }
 
 // storeOAuthMetadataWithContext stores an o auth metadata with context.
