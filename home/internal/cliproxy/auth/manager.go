@@ -3090,6 +3090,18 @@ func isUnauthorizedModelState(state *ModelState) bool {
 	return state.LastError != nil && (state.LastError.StatusCode() == http.StatusUnauthorized || strings.EqualFold(strings.TrimSpace(state.LastError.Code), "unauthorized"))
 }
 
+// IsUnauthorizedModelState reports whether a model state is a terminal 401 / unauthorized.
+func IsUnauthorizedModelState(state *ModelState) bool {
+	return isUnauthorizedModelState(state)
+}
+
+// ResetUnauthorizedModelStateAfterRefresh clears 401 execution state on one model
+// after a successful token refresh or re-authorization. An in-force quota cooldown
+// is preserved.
+func ResetUnauthorizedModelStateAfterRefresh(state *ModelState, now time.Time) bool {
+	return resetUnauthorizedModelStateAfterRefresh(state, now)
+}
+
 func refreshedUnauthorizedModels(before, after *Auth) []string {
 	if before == nil || after == nil {
 		return nil
