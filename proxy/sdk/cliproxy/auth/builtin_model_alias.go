@@ -12,9 +12,12 @@ import (
 // different model. With Fork, the alias is listed only for credentials whose
 // catalog contains the upstream model, alongside the original ID.
 var builtinOAuthModelAliases = map[string][]internalconfig.OAuthModelAlias{
-	// Bare "gemini-4-argon" is not an upstream ID (404); the Antigravity client and
-	// sub2api treat it as the High variant.
-	"antigravity": {{Name: "gemini-4-argon-high", Alias: "gemini-4-argon", Fork: true}},
+	// Bare "gemini-4-argon" / "gemini-4-hydrogen" are not upstream IDs (404); the
+	// Antigravity client and sub2api treat them as the High variant.
+	"antigravity": {
+		{Name: "gemini-4-argon-high", Alias: "gemini-4-argon", Fork: true},
+		{Name: "gemini-4-hydrogen-high", Alias: "gemini-4-hydrogen", Fork: true},
+	},
 }
 
 // WithBuiltinOAuthModelAliases returns aliases with the built-in defaults

@@ -28,8 +28,11 @@ func TestBuiltinAlias_ConfiguredAliasWins(t *testing.T) {
 		"claude":      {{Name: "x", Alias: "y"}},
 	}
 	out := WithBuiltinOAuthModelAliases(in)
-	if len(out["Antigravity"]) != 1 || out["Antigravity"][0].Name != "gemini-4-argon-medium" {
+	if len(out["Antigravity"]) != 2 || out["Antigravity"][0].Name != "gemini-4-argon-medium" {
 		t.Fatalf("configured alias must win, got %+v", out["Antigravity"])
+	}
+	if out["Antigravity"][1].Alias != "gemini-4-hydrogen" || out["Antigravity"][1].Name != "gemini-4-hydrogen-high" {
+		t.Fatalf("unrelated builtin alias must still be appended, got %+v", out["Antigravity"])
 	}
 	if _, dup := out["antigravity"]; dup {
 		t.Fatalf("channel matched case-insensitively; must not add a second key")
@@ -37,7 +40,23 @@ func TestBuiltinAlias_ConfiguredAliasWins(t *testing.T) {
 	if len(in["Antigravity"]) != 1 || len(out["claude"]) != 1 {
 		t.Fatalf("input mutated or other channels changed")
 	}
-	if got := WithBuiltinOAuthModelAliases(nil)["antigravity"]; len(got) != 1 || !got[0].Fork {
-		t.Fatalf("builtin must be present as fork alias, got %+v", got)
+	if got := WithBuiltinOAuthModelAliases(nil)["antigravity"]; len(got) != 2 || !got[0].Fork || !got[1].Fork {
+		t.Fatalf("builtin must be present as fork aliases, got %+v", got)
+	}
+}
+
+func TestBuiltinAlias_GeminiHydrogenResolvesToHigh(t *testing.T) {
+	mgr := NewManager(nil, nil, nil)
+	mgr.SetConfig(&internalconfig.Config{})
+	mgr.SetOAuthModelAlias(nil)
+	auth := createAuthForChannel("antigravity")
+	if got := mgr.resolveOAuthUpstreamModel(auth, "gemini-4-hydrogen"); got != "gemini-4-hydrogen-high" {
+		t.Fatalf("gemini-4-hydrogen -> %q, want gemini-4-hydrogen-high", got)
+	}
+	if got := mgr.resolveOAuthUpstreamModel(auth, "gemini-4-hydrogen-low"); got != "" && got != "gemini-4-hydrogen-low" {
+		t.Fatalf("gemini-4-hydrogen-low must not be rewritten, got %q", got)
+	}
+	if got := mgr.resolveOAuthUpstreamModel(createAuthForChannel("claude"), "gemini-4-hydrogen"); got == "gemini-4-hydrogen-high" {
+		t.Fatalf("builtin alias must be antigravity-only")
 	}
 }
