@@ -1069,6 +1069,16 @@ oauth:
       #                               # (no cascade). WARNING: literal replacement CHANGES SEMANTICS; it is an
       #                               # operator-only escape hatch. Leave empty unless deliberately needed.
       #   "old phrase": "new phrase"
+      # sensitive-patterns-replace:   # optional, DEFAULT EMPTY. Ordered Go RE2 regex rewrites of Antigravity
+      #                               # system instructions, applied BEFORE prompt-rewrites / sensitive-words /
+      #                               # the generic U+034F pass. Non-cascading; "" deletes; $1 expands.
+      #                               # Upstream now also detects U+034F inside identity banners (#7545), so
+      #                               # rewriting the banner to a neutral identity is preferred over obfuscation.
+      #   - pattern: '(?i)You are Codex,\s+(?:an?\s+)?(?:coding\s+)?agent\s+based\s+on\s+[^.\r\n"]+\.?'
+      #     replacement: "You are an AI coding assistant."
+      # tos-pause-window: "off"       # optional, DEFAULT OFF. Pool-wide protective pause after the first upstream
+      #                               # 403 TOS_VIOLATION (e.g. "30m"). Shared via Home KV. The banned credential
+      #                               # itself is always disabled by Home's account-block guard.
       # connection-pool:              # optional: upstream HTTP connection pool settings
       #   enabled: false             # whether to enable connection pooling (default: false)
       #   idle-conn-timeout: "30s"    # idle keep-alive timeout (default: 30s, capped at 210s)

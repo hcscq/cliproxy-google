@@ -392,6 +392,14 @@ type AntigravityConfig struct {
 
 	// Health tunes TTFB timeouts (proxies) and cluster health weighting (Home).
 	Health cpaconfig.AntigravityHealthConfig `yaml:"health,omitempty" json:"health,omitempty"`
+
+	// SensitivePatternsReplace is consumed by the proxies (ordered RE2 rewrites
+	// of Antigravity system instructions). Home only validates and forwards it.
+	SensitivePatternsReplace []cpaconfig.SensitivePatternRule `yaml:"sensitive-patterns-replace,omitempty" json:"sensitive-patterns-replace,omitempty"`
+
+	// TOSPauseWindow is consumed by the proxies (optional pool-wide pause after
+	// an upstream TOS_VIOLATION; default off). Home only validates and forwards it.
+	TOSPauseWindow string `yaml:"tos-pause-window,omitempty" json:"tos-pause-window,omitempty"`
 }
 
 // TLSConfig holds HTTPS server settings.
