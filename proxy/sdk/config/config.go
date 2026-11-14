@@ -21,6 +21,9 @@ type TLSConfig = internalconfig.TLSConfig
 // AntigravityHealthConfig tunes credential health handling (shared with Home).
 type AntigravityHealthConfig = internalconfig.AntigravityHealthConfig
 
+// SensitivePatternRule is one antigravity.sensitive-patterns-replace rule (shared with Home).
+type SensitivePatternRule = internalconfig.SensitivePatternRule
+
 // AntigravityClusterHealthConfig is Home's cluster health weighting config.
 type AntigravityClusterHealthConfig = internalconfig.AntigravityClusterHealthConfig
 type DiscoveryConfig = internalconfig.DiscoveryConfig

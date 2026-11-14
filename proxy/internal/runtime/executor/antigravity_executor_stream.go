@@ -48,6 +48,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
+	if antigravityInTOSPause(e.cfg) {
+		return nil, antigravityTOSPausedErr()
+	}
 	ctx = context.WithValue(ctx, "alt", "")
 	if !antigravityCoolingDisabled(auth, e.cfg) {
 		if inCooldown, remaining, errCooldown := antigravityIsInShortCooldownRequired(ctx, auth, baseModel, time.Now()); errCooldown != nil {
@@ -321,6 +324,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 				}
 			}
 		}
+		e.observeAntigravityTOS(auth, httpResp.StatusCode, bodyBytes)
 		err = newAntigravityStatusErrWithHeaders(httpResp.StatusCode, bodyBytes, httpResp.Header)
 		return nil, err
 	}
@@ -478,6 +482,7 @@ antigravityExecuteStreamSuccess:
 				if statusCode < http.StatusBadRequest || statusCode > 599 {
 					statusCode = http.StatusBadGateway
 				}
+				e.observeAntigravityTOS(auth, statusCode, payload)
 				streamErr = newAntigravityStatusErr(statusCode, payload)
 				stopDeliverySupport()
 				helps.RecordAPIResponseError(ctx, e.cfg, streamErr)

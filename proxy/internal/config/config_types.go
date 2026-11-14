@@ -156,6 +156,14 @@ type DevinConfig struct {
 	SensitiveWords []string `yaml:"sensitive-words,omitempty" json:"sensitive-words,omitempty"`
 }
 
+// SensitivePatternRule defines one Go RE2 regular expression replacement rule.
+type SensitivePatternRule struct {
+	// Pattern is the Go RE2 regular expression to match.
+	Pattern string `yaml:"pattern" json:"pattern"`
+	// Replacement is the substitution text ($1 / ${name} expand; empty deletes).
+	Replacement string `yaml:"replacement" json:"replacement"`
+}
+
 // AntigravityConfig configures provider-wide Antigravity request behavior.
 type AntigravityConfig struct {
 	// SensitiveWords is a list of words to obfuscate with zero-width characters in system instructions.
@@ -166,6 +174,27 @@ type AntigravityConfig struct {
 	// no cascade. Default empty. NOTE: literal replacement CHANGES SEMANTICS, so it
 	// is an operator-only tool and must stay empty unless deliberately configured.
 	SensitiveWordsReplace map[string]string `yaml:"sensitive-words-replace,omitempty" json:"sensitive-words-replace,omitempty"`
+
+	// SensitivePatternsReplace defines ordered Go RE2 regex replacement rules
+	// applied to Antigravity system instruction text BEFORE the literal
+	// prompt rewrites, sensitive-word obfuscation and the generic U+034F pass
+	// (ported from upstream CLIProxyAPI v8.0.70, commit 905e70c). Rules are
+	// evaluated against the original text and are non-cascading: a later rule
+	// never sees text produced by an earlier rule, and overlapping matches are
+	// resolved in favour of the earlier rule. Replacement supports $1/${name}
+	// expansion; an empty replacement deletes the match. Invalid patterns are
+	// dropped at load time. Default empty (feature off); deleting the key
+	// reverts to the previous behaviour.
+	SensitivePatternsReplace []SensitivePatternRule `yaml:"sensitive-patterns-replace,omitempty" json:"sensitive-patterns-replace,omitempty"`
+
+	// TOSPauseWindow controls the optional pool-wide protective pause armed by
+	// the first upstream 403 PERMISSION_DENIED ErrorInfo reason=TOS_VIOLATION
+	// (ported from upstream CLIProxyAPI v8.0.70, commit 5a351d9). Unlike
+	// upstream (default 6h) this fork defaults to OFF: empty, "0", "off",
+	// "false", "none" or "disabled" disable the pause; only an explicit
+	// positive Go duration (e.g. "30m") enables it. The banned credential
+	// itself is deactivated by Home's account-block guard either way.
+	TOSPauseWindow string `yaml:"tos-pause-window,omitempty" json:"tos-pause-window,omitempty"`
 
 	// PromptRewrites lists literal system-prompt rewrites applied before the
 	// request is sent upstream (system instruction only). nil = built-in

@@ -155,7 +155,15 @@ func (e *AntigravityExecutor) rewriteAntigravityPromptAtLevel(ctx context.Contex
 	if reporter != nil && (helps.SysPromptSampleEnabled() || helps.ErrorContextCaptureEnabled()) {
 		reporter.ArmSysPromptSample(extractAntigravitySysPromptText(payload), countAntigravityToolDeclarations(payload))
 	}
+	var patternHits int
+	if cfg != nil && len(cfg.Antigravity.SensitivePatternsReplace) > 0 {
+		payload, patternHits = applyAntigravitySensitivePatterns(payload, cfg.Antigravity.SensitivePatternsReplace)
+	}
 	out, hits, detectOnly := applyAntigravityPromptRewrites(payload, antigravityPromptRewriteRules(cfg))
+	if patternHits > 0 {
+		hits = append([]string{sensitivePatternsRuleName}, hits...)
+		log.WithContext(ctx).Debugf("antigravity executor: %s replaced %d matches", sensitivePatternsRuleName, patternHits)
+	}
 	if genericObfuscateEnabled() {
 		var marked int
 		var changed bool

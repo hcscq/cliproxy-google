@@ -740,3 +740,17 @@ func TestTrimStrings(t *testing.T) {
 		t.Fatalf("unexpected trimmed strings: %v", out)
 	}
 }
+
+func TestBuildConfigChangeDetailsAntigravityPatternsAndTOSPause(t *testing.T) {
+	oldCfg, newCfg := &config.Config{}, &config.Config{}
+	newCfg.Antigravity.SensitivePatternsReplace = []config.SensitivePatternRule{{Pattern: `secret\s+text`, Replacement: ""}}
+	newCfg.Antigravity.TOSPauseWindow = "30m"
+	changes := BuildConfigChangeDetails(oldCfg, newCfg)
+	joined := strings.Join(changes, "\n")
+	if !strings.Contains(joined, "antigravity.sensitive-patterns-replace: 0 -> 1") || !strings.Contains(joined, `antigravity.tos-pause-window: "" -> "30m"`) {
+		t.Fatalf("changes = %v", changes)
+	}
+	if strings.Contains(joined, "secret") {
+		t.Fatal("pattern text must not be logged in change details")
+	}
+}
